@@ -196,22 +196,34 @@ function RoomPage() {
           setLocalStream(stream);
           setHasCameraPermission(true);
         } else {
-          // If cancelled while getting permission, stop the tracks.
           stream.getTracks().forEach(track => track.stop());
         }
       } catch (error: any) {
-        if (isCancelled || error.name === 'AbortError' || error.name === 'NotAllowedError') {
-          console.warn(`Camera access not granted or aborted: ${error.name}`);
-          setHasCameraPermission(false);
-          return;
+        if (isCancelled) {
+            console.warn('Camera access request cancelled on component unmount.');
+            return;
         }
-        console.error('Error accessing camera:', error);
-        setHasCameraPermission(false);
-        toast({
-          variant: 'destructive',
-          title: 'Camera Access Error',
-          description: 'Could not access camera/microphone. Please check permissions and ensure no other app is using them.',
-        });
+
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+            console.error('Camera access denied by user:', error);
+            setHasCameraPermission(false);
+            toast({
+                variant: 'destructive',
+                title: 'Camera Access Denied',
+                description: 'Please enable camera and microphone permissions in your browser settings to join the call.',
+            });
+        } else if (error.name === 'AbortError') {
+            console.warn('Camera access request was aborted.', error);
+            setHasCameraPermission(false);
+        } else {
+            console.error('Error accessing camera/microphone:', error);
+            setHasCameraPermission(false);
+            toast({
+                variant: 'destructive',
+                title: 'Device Error',
+                description: 'Could not access your camera or microphone. Please check that they are connected and not in use by another application.',
+            });
+        }
       }
     };
     getCameraPermission();
@@ -221,7 +233,8 @@ function RoomPage() {
       cleanupLocalMedia();
       cleanupPeerConnection();
     };
-  }, [toast]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   
   // Effect to attach streams to video elements
   useEffect(() => {
@@ -258,11 +271,7 @@ function RoomPage() {
       hasRaisedHand: false,
     }, { merge: true });
 
-    return () => {
-      // Don't auto-delete on unmount to prevent accidental leaves during re-renders.
-      // Leave is handled explicitly by the leaveMeeting function.
-    };
-  }, [user?.uid, meetingId, firestore, meetingData]);
+  }, [user, meetingId, firestore, meetingData]);
 
 
   // WebRTC Signaling Logic
@@ -597,15 +606,15 @@ function RoomPage() {
                     </Alert>
                 )}
                 <div className="flex items-center justify-center gap-2 flex-wrap">
-                    <Button onClick={toggleAudio} variant={isAudioMuted ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                    <Button onClick={toggleAudio} variant={isAudioMuted ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
                       {isAudioMuted ? <MicOff /> : <Mic />}
                       <span className="sr-only">{isAudioMuted ? 'Unmute' : 'Mute'}</span>
                     </Button>
-                     <Button onClick={toggleVideo} variant={isVideoOff ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                     <Button onClick={toggleVideo} variant={isVideoOff ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
                       {isVideoOff ? <VideoOff /> : <Video />}
                       <span className="sr-only">{isVideoOff ? 'Turn camera on' : 'Turn camera off'}</span>
                     </Button>
-                    <Button onClick={toggleScreenShare} variant={isScreenSharing ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                    <Button onClick={toggleScreenShare} variant={isScreenSharing ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
                       {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                       <span className="sr-only">{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
                     </Button>
