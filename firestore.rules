@@ -86,8 +86,8 @@ service cloud.firestore {
         allow create: if isOwner(participantId);
         // A user can only remove themselves from the participants list.
         allow delete: if isOwner(participantId);
-        // Participants cannot be updated. They are either there or not.
-        allow update: if false;
+        // A user can only update their own participant document (e.g. on rejoin).
+        allow update: if isOwner(participantId);
       }
       
       /**
