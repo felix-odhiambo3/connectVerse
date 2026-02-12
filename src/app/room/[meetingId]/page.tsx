@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useCollection, useUser, useFirestore, useMemoFirebase } from '@/firebase';
+import { useCollection, useUser, useFirestore, useMemoFirebase, useDoc } from '@/firebase';
 import {
   doc,
   collection,
@@ -13,16 +13,17 @@ import {
   writeBatch,
   query,
   orderBy,
+  updateDoc,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { setDocumentNonBlocking, deleteDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video, VideoOff } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle } from 'lucide-react';
 
 // Firestore collections
 const MEETINGS_COLLECTION = 'meetings';
@@ -56,11 +57,20 @@ function RoomPage() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState('00:00:00');
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const candidateQueueRef = useRef<RTCIceCandidate[]>([]);
+  const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
+
+  const meetingRef = useMemoFirebase(() => {
+    if (!firestore || !meetingId) return null;
+    return doc(firestore, MEETINGS_COLLECTION, meetingId);
+  }, [firestore, meetingId]);
+  const { data: meetingData } = useDoc<{ hostId: string; createdAt: { seconds: number; }, status: string; }>(meetingRef);
 
 
   const participantsRef = useMemoFirebase(() => {
@@ -69,6 +79,38 @@ function RoomPage() {
   }, [firestore, meetingId]);
 
   const { data: participants, isLoading: areParticipantsLoading } = useCollection(participantsRef);
+  
+  const isHost = user?.uid === meetingData?.hostId;
+
+  // Meeting Timer
+  useEffect(() => {
+    if (!meetingData?.createdAt) return;
+    
+    const startTime = meetingData.createdAt.seconds * 1000;
+    const intervalId = setInterval(() => {
+      const now = Date.now();
+      const difference = now - startTime;
+      
+      const hours = String(Math.floor(difference / 3600000)).padStart(2, '0');
+      const minutes = String(Math.floor((difference % 3600000) / 60000)).padStart(2, '0');
+      const seconds = String(Math.floor((difference % 60000) / 1000)).padStart(2, '0');
+      
+      setElapsedTime(`${hours}:${minutes}:${seconds}`);
+    }, 1000);
+    
+    return () => clearInterval(intervalId);
+  }, [meetingData?.createdAt]);
+
+  // Listen for meeting end
+  useEffect(() => {
+    if (meetingData?.status === 'finished') {
+      toast({
+        title: "Meeting Ended",
+        description: "The host has ended the meeting for all participants.",
+      });
+      leaveMeeting();
+    }
+  }, [meetingData]);
 
   // Get camera permissions and local stream
   useEffect(() => {
@@ -76,6 +118,7 @@ function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setLocalStream(stream);
+        cameraTrackRef.current = stream.getVideoTracks()[0];
         setHasCameraPermission(true);
       } catch (error) {
         console.error('Error accessing camera:', error);
@@ -152,9 +195,7 @@ function RoomPage() {
 
         // Handle incoming remote tracks
         pc.ontrack = (event) => {
-          if (event.streams && event.streams[0]) {
-            setRemoteStream(event.streams[0]);
-          }
+          setRemoteStream(event.streams[0]);
         };
         
         // Add local tracks to the connection
@@ -226,7 +267,6 @@ function RoomPage() {
         };
 
        const unsubOffer = onSnapshot(offerDescriptionRef, (snapshot) => {
-           // Only process offer if we haven't already set a local answer
            if (snapshot.exists() && !pc.currentLocalDescription) {
                const offerDescription = new RTCSessionDescription(snapshot.data());
                pc.setRemoteDescription(offerDescription).then(() => {
@@ -278,6 +318,37 @@ function RoomPage() {
       setIsVideoOff(newVideoState);
   };
 
+  const toggleScreenShare = async () => {
+    if (!peerConnectionRef.current || !localStream) return;
+    const videoSender = peerConnectionRef.current.getSenders().find(sender => sender.track?.kind === 'video');
+    if (!videoSender) return;
+
+    if (isScreenSharing) {
+        // Stop screen sharing and revert to camera
+        if (cameraTrackRef.current) {
+            await videoSender.replaceTrack(cameraTrackRef.current);
+            localStream.getVideoTracks()[0].enabled = !isVideoOff;
+        }
+        setIsScreenSharing(false);
+    } else {
+        // Start screen sharing
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const screenTrack = screenStream.getVideoTracks()[0];
+        
+        await videoSender.replaceTrack(screenTrack);
+        setIsScreenSharing(true);
+
+        // When user clicks the browser's "Stop sharing" button
+        screenTrack.onended = async () => {
+            if (cameraTrackRef.current) {
+                await videoSender.replaceTrack(cameraTrackRef.current);
+                localStream.getVideoTracks()[0].enabled = !isVideoOff;
+            }
+            setIsScreenSharing(false);
+        };
+    }
+  };
+
   const leaveMeeting = () => {
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
@@ -287,6 +358,12 @@ function RoomPage() {
       peerConnectionRef.current = null;
     }
     router.push('/dashboard');
+  };
+
+  const endMeetingForAll = () => {
+    if (isHost && meetingRef) {
+      updateDocumentNonBlocking(meetingRef, { status: 'finished' });
+    }
   };
   
   const isLoading = areParticipantsLoading;
@@ -309,7 +386,10 @@ function RoomPage() {
           <header className="flex h-16 items-center justify-between border-b bg-background px-6">
             <div>
               <h1 className="text-xl font-semibold">Meeting Room</h1>
-              <p className="text-sm text-muted-foreground">ID: {meetingId}</p>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Timer className="h-4 w-4" />
+                <span>{elapsedTime}</span>
+              </div>
             </div>
           </header>
           <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
@@ -348,9 +428,18 @@ function RoomPage() {
                       {isVideoOff ? <VideoOff /> : <Video />}
                       <span className="sr-only">{isVideoOff ? 'Turn camera on' : 'Turn camera off'}</span>
                     </Button>
-                    <Button onClick={leaveMeeting} variant="destructive" className="rounded-full h-12 px-6">
-                      Leave Meeting
+                    <Button onClick={toggleScreenShare} variant={isScreenSharing ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                      {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
+                      <span className="sr-only">{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
                     </Button>
+                    <Button onClick={leaveMeeting} variant="destructive" className="rounded-full h-12 px-6">
+                      Leave
+                    </Button>
+                    {isHost && (
+                      <Button onClick={endMeetingForAll} variant="destructive" className="rounded-full h-12 px-6 gap-2">
+                        <XCircle className="h-4 w-4" /> End for All
+                      </Button>
+                    )}
                   </div>
             </div>
             <div className="flex flex-col gap-4">
