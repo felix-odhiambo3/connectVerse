@@ -267,8 +267,16 @@ function RoomPage() {
 
   // WebRTC Signaling Logic
   useEffect(() => {
-    if (!localStream || !meetingId || !firestore || !user || !activeParticipants || isUserInWaitingRoom) return;
+    // Condition to terminate the call and cleanup
+    if (!localStream || !user || !activeParticipants || activeParticipants.length < 2 || isUserInWaitingRoom) {
+      if (peerConnectionRef.current) {
+        cleanupPeerConnection();
+      }
+      return; // Stop here if no call should be active
+    }
 
+    // If we've reached here, it means a call should be active or starting.
+    // Initialize PC if it doesn't exist
     if (!peerConnectionRef.current) {
         const pc = new RTCPeerConnection(servers);
         peerConnectionRef.current = pc;
@@ -284,9 +292,10 @@ function RoomPage() {
     }
 
     const pc = peerConnectionRef.current;
+    if (!firestore || !meetingId) return; // a guard for typescript
     const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
 
-    const isCaller = activeParticipants.length >= 2 && activeParticipants[0].id === user.uid;
+    const isCaller = activeParticipants[0].id === user.uid;
     const isCallee = activeParticipants.length >= 2 && activeParticipants[1].id === user.uid;
 
     if (isCaller) {
