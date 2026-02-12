@@ -175,8 +175,7 @@ function RoomPage() {
               title: "Meeting Ended",
               description: "The host has ended the meeting for all participants.",
           });
-          cleanupPeerConnection();
-          cleanupLocalMedia();
+          
           const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
           getDocs(webrtcRef).then(snapshot => {
               const batch = writeBatch(firestore);
@@ -220,6 +219,7 @@ function RoomPage() {
     return () => {
       isCancelled = true;
       cleanupLocalMedia();
+      cleanupPeerConnection();
     };
   }, [toast]);
   
@@ -259,9 +259,8 @@ function RoomPage() {
     }, { merge: true });
 
     return () => {
-      if (participantRef) {
-        deleteDoc(participantRef);
-      }
+      // Don't auto-delete on unmount to prevent accidental leaves during re-renders.
+      // Leave is handled explicitly by the leaveMeeting function.
     };
   }, [user?.uid, meetingId, firestore, meetingData]);
 
@@ -321,13 +320,7 @@ function RoomPage() {
         candidateQueueRef.current = [];
 
         pc.ontrack = (event) => {
-          event.streams[0].getTracks().forEach((track) => {
-            setRemoteStream((prev) => {
-              const newStream = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
-              newStream.addTrack(track);
-              return newStream;
-            });
-          });
+          setRemoteStream(event.streams[0]);
         };
         
         localStream.getTracks().forEach(track => {
@@ -360,11 +353,13 @@ function RoomPage() {
         }
         
         const unsubAnswer = onSnapshot(answerDescriptionRef, (snapshot) => {
-            if (snapshot.exists() && pc.currentRemoteDescription?.type !== 'answer') {
+            if (snapshot.exists() && pc.signalingState === 'have-local-offer') {
                 const answerDescription = new RTCSessionDescription(snapshot.data());
                 pc.setRemoteDescription(answerDescription).then(() => {
                     candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
                     candidateQueueRef.current = [];
+                }).catch((e) => {
+                    console.error("Failed to set remote description for answer:", e);
                 });
             }
         });
@@ -471,7 +466,7 @@ function RoomPage() {
         setIsScreenSharing(true);
 
         screenTrack.onended = async () => {
-            if (cameraTrackRef.current) {
+            if (peerConnectionRef.current?.getSenders().find(s => s.track === screenTrack) && cameraTrackRef.current) {
                 await videoSender.replaceTrack(cameraTrackRef.current);
                 localStream.getVideoTracks()[0].enabled = !isVideoOff;
             }
@@ -481,6 +476,10 @@ function RoomPage() {
   };
 
   const leaveMeeting = () => {
+    if (user && meetingId && firestore) {
+      const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
+      deleteDocumentNonBlocking(participantRef);
+    }
     cleanupPeerConnection();
     cleanupLocalMedia();
     router.push('/dashboard');
