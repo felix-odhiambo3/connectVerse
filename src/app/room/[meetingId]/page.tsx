@@ -267,10 +267,47 @@ function RoomPage() {
 
   // WebRTC Signaling Logic
   useEffect(() => {
+    const cleanupWebRTCSignaling = async () => {
+      if (!firestore || !meetingId) return;
+      try {
+        const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
+        const offerDocRef = doc(webrtcRef, OFFER_DOC);
+        const answerDocRef = doc(webrtcRef, ANSWER_DOC);
+        
+        const callerCandidatesQuery = collection(offerDocRef, CALLER_CANDIDATES_COLLECTION);
+        const calleeCandidatesQuery = collection(answerDocRef, CALLEE_CANDIDATES_COLLECTION);
+  
+        const [callerCandidatesSnapshot, calleeCandidatesSnapshot] = await Promise.all([
+          getDocs(callerCandidatesQuery),
+          getDocs(calleeCandidatesQuery)
+        ]);
+        
+        const batch = writeBatch(firestore);
+  
+        callerCandidatesSnapshot.forEach(doc => batch.delete(doc.ref));
+        calleeCandidatesSnapshot.forEach(doc => batch.delete(doc.ref));
+        
+        // After candidate subcollections are marked for deletion, delete the main docs
+        batch.delete(offerDocRef);
+        batch.delete(answerDocRef);
+  
+        await batch.commit();
+      } catch (error) {
+        // This can fail if documents don't exist, which is fine.
+        console.log("Could not cleanup webrtc signaling docs, this may be harmless:", error);
+      }
+    };
+
+
     // Condition to terminate the call and cleanup
     if (!localStream || !user || !activeParticipants || activeParticipants.length < 2 || isUserInWaitingRoom) {
       if (peerConnectionRef.current) {
         cleanupPeerConnection();
+        // The first participant in the list is responsible for cleaning up signaling docs
+        // to prevent race conditions.
+        if (activeParticipants && activeParticipants.length > 0 && activeParticipants[0].id === user.uid) {
+            cleanupWebRTCSignaling();
+        }
       }
       return; // Stop here if no call should be active
     }
@@ -283,7 +320,13 @@ function RoomPage() {
         candidateQueueRef.current = [];
 
         pc.ontrack = (event) => {
-          setRemoteStream(event.streams[0]);
+          event.streams[0].getTracks().forEach((track) => {
+            setRemoteStream((prev) => {
+              const newStream = prev ? new MediaStream(prev.getTracks()) : new MediaStream();
+              newStream.addTrack(track);
+              return newStream;
+            });
+          });
         };
         
         localStream.getTracks().forEach(track => {
