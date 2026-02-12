@@ -192,7 +192,7 @@ function RoomPage() {
     return () => {
       leaveMeeting();
     };
-  }, [user, meetingId, firestore]);
+  }, [user?.uid, meetingId, firestore]);
 
 
   // WebRTC Signaling Logic
