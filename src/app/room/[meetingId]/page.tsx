@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useCollection, useUser, useFirestore, useMemoFirebase, useDoc } from '@/firebase';
 import {
@@ -126,6 +126,12 @@ function RoomPage() {
   const waitingList = participants?.filter(p => p.role === 'waiting');
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
   const isUserInWaitingRoom = currentUserParticipant?.role === 'waiting';
+
+  // Create a stable dependency for the main WebRTC effect based on the IDs of active participants.
+  const activeParticipantIds = useMemo(
+    () => participants?.filter(p => p.role === 'host' || p.role === 'participant').map(p => p.id).join(','),
+    [participants]
+  );
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -327,10 +333,10 @@ function RoomPage() {
         if (!meetingData || !participants || !user || !meetingRef) return;
 
         const hostIsPresent = participants.some(p => p.id === meetingData.hostId);
-        const activeParticipants = participants?.filter(p => p.role === 'host' || p.role === 'participant');
+        const activeParticipantsList = participants?.filter(p => p.role === 'host' || p.role === 'participant');
 
-        if (!hostIsPresent && activeParticipants.length > 0) {
-            const newHost = activeParticipants[0];
+        if (!hostIsPresent && activeParticipantsList.length > 0) {
+            const newHost = activeParticipantsList[0];
             if (newHost.id === user.uid) {
                 // I am the new host!
                 updateDocumentNonBlocking(meetingRef, { hostId: newHost.id });
@@ -342,6 +348,10 @@ function RoomPage() {
 
   // WebRTC Signaling Logic
   useEffect(() => {
+    // This logic now depends on `activeParticipantIds` which is a stable string.
+    // We derive the array of participants inside the effect to use it.
+    const activeParticipantsInEffect = participants?.filter(p => p.role === 'host' || p.role === 'participant');
+
     const cleanupWebRTCSignaling = async () => {
       if (!firestore || !meetingId) return;
       try {
@@ -375,12 +385,12 @@ function RoomPage() {
 
 
     // Condition to terminate the call and cleanup
-    if (!localStream || !user || !activeParticipants || activeParticipants.length < 2 || isUserInWaitingRoom) {
+    if (!localStream || !user || !activeParticipantsInEffect || activeParticipantsInEffect.length < 2 || isUserInWaitingRoom) {
       if (peerConnectionRef.current) {
         cleanupPeerConnection();
         // The first participant in the list is responsible for cleaning up signaling docs
         // to prevent race conditions.
-        if (activeParticipants && activeParticipants.length > 0 && activeParticipants[0].id === user.uid) {
+        if (activeParticipantsInEffect && activeParticipantsInEffect.length > 0 && activeParticipantsInEffect[0].id === user.uid) {
             cleanupWebRTCSignaling();
         }
       }
@@ -407,8 +417,8 @@ function RoomPage() {
     if (!firestore || !meetingId) return; // a guard for typescript
     const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
 
-    const isCaller = activeParticipants[0].id === user.uid;
-    const isCallee = activeParticipants.length >= 2 && activeParticipants[1].id === user.uid;
+    const isCaller = activeParticipantsInEffect[0].id === user.uid;
+    const isCallee = activeParticipantsInEffect.length >= 2 && activeParticipantsInEffect[1].id === user.uid;
 
     if (isCaller) {
         const offerDescriptionRef = doc(webrtcRef, OFFER_DOC);
@@ -504,7 +514,7 @@ function RoomPage() {
        }
     }
 
-  }, [localStream, meetingId, firestore, user, activeParticipants, isUserInWaitingRoom]);
+  }, [localStream, meetingId, firestore, user, activeParticipantIds, isUserInWaitingRoom, participants]);
   
     // Effect to handle host muting participant
     useEffect(() => {
