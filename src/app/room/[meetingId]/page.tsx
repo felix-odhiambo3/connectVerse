@@ -13,22 +13,26 @@ import {
   writeBatch,
   query,
   orderBy,
-  updateDoc,
 } from 'firebase/firestore';
+import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send } from 'lucide-react';
+
 
 // Firestore collections
 const MEETINGS_COLLECTION = 'meetings';
 const PARTICIPANTS_COLLECTION = 'participants';
 const WEBRTC_COLLECTION = 'webrtc';
+const CHAT_COLLECTION = 'chat';
 const OFFER_DOC = 'offer';
 const ANSWER_DOC = 'answer';
 const CALLER_CANDIDATES_COLLECTION = 'callerCandidates';
@@ -59,12 +63,14 @@ function RoomPage() {
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
+  const [chatInput, setChatInput] = useState('');
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const candidateQueueRef = useRef<RTCIceCandidate[]>([]);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -72,15 +78,40 @@ function RoomPage() {
   }, [firestore, meetingId]);
   const { data: meetingData } = useDoc<{ hostId: string; createdAt: { seconds: number; }, status: string; }>(meetingRef);
 
-
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
     return query(collection(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION), orderBy('joinedAt', 'asc'));
   }, [firestore, meetingId]);
 
   const { data: participants, isLoading: areParticipantsLoading } = useCollection(participantsRef);
+
+  const chatRef = useMemoFirebase(() => {
+    if (!firestore || !meetingId) return null;
+    return query(collection(firestore, MEETINGS_COLLECTION, meetingId, CHAT_COLLECTION), orderBy('createdAt', 'asc'));
+  }, [firestore, meetingId]);
+
+  const { data: chatMessages } = useCollection<{ text: string, senderId: string, senderName: string, createdAt: { seconds: number } }>(chatRef);
   
   const isHost = user?.uid === meetingData?.hostId;
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+  useEffect(scrollToBottom, [chatMessages]);
+
+  const handleSendMessage = async () => {
+    if (!user || !chatInput.trim() || !firestore || !meetingId) return;
+
+    const chatCollection = collection(firestore, MEETINGS_COLLECTION, meetingId, CHAT_COLLECTION);
+    await addDoc(chatCollection, {
+        text: chatInput.trim(),
+        senderId: user.uid,
+        senderName: user.displayName || user.email,
+        createdAt: serverTimestamp(),
+    });
+    setChatInput('');
+  };
+
 
   // Meeting Timer
   useEffect(() => {
@@ -110,7 +141,7 @@ function RoomPage() {
       });
       leaveMeeting();
     }
-  }, [meetingData, toast]);
+  }, [meetingData?.status, toast]);
 
   // Get camera permissions and local stream
   useEffect(() => {
@@ -118,7 +149,6 @@ function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setLocalStream(stream);
-        cameraTrackRef.current = stream.getVideoTracks()[0];
         setHasCameraPermission(true);
       } catch (error) {
         console.error('Error accessing camera:', error);
@@ -137,6 +167,7 @@ function RoomPage() {
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
+      cameraTrackRef.current = localStream.getVideoTracks()[0];
     }
   }, [localStream]);
 
@@ -159,24 +190,9 @@ function RoomPage() {
 
     // Cleanup on unmount
     return () => {
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-        peerConnectionRef.current = null;
-      }
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
-      const participantRefToDelete = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
-      deleteDocumentNonBlocking(participantRefToDelete);
-      
-      const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
-      getDocs(webrtcRef).then(snapshot => {
-         const batch = writeBatch(firestore);
-         snapshot.forEach(doc => batch.delete(doc.ref));
-         return batch.commit();
-      });
+      leaveMeeting();
     };
-  }, [user, meetingId, firestore, localStream]);
+  }, [user, meetingId, firestore]);
 
 
   // WebRTC Signaling Logic
@@ -348,12 +364,23 @@ function RoomPage() {
   };
 
   const leaveMeeting = () => {
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-    }
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
+    }
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
+    if (user && meetingId && firestore) {
+      const participantRefToDelete = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
+      deleteDocumentNonBlocking(participantRefToDelete);
+
+      const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
+      getDocs(webrtcRef).then(snapshot => {
+         const batch = writeBatch(firestore);
+         snapshot.forEach(doc => batch.delete(doc.ref));
+         return batch.commit();
+      });
     }
     router.push('/dashboard');
   };
@@ -458,6 +485,47 @@ function RoomPage() {
                     </div>
                   ))}
                 </CardContent>
+              </Card>
+              <Card className="flex flex-col flex-1">
+                <CardHeader>
+                  <CardTitle>Chat</CardTitle>
+                </CardHeader>
+                <CardContent className="flex-1 space-y-4 overflow-hidden">
+                    <ScrollArea className="h-full pr-4">
+                        <div className="space-y-4">
+                        {chatMessages?.map((msg, index) => (
+                            <div key={index} className="flex gap-2 text-sm">
+                                <span className="font-bold">{msg.senderId === user?.uid ? "You" : msg.senderName}:</span>
+                                <span>{msg.text}</span>
+                                <span className="text-xs text-muted-foreground ml-auto">
+                                    {msg.createdAt ? format(new Date(msg.createdAt.seconds * 1000), 'p') : ''}
+                                </span>
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                        </div>
+                    </ScrollArea>
+                </CardContent>
+                <CardFooter>
+                    <div className="flex w-full items-center gap-2">
+                        <Textarea
+                            placeholder="Type a message..."
+                            className="flex-1"
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    handleSendMessage();
+                                }
+                            }}
+                        />
+                        <Button onClick={handleSendMessage} size="icon">
+                            <Send className="h-4 w-4" />
+                            <span className="sr-only">Send</span>
+                        </Button>
+                    </div>
+                </CardFooter>
               </Card>
             </div>
           </main>

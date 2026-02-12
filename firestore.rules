@@ -91,6 +91,18 @@ service cloud.firestore {
       }
       
       /**
+       * Chat Message sub-collection
+       */
+      match /chat/{chatMessageId} {
+        // Any authenticated user can read chat messages.
+        allow read: if isSignedIn();
+        // A user can only create messages as themselves.
+        allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
+        // Messages are immutable.
+        allow update, delete: if false;
+      }
+      
+      /**
        * WebRTC Signaling sub-collection
        */
       match /webrtc/{channel}/{docId=**} {
