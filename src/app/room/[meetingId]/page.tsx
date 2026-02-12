@@ -11,6 +11,8 @@ import {
   onSnapshot,
   getDocs,
   writeBatch,
+  query,
+  orderBy,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -61,7 +63,7 @@ function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
-    return collection(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION);
+    return query(collection(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION), orderBy('joinedAt', 'asc'));
   }, [firestore, meetingId]);
 
   const { data: participants, isLoading: areParticipantsLoading } = useCollection(participantsRef);
@@ -346,3 +348,5 @@ function RoomPage() {
 }
 
 export default RoomPage;
+
+    
