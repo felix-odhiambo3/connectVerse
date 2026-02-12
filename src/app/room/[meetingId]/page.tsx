@@ -76,9 +76,6 @@ function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setLocalStream(stream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
         setHasCameraPermission(true);
       } catch (error) {
         console.error('Error accessing camera:', error);
@@ -92,6 +89,20 @@ function RoomPage() {
     };
     getCameraPermission();
   }, [toast]);
+  
+  // Effect to attach streams to video elements
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
 
   // Join the room and manage participant list
   useEffect(() => {
@@ -138,21 +149,20 @@ function RoomPage() {
         peerConnectionRef.current = new RTCPeerConnection(servers);
         candidateQueueRef.current = [];
 
-        localStream.getTracks().forEach(track => {
-            peerConnectionRef.current?.addTrack(track, localStream);
-        });
-
         const remote = new MediaStream();
         setRemoteStream(remote);
-        if(remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remote;
-        }
 
+        // Listen for tracks from the remote peer
         peerConnectionRef.current.ontrack = (event) => {
             event.streams[0].getTracks().forEach(track => {
                 remote.addTrack(track);
             });
         };
+        
+        // Add local tracks to the connection
+        localStream.getTracks().forEach(track => {
+            peerConnectionRef.current?.addTrack(track, localStream);
+        });
     }
     
     // Caller logic
