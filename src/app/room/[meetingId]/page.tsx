@@ -127,10 +127,17 @@ function RoomPage() {
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
   const isUserInWaitingRoom = currentUserParticipant?.role === 'waiting';
 
+  const isCurrentUserInCall = useMemo(() => {
+    if (!user || !activeParticipants) return false;
+    const index = activeParticipants.findIndex(p => p.id === user.uid);
+    // Only the first two participants are in the WebRTC call
+    return index >= 0 && index <= 1;
+  }, [user, activeParticipants]);
+
   // Create a stable dependency for the main WebRTC effect based on the IDs of active participants.
   const activeParticipantIds = useMemo(
-    () => participants?.filter(p => p.role === 'host' || p.role === 'participant').map(p => p.id).join(','),
-    [participants]
+    () => activeParticipants?.map(p => p.id).join(','),
+    [activeParticipants]
   );
 
   const scrollToBottom = () => {
@@ -301,7 +308,7 @@ function RoomPage() {
         } else {
             // Document exists, only update the role if it's different to prevent resetting other states.
             const existingData = docSnap.data();
-            if (existingData.role !== role) {
+            if (existingData.role !== role && existingData.role === 'waiting') {
                 updateDocumentNonBlocking(participantRef, { role: role });
             }
         }
@@ -677,7 +684,7 @@ function RoomPage() {
               <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center">
                  <video ref={remoteVideoRef} className="w-full h-full object-contain rounded-md" autoPlay playsInline />
                  <video ref={localVideoRef} className="absolute bottom-4 right-4 w-1/4 max-w-[200px] object-cover rounded-md border-2 border-background" autoPlay muted playsInline />
-                 {!remoteStream && activeParticipants && activeParticipants.length > 1 && (
+                 {!remoteStream && isCurrentUserInCall && activeParticipants && activeParticipants.length > 1 && (
                     <div className="absolute inset-0 flex items-center justify-center">
                         <p className="text-white">Connecting...</p>
                     </div>
