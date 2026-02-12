@@ -14,6 +14,7 @@ import {
   query,
   orderBy,
   deleteDoc,
+  getDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -176,15 +177,17 @@ function RoomPage() {
               description: "The host has ended the meeting for all participants.",
           });
           
-          const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
-          getDocs(webrtcRef).then(snapshot => {
-              const batch = writeBatch(firestore);
-              snapshot.forEach(doc => batch.delete(doc.ref));
-              return batch.commit();
-          });
+          if (isHost) {
+            const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
+            getDocs(webrtcRef).then(snapshot => {
+                const batch = writeBatch(firestore);
+                snapshot.forEach(doc => batch.delete(doc.ref));
+                return batch.commit();
+            });
+          }
           router.push('/dashboard');
       }
-  }, [meetingData?.status, router, toast, firestore, meetingId]);
+  }, [meetingData?.status, router, toast, firestore, meetingId, isHost]);
 
   // Get camera permissions and local stream. Runs only once on mount.
   useEffect(() => {
@@ -256,20 +259,35 @@ function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData) return;
 
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
-    
-    let role: 'host' | 'participant' | 'waiting';
-    if (user.uid === meetingData.hostId) {
-        role = 'host';
-    } else {
-        role = meetingData.isLocked ? 'waiting' : 'participant';
-    }
 
-    setDocumentNonBlocking(participantRef, {
-      name: user.displayName || user.email,
-      joinedAt: serverTimestamp(),
-      role: role,
-      hasRaisedHand: false,
-    }, { merge: true });
+    const setupParticipant = async () => {
+      const docSnap = await getDoc(participantRef);
+
+      let role: 'host' | 'participant' | 'waiting';
+      if (user.uid === meetingData.hostId) {
+          role = 'host';
+      } else {
+          role = meetingData.isLocked ? 'waiting' : 'participant';
+      }
+
+      if (!docSnap.exists()) {
+        // Document doesn't exist yet, create it with hasRaisedHand: false
+        setDocumentNonBlocking(participantRef, {
+          name: user.displayName || user.email,
+          joinedAt: serverTimestamp(),
+          role: role,
+          hasRaisedHand: false,
+        }, { merge: true });
+      } else {
+        // Document exists, only update the role if it's different.
+        // This avoids resetting hasRaisedHand.
+        if (docSnap.data().role !== role) {
+          updateDocumentNonBlocking(participantRef, { role: role });
+        }
+      }
+    };
+
+    setupParticipant();
 
   }, [user, meetingId, firestore, meetingData]);
 
