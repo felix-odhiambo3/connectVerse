@@ -73,8 +73,13 @@ service cloud.firestore {
       // Any authenticated user can create a meeting.
       // The hostId must match the creator's UID.
       allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
-      // Only the host can update or delete the meeting.
-      allow update, delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
+      // Host can update. If host is gone, a new host can be crowned.
+      allow update: if isSignedIn() && (
+        (resource.data.hostId == request.auth.uid) ||
+        (!exists(/databases/$(database)/documents/meetings/$(meetingId)/participants/$(resource.data.hostId)))
+      );
+      // Only the host can delete the meeting document itself.
+      allow delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
 
       /**
        * Participant sub-collection
@@ -86,8 +91,8 @@ service cloud.firestore {
         allow create: if isOwner(participantId);
         // A user can update their own document, or the host can update any document.
         allow update: if isOwner(participantId) || request.auth.uid == get(/databases/$(database)/documents/meetings/$(meetingId)).data.hostId;
-        // A user can only remove themselves from the participants list.
-        allow delete: if isOwner(participantId);
+        // A user can only remove themselves, or the host can remove anyone.
+        allow delete: if isOwner(participantId) || request.auth.uid == get(/databases/$(database)/documents/meetings/$(meetingId)).data.hostId;
       }
       
       /**

@@ -66,6 +66,7 @@ interface Participant {
   joinedAt: { seconds: number };
   role: 'host' | 'participant' | 'waiting';
   hasRaisedHand?: boolean;
+  isMuted?: boolean;
 }
 
 function RoomPage() {
@@ -84,6 +85,7 @@ function RoomPage() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
+  const [wasInMeeting, setWasInMeeting] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -271,35 +273,71 @@ function RoomPage() {
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
 
     const setupParticipant = async () => {
-      const docSnap = await getDoc(participantRef);
+        const docSnap = await getDoc(participantRef);
 
-      let role: 'host' | 'participant' | 'waiting';
-      if (user.uid === meetingData.hostId) {
-          role = 'host';
-      } else {
-          role = meetingData.isLocked ? 'waiting' : 'participant';
-      }
-
-      if (!docSnap.exists()) {
-        // Document doesn't exist yet, create it with hasRaisedHand: false
-        setDocumentNonBlocking(participantRef, {
-          name: user.displayName || user.email,
-          joinedAt: serverTimestamp(),
-          role: role,
-          hasRaisedHand: false,
-        }, { merge: true });
-      } else {
-        // Document exists, only update the role if it's different.
-        // This avoids resetting hasRaisedHand.
-        if (docSnap.data().role !== role) {
-          updateDocumentNonBlocking(participantRef, { role: role });
+        let role: 'host' | 'participant' | 'waiting';
+        if (user.uid === meetingData.hostId) {
+            role = 'host';
+        } else {
+            role = meetingData.isLocked ? 'waiting' : 'participant';
         }
-      }
+        
+        let initialData: any = {
+            name: user.displayName || user.email,
+            joinedAt: serverTimestamp(),
+            role: role,
+        };
+
+        if (!docSnap.exists()) {
+            initialData.hasRaisedHand = false;
+            initialData.isMuted = false;
+            setDocumentNonBlocking(participantRef, initialData, { merge: false });
+        } else {
+            // Document exists, only update the role if it's different to prevent resetting other states.
+            const existingData = docSnap.data();
+            if (existingData.role !== role) {
+                updateDocumentNonBlocking(participantRef, { role: role });
+            }
+        }
     };
-
     setupParticipant();
+  }, [user?.uid, meetingId, firestore, meetingData]);
 
-  }, [user, meetingId, firestore, meetingData]);
+    // Effect to handle being removed from the meeting
+    useEffect(() => {
+        if (!user || areParticipantsLoading) return;
+
+        const isCurrentlyInList = participants?.some(p => p.id === user.uid) ?? false;
+
+        if (isCurrentlyInList) {
+            setWasInMeeting(true);
+        }
+
+        if (wasInMeeting && !isCurrentlyInList) {
+            toast({
+                title: "You were removed from the meeting.",
+                description: "Redirecting to the dashboard.",
+            });
+            router.push('/dashboard');
+        }
+    }, [participants, user, router, toast, wasInMeeting, areParticipantsLoading]);
+
+    // Effect for automatic host crowning
+    useEffect(() => {
+        if (!meetingData || !participants || !user || !meetingRef) return;
+
+        const hostIsPresent = participants.some(p => p.id === meetingData.hostId);
+        const activeParticipants = participants?.filter(p => p.role === 'host' || p.role === 'participant');
+
+        if (!hostIsPresent && activeParticipants.length > 0) {
+            const newHost = activeParticipants[0];
+            if (newHost.id === user.uid) {
+                // I am the new host!
+                updateDocumentNonBlocking(meetingRef, { hostId: newHost.id });
+                toast({ title: 'You are now the host!' });
+            }
+        }
+    }, [participants, meetingData, user, firestore, meetingRef, toast]);
 
 
   // WebRTC Signaling Logic
@@ -467,14 +505,21 @@ function RoomPage() {
     }
 
   }, [localStream, meetingId, firestore, user, activeParticipants, isUserInWaitingRoom]);
+  
+    // Effect to handle host muting participant
+    useEffect(() => {
+        if (localStream) {
+            const selfMuted = isAudioMuted;
+            const hostMuted = currentUserParticipant?.isMuted ?? false;
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = !selfMuted && !hostMuted;
+            });
+        }
+    }, [isAudioMuted, currentUserParticipant?.isMuted, localStream]);
 
-  const toggleAudio = () => {
-    const newMuteState = !isAudioMuted;
-    localStream?.getAudioTracks().forEach(track => {
-        track.enabled = !newMuteState;
-    });
-    setIsAudioMuted(newMuteState);
-  };
+    const toggleAudio = () => {
+        setIsAudioMuted(prev => !prev);
+    };
 
   const toggleVideo = () => {
       const newVideoState = !isVideoOff;
@@ -554,6 +599,19 @@ function RoomPage() {
       updateDocumentNonBlocking(meetingRef, { isRecording: !meetingData?.isRecording });
   };
 
+    const removeParticipant = (participantId: string) => {
+        if (!isHost || !firestore || !meetingId) return;
+        const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, participantId);
+        deleteDocumentNonBlocking(participantRef);
+        toast({ title: "Participant removed." });
+    };
+
+    const toggleParticipantMute = (participantId: string, currentState: boolean) => {
+        if (!isHost || !firestore || !meetingId) return;
+        const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, participantId);
+        updateDocumentNonBlocking(participantRef, { isMuted: !currentState });
+    };
+
   const isLoading = areParticipantsLoading || !meetingData;
 
   if (isLoading && !isUserInWaitingRoom) {
@@ -632,9 +690,9 @@ function RoomPage() {
                     </Alert>
                 )}
                 <div className="flex items-center justify-center gap-2 flex-wrap">
-                    <Button onClick={toggleAudio} variant={isAudioMuted ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
-                      {isAudioMuted ? <MicOff /> : <Mic />}
-                      <span className="sr-only">{isAudioMuted ? 'Unmute' : 'Mute'}</span>
+                    <Button onClick={toggleAudio} variant={(isAudioMuted || !!currentUserParticipant?.isMuted) ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
+                      {(isAudioMuted || !!currentUserParticipant?.isMuted) ? <MicOff /> : <Mic />}
+                      <span className="sr-only">{(isAudioMuted || !!currentUserParticipant?.isMuted) ? 'Unmute' : 'Mute'}</span>
                     </Button>
                      <Button onClick={toggleVideo} variant={isVideoOff ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
                       {isVideoOff ? <VideoOff /> : <Video />}
@@ -698,12 +756,27 @@ function RoomPage() {
                         <AvatarFallback>{p.name?.[0].toUpperCase()}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
-                        <p className="font-medium">{p.name} {p.role === 'host' && '(Host)'}</p>
+                        <p className="font-medium">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
                       </div>
-                      {p.hasRaisedHand && <Hand className="text-yellow-500" />}
-                      {isHost && p.hasRaisedHand && (
-                          <Button size="sm" variant="ghost" onClick={() => lowerHand(p.id)}>Lower Hand</Button>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {p.hasRaisedHand && <Hand className="text-yellow-500 h-4 w-4" />}
+                        {isHost && p.hasRaisedHand && (
+                            <Button size="sm" variant="ghost" onClick={() => lowerHand(p.id)}>Lower Hand</Button>
+                        )}
+                        {p.isMuted && <MicOff className="h-4 w-4 text-muted-foreground" />}
+                        {isHost && p.id !== user?.uid && (
+                            <>
+                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => toggleParticipantMute(p.id, !!p.isMuted)}>
+                                    {p.isMuted ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+                                    <span className="sr-only">{p.isMuted ? 'Request Unmute' : 'Mute Participant'}</span>
+                                </Button>
+                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => removeParticipant(p.id)}>
+                                    <XCircle className="h-4 w-4" />
+                                    <span className="sr-only">Remove Participant</span>
+                                </Button>
+                            </>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </CardContent>

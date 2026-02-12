@@ -98,6 +98,10 @@
         "hasRaisedHand": {
           "type": "boolean",
           "description": "Indicates if the participant has raised their hand."
+        },
+        "isMuted": {
+          "type": "boolean",
+          "description": "Indicates if the participant has been muted by the host."
         }
       },
       "required": [
