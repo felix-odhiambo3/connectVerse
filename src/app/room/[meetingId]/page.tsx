@@ -218,7 +218,8 @@ function RoomPage() {
         };
 
        const unsubOffer = onSnapshot(offerDescriptionRef, (snapshot) => {
-           if (snapshot.exists() && !pc.currentRemoteDescription) {
+           // Only process offer if we haven't already set a local answer
+           if (snapshot.exists() && !pc.currentLocalDescription) {
                const offerDescription = new RTCSessionDescription(snapshot.data());
                pc.setRemoteDescription(offerDescription).then(() => {
                     candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
