@@ -9,22 +9,18 @@ import {
   serverTimestamp,
   addDoc,
   onSnapshot,
-  query,
-  orderBy,
-  limit,
-  deleteDoc,
   getDocs,
   writeBatch,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { setDocumentNonBlocking, deleteDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
+import { Mic, MicOff, Video, VideoOff } from 'lucide-react';
 
 // Firestore collections
 const MEETINGS_COLLECTION = 'meetings';
@@ -56,6 +52,8 @@ function RoomPage() {
   const [hasCameraPermission, setHasCameraPermission] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -91,7 +89,7 @@ function RoomPage() {
     getCameraPermission();
   }, [toast]);
 
-  // Step 1: Join the room and manage participant list
+  // Join the room and manage participant list
   useEffect(() => {
     if (!user || !meetingId || !firestore) return;
 
@@ -112,7 +110,7 @@ function RoomPage() {
       }
       const participantRefToDelete = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
       deleteDocumentNonBlocking(participantRefToDelete);
-      // Also clear WebRTC signaling data
+      
       const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
       getDocs(webrtcRef).then(snapshot => {
          const batch = writeBatch(firestore);
@@ -123,13 +121,12 @@ function RoomPage() {
   }, [user, meetingId, firestore, localStream]);
 
 
-  // Step 2: WebRTC Signaling Logic
+  // WebRTC Signaling Logic
   useEffect(() => {
     if (!localStream || !meetingId || !firestore || !user || !participants) return;
 
     const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
 
-    // Determine role (caller vs callee)
     const isCaller = participants.length === 2 && participants[0].id === user.uid;
     const isCallee = participants.length === 2 && participants[1].id === user.uid;
 
@@ -172,7 +169,6 @@ function RoomPage() {
             setDocumentNonBlocking(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
         });
         
-        // Listen for answer
         const unsubAnswer = onSnapshot(answerDescriptionRef, (snapshot) => {
             if (snapshot.exists() && pc.currentRemoteDescription?.type !== 'answer') {
                 const answerDescription = new RTCSessionDescription(snapshot.data());
@@ -180,7 +176,6 @@ function RoomPage() {
             }
         });
 
-        // Listen for ICE candidates from callee
         const unsubCalleeCandidates = onSnapshot(calleeCandidatesCollection, (snapshot) => {
             snapshot.docChanges().forEach((change) => {
                 if (change.type === 'added') {
@@ -239,6 +234,21 @@ function RoomPage() {
 
   }, [localStream, meetingId, firestore, user, participants]);
 
+  const toggleAudio = () => {
+    const newMuteState = !isAudioMuted;
+    localStream?.getAudioTracks().forEach(track => {
+        track.enabled = !newMuteState;
+    });
+    setIsAudioMuted(newMuteState);
+  };
+
+  const toggleVideo = () => {
+      const newVideoState = !isVideoOff;
+      localStream?.getVideoTracks().forEach(track => {
+          track.enabled = !newVideoState;
+      });
+      setIsVideoOff(newVideoState);
+  };
 
   const leaveMeeting = () => {
     router.push('/dashboard');
@@ -266,13 +276,17 @@ function RoomPage() {
               <h1 className="text-xl font-semibold">Meeting Room</h1>
               <p className="text-sm text-muted-foreground">ID: {meetingId}</p>
             </div>
-            <Button onClick={leaveMeeting}>Leave Meeting</Button>
           </header>
           <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
             <div className="md:col-span-2 bg-muted rounded-lg flex flex-col items-center justify-center p-4 gap-4">
-              <div className="w-full aspect-video relative">
-                 <video ref={remoteVideoRef} className="w-full h-full object-cover rounded-md" autoPlay playsInline />
+              <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center">
+                 <video ref={remoteVideoRef} className="w-full h-full object-contain rounded-md" autoPlay playsInline />
                  <video ref={localVideoRef} className="absolute bottom-4 right-4 w-1/4 max-w-[200px] object-cover rounded-md border-2 border-background" autoPlay muted playsInline />
+                 {!remoteStream && participants && participants.length > 1 && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <p className="text-white">Connecting...</p>
+                    </div>
+                 )}
               </div>
                {!hasCameraPermission && (
                   <Alert variant="destructive">
@@ -282,7 +296,7 @@ function RoomPage() {
                     </AlertDescription>
                   </Alert>
                 )}
-                 {participants && participants.length < 2 && (
+                 {participants && participants.length < 2 && !isLoading && (
                     <Alert>
                         <AlertTitle>Waiting for others</AlertTitle>
                         <AlertDescription>
@@ -290,6 +304,19 @@ function RoomPage() {
                         </AlertDescription>
                     </Alert>
                 )}
+                <div className="flex items-center justify-center gap-4">
+                    <Button onClick={toggleAudio} variant={isAudioMuted ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                      {isAudioMuted ? <MicOff /> : <Mic />}
+                      <span className="sr-only">{isAudioMuted ? 'Unmute' : 'Mute'}</span>
+                    </Button>
+                     <Button onClick={toggleVideo} variant={isVideoOff ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                      {isVideoOff ? <VideoOff /> : <Video />}
+                      <span className="sr-only">{isVideoOff ? 'Turn camera on' : 'Turn camera off'}</span>
+                    </Button>
+                    <Button onClick={leaveMeeting} variant="destructive" className="rounded-full h-12 px-6">
+                      Leave Meeting
+                    </Button>
+                  </div>
             </div>
             <div className="flex flex-col gap-4">
               <Card>
@@ -306,8 +333,6 @@ function RoomPage() {
                       <div className="flex-1">
                         <p className="font-medium">{p.name}</p>
                       </div>
-                      {/* Placeholder for host logic if needed */}
-                      {/* {meeting.hostId === p.id && <Badge>Host</Badge>} */}
                     </div>
                   ))}
                 </CardContent>
