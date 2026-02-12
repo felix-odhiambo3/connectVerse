@@ -281,6 +281,13 @@ function RoomPage() {
   };
 
   const leaveMeeting = () => {
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
     router.push('/dashboard');
   };
   
