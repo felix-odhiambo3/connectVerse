@@ -57,7 +57,7 @@ function RoomPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [hasCameraPermission, setHasCameraPermission] = useState(false);
+  const [hasCameraPermission, setHasCameraPermission] = useState(true);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
@@ -133,16 +133,19 @@ function RoomPage() {
     return () => clearInterval(intervalId);
   }, [meetingData?.createdAt]);
 
-  const cleanupConnection = () => {
-    if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-        peerConnectionRef.current = null;
-    }
+  const cleanupLocalMedia = () => {
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         setLocalStream(null);
     }
-    if(remoteStream){
+  }
+
+  const cleanupPeerConnection = () => {
+    if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+    }
+    if (remoteStream) {
         remoteStream.getTracks().forEach(track => track.stop());
         setRemoteStream(null);
     }
@@ -155,7 +158,8 @@ function RoomPage() {
               title: "Meeting Ended",
               description: "The host has ended the meeting for all participants.",
           });
-          cleanupConnection();
+          cleanupPeerConnection();
+          cleanupLocalMedia();
           const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
           getDocs(webrtcRef).then(snapshot => {
               const batch = writeBatch(firestore);
@@ -166,25 +170,44 @@ function RoomPage() {
       }
   }, [meetingData?.status, router, toast, firestore, meetingId]);
 
-  // Get camera permissions and local stream
+  // Get camera permissions and local stream. Runs only once on mount.
   useEffect(() => {
+    let isCancelled = false;
     const getCameraPermission = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        setLocalStream(stream);
-        setHasCameraPermission(true);
-      } catch (error) {
+        if (!isCancelled) {
+          setLocalStream(stream);
+          setHasCameraPermission(true);
+        } else {
+          // If cancelled while getting permission, stop the tracks.
+          stream.getTracks().forEach(track => track.stop());
+        }
+      } catch (error: any) {
+        if (isCancelled || error.name === 'AbortError' || error.name === 'NotAllowedError') {
+          console.warn(`Camera access not granted or aborted: ${error.name}`);
+          setHasCameraPermission(false);
+          // Don't show toast for user denial or aborts
+          return;
+        }
         console.error('Error accessing camera:', error);
         setHasCameraPermission(false);
         toast({
           variant: 'destructive',
-          title: 'Camera Access Denied',
-          description: 'Please enable camera permissions in your browser settings to use this app.',
+          title: 'Camera Access Error',
+          description: 'Could not access camera/microphone. Please check permissions and ensure no other app is using them.',
         });
       }
     };
     getCameraPermission();
-  }, [toast]);
+    
+    // Cleanup function runs when the component unmounts.
+    return () => {
+      isCancelled = true;
+      cleanupLocalMedia();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   
   // Effect to attach streams to video elements
   useEffect(() => {
@@ -211,9 +234,8 @@ function RoomPage() {
       joinedAt: serverTimestamp(),
     }, { merge: true });
 
-    // Cleanup on unmount
+    // Cleanup on unmount - just removes the participant from firestore
     return () => {
-      cleanupConnection();
       deleteDoc(participantRef);
     };
   }, [user?.uid, meetingId, firestore]);
@@ -305,15 +327,17 @@ function RoomPage() {
         };
 
        const unsubOffer = onSnapshot(offerDescriptionRef, (snapshot) => {
-           if (snapshot.exists() && !pc.currentRemoteDescription && pc.signalingState !== 'stable') {
+           if (snapshot.exists() && !pc.currentRemoteDescription && pc.signalingState !== 'have-local-offer') {
                const offerDescription = new RTCSessionDescription(snapshot.data());
                pc.setRemoteDescription(offerDescription).then(() => {
                     candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
                     candidateQueueRef.current = [];
 
                    pc.createAnswer().then(answer => {
-                       pc.setLocalDescription(answer);
-                       setDocumentNonBlocking(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
+                       if (!pc.currentLocalDescription) {
+                           pc.setLocalDescription(answer);
+                           setDocumentNonBlocking(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
+                       }
                    });
                });
            }
@@ -388,14 +412,13 @@ function RoomPage() {
   };
 
   const leaveMeeting = () => {
+    cleanupPeerConnection();
+    cleanupLocalMedia();
     if (isHost && meetingRef) {
         // Host leaving ends the meeting for all
         updateDocumentNonBlocking(meetingRef, { status: 'finished' });
-    } else if(user) {
-        // Participant leaving just removes themselves
-        const participantRefToDelete = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
-        deleteDocumentNonBlocking(participantRefToDelete);
-        cleanupConnection();
+    } else {
+        // Participant leaving just navigates away, useEffect handles firestore doc deletion
         router.push('/dashboard');
     }
   };
