@@ -60,6 +60,8 @@ function RoomPage() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const candidateQueueRef = useRef<RTCIceCandidate[]>([]);
+
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -134,6 +136,7 @@ function RoomPage() {
 
     const initializePeerConnection = () => {
         peerConnectionRef.current = new RTCPeerConnection(servers);
+        candidateQueueRef.current = [];
 
         localStream.getTracks().forEach(track => {
             peerConnectionRef.current?.addTrack(track, localStream);
@@ -174,7 +177,10 @@ function RoomPage() {
         const unsubAnswer = onSnapshot(answerDescriptionRef, (snapshot) => {
             if (snapshot.exists() && pc.currentRemoteDescription?.type !== 'answer') {
                 const answerDescription = new RTCSessionDescription(snapshot.data());
-                pc.setRemoteDescription(answerDescription);
+                pc.setRemoteDescription(answerDescription).then(() => {
+                    candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
+                    candidateQueueRef.current = [];
+                });
             }
         });
 
@@ -182,7 +188,11 @@ function RoomPage() {
             snapshot.docChanges().forEach((change) => {
                 if (change.type === 'added') {
                     const candidate = new RTCIceCandidate(change.doc.data());
-                    pc.addIceCandidate(candidate);
+                    if (pc.currentRemoteDescription) {
+                        pc.addIceCandidate(candidate);
+                    } else {
+                        candidateQueueRef.current.push(candidate);
+                    }
                 }
             });
         });
@@ -211,6 +221,9 @@ function RoomPage() {
            if (snapshot.exists() && !pc.currentRemoteDescription) {
                const offerDescription = new RTCSessionDescription(snapshot.data());
                pc.setRemoteDescription(offerDescription).then(() => {
+                    candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
+                    candidateQueueRef.current = [];
+
                    pc.createAnswer().then(answer => {
                        pc.setLocalDescription(answer);
                        setDocumentNonBlocking(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
@@ -223,7 +236,11 @@ function RoomPage() {
            snapshot.docChanges().forEach((change) => {
                if (change.type === 'added') {
                    const candidate = new RTCIceCandidate(change.doc.data());
-                   pc.addIceCandidate(candidate);
+                    if (pc.currentRemoteDescription) {
+                       pc.addIceCandidate(candidate);
+                   } else {
+                       candidateQueueRef.current.push(candidate);
+                   }
                }
            });
        });
@@ -348,5 +365,3 @@ function RoomPage() {
 }
 
 export default RoomPage;
-
-    
