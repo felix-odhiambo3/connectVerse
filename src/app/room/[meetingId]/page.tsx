@@ -165,6 +165,7 @@ function RoomPage() {
         peerConnectionRef.current = null;
     }
     setRemoteStream(null);
+    candidateQueueRef.current = [];
   };
   
   // Listen for meeting end
