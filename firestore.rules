@@ -84,10 +84,10 @@ service cloud.firestore {
         allow get, list: if isSignedIn();
         // A user can only add themselves as a participant.
         allow create: if isOwner(participantId);
+        // A user can update their own document, or the host can update any document.
+        allow update: if isOwner(participantId) || request.auth.uid == get(/databases/$(database)/documents/meetings/$(meetingId)).data.hostId;
         // A user can only remove themselves from the participants list.
         allow delete: if isOwner(participantId);
-        // A user can only update their own participant document (e.g. on rejoin).
-        allow update: if isOwner(participantId);
       }
       
       /**

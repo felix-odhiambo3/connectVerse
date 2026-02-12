@@ -60,6 +60,14 @@
             "finished"
           ],
           "description": "The current status of the meeting."
+        },
+        "isLocked": {
+          "type": "boolean",
+          "description": "Indicates if the meeting is locked. If true, new users are placed in the waiting room."
+        },
+        "isRecording": {
+          "type": "boolean",
+          "description": "Indicates if the meeting is currently being recorded."
         }
       },
       "required": [
@@ -81,11 +89,21 @@
           "type": "string",
           "format": "date-time",
           "description": "Timestamp indicating when the participant joined."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["host", "participant", "waiting"],
+          "description": "The role of the user in the meeting. 'waiting' means they are in the waiting room."
+        },
+        "hasRaisedHand": {
+          "type": "boolean",
+          "description": "Indicates if the participant has raised their hand."
         }
       },
       "required": [
         "name",
-        "joinedAt"
+        "joinedAt",
+        "role"
       ]
     },
     "ChatMessage": {

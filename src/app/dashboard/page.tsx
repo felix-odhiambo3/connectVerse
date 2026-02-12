@@ -30,6 +30,8 @@ export default function DashboardPage() {
         hostId: user.uid,
         createdAt: serverTimestamp(),
         status: 'pending',
+        isLocked: false,
+        isRecording: false,
       });
       toast({ title: 'Meeting created!' });
       router.push(`/room/${newMeetingRef.id}`);

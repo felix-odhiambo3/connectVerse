@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -26,7 +26,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot } from 'lucide-react';
 
 
 // Firestore collections
@@ -48,6 +48,14 @@ const servers = {
   ],
   iceCandidatePoolSize: 10,
 };
+
+interface Participant {
+  id: string;
+  name: string;
+  joinedAt: { seconds: number };
+  role: 'host' | 'participant' | 'waiting';
+  hasRaisedHand?: boolean;
+}
 
 function RoomPage() {
   const params = useParams();
@@ -77,14 +85,21 @@ function RoomPage() {
     if (!firestore || !meetingId) return null;
     return doc(firestore, MEETINGS_COLLECTION, meetingId);
   }, [firestore, meetingId]);
-  const { data: meetingData } = useDoc<{ hostId: string; createdAt: { seconds: number; }, status: string; }>(meetingRef);
+
+  const { data: meetingData } = useDoc<{ 
+    hostId: string; 
+    createdAt: { seconds: number; }; 
+    status: string;
+    isLocked?: boolean;
+    isRecording?: boolean;
+  }>(meetingRef);
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
     return query(collection(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION), orderBy('joinedAt', 'asc'));
   }, [firestore, meetingId]);
 
-  const { data: participants, isLoading: areParticipantsLoading } = useCollection(participantsRef);
+  const { data: participants, isLoading: areParticipantsLoading } = useCollection<Omit<Participant, 'id'>>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -94,6 +109,10 @@ function RoomPage() {
   const { data: chatMessages } = useCollection<{ text: string, senderId: string, senderName: string, createdAt: { seconds: number } }>(chatRef);
   
   const isHost = user?.uid === meetingData?.hostId;
+  const activeParticipants = participants?.filter(p => p.role === 'host' || p.role === 'participant');
+  const waitingList = participants?.filter(p => p.role === 'waiting');
+  const currentUserParticipant = participants?.find(p => p.id === user?.uid);
+  const isUserInWaitingRoom = currentUserParticipant?.role === 'waiting';
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -184,7 +203,6 @@ function RoomPage() {
         if (isCancelled || error.name === 'AbortError' || error.name === 'NotAllowedError') {
           console.warn(`Camera access not granted or aborted: ${error.name}`);
           setHasCameraPermission(false);
-          // Don't show toast for user denial or aborts
           return;
         }
         console.error('Error accessing camera:', error);
@@ -198,13 +216,11 @@ function RoomPage() {
     };
     getCameraPermission();
     
-    // Cleanup function runs when the component unmounts.
     return () => {
       isCancelled = true;
       cleanupLocalMedia();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [toast]);
   
   // Effect to attach streams to video elements
   useEffect(() => {
@@ -223,37 +239,45 @@ function RoomPage() {
 
   // Join the room and manage participant list
   useEffect(() => {
-    if (!user || !meetingId || !firestore) return;
+    if (!user || !meetingId || !firestore || !meetingData) return;
 
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
+    
+    let role: 'host' | 'participant' | 'waiting';
+    if (user.uid === meetingData.hostId) {
+        role = 'host';
+    } else {
+        role = meetingData.isLocked ? 'waiting' : 'participant';
+    }
+
     setDocumentNonBlocking(participantRef, {
       name: user.displayName || user.email,
       joinedAt: serverTimestamp(),
+      role: role,
+      hasRaisedHand: false,
     }, { merge: true });
 
-    // Cleanup on unmount - just removes the participant from firestore
     return () => {
-      deleteDoc(participantRef);
+      if (participantRef) {
+        deleteDoc(participantRef);
+      }
     };
-  }, [user?.uid, meetingId, firestore]);
+  }, [user?.uid, meetingId, firestore, meetingData]);
 
 
   // WebRTC Signaling Logic
   useEffect(() => {
-    if (!localStream || !meetingId || !firestore || !user || !participants) return;
+    if (!localStream || !meetingId || !firestore || !user || !activeParticipants || isUserInWaitingRoom) return;
 
-    // Initialize peer connection only if it doesn't exist.
     if (!peerConnectionRef.current) {
         const pc = new RTCPeerConnection(servers);
         peerConnectionRef.current = pc;
         candidateQueueRef.current = [];
 
-        // Handle incoming remote tracks
         pc.ontrack = (event) => {
-            setRemoteStream(event.streams[0]);
+          setRemoteStream(event.streams[0]);
         };
         
-        // Add local tracks to the connection
         localStream.getTracks().forEach(track => {
             pc.addTrack(track, localStream);
         });
@@ -262,10 +286,9 @@ function RoomPage() {
     const pc = peerConnectionRef.current;
     const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
 
-    const isCaller = participants.length >= 2 && participants[0].id === user.uid;
-    const isCallee = participants.length >= 2 && participants[1].id === user.uid;
+    const isCaller = activeParticipants.length >= 2 && activeParticipants[0].id === user.uid;
+    const isCallee = activeParticipants.length >= 2 && activeParticipants[1].id === user.uid;
 
-    // Caller logic
     if (isCaller) {
         const offerDescriptionRef = doc(webrtcRef, OFFER_DOC);
         const answerDescriptionRef = doc(webrtcRef, ANSWER_DOC);
@@ -312,7 +335,6 @@ function RoomPage() {
         }
     }
 
-    // Callee logic
     if (isCallee) {
        const offerDescriptionRef = doc(webrtcRef, OFFER_DOC);
        const answerDescriptionRef = doc(webrtcRef, ANSWER_DOC);
@@ -359,7 +381,7 @@ function RoomPage() {
        }
     }
 
-  }, [localStream, meetingId, firestore, user, participants]);
+  }, [localStream, meetingId, firestore, user, activeParticipants, isUserInWaitingRoom]);
 
   const toggleAudio = () => {
     const newMuteState = !isAudioMuted;
@@ -383,21 +405,18 @@ function RoomPage() {
     if (!videoSender) return;
 
     if (isScreenSharing) {
-        // Stop screen sharing and revert to camera
         if (cameraTrackRef.current) {
             await videoSender.replaceTrack(cameraTrackRef.current);
             localStream.getVideoTracks()[0].enabled = !isVideoOff;
         }
         setIsScreenSharing(false);
     } else {
-        // Start screen sharing
         const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         const screenTrack = screenStream.getVideoTracks()[0];
         
         await videoSender.replaceTrack(screenTrack);
         setIsScreenSharing(true);
 
-        // When user clicks the browser's "Stop sharing" button
         screenTrack.onended = async () => {
             if (cameraTrackRef.current) {
                 await videoSender.replaceTrack(cameraTrackRef.current);
@@ -411,8 +430,6 @@ function RoomPage() {
   const leaveMeeting = () => {
     cleanupPeerConnection();
     cleanupLocalMedia();
-    // For both host and participant, leaving just navigates away.
-    // The component unmount will trigger the useEffect cleanup to remove the participant doc.
     router.push('/dashboard');
   };
 
@@ -422,9 +439,37 @@ function RoomPage() {
     }
   };
   
-  const isLoading = areParticipantsLoading;
+  const admitParticipant = (participantId: string) => {
+    if (!isHost || !firestore || !meetingId) return;
+    const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, participantId);
+    updateDocumentNonBlocking(participantRef, { role: 'participant' });
+  };
 
-  if (isLoading) {
+  const toggleRaiseHand = () => {
+      if (!user || !firestore || !meetingId || !currentUserParticipant) return;
+      const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
+      updateDocumentNonBlocking(participantRef, { hasRaisedHand: !currentUserParticipant.hasRaisedHand });
+  };
+  
+  const lowerHand = (participantId: string) => {
+      if (!isHost || !firestore || !meetingId) return;
+      const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, participantId);
+      updateDocumentNonBlocking(participantRef, { hasRaisedHand: false });
+  };
+  
+  const toggleLockMeeting = () => {
+      if (!isHost || !meetingRef) return;
+      updateDocumentNonBlocking(meetingRef, { isLocked: !meetingData?.isLocked });
+  };
+  
+  const toggleRecording = () => {
+      if (!isHost || !meetingRef) return;
+      updateDocumentNonBlocking(meetingRef, { isRecording: !meetingData?.isRecording });
+  };
+
+  const isLoading = areParticipantsLoading || !meetingData;
+
+  if (isLoading && !isUserInWaitingRoom) {
     return (
       <AuthGuard>
         <div className="p-4 md:p-8">
@@ -435,17 +480,41 @@ function RoomPage() {
     );
   }
 
+  if (isUserInWaitingRoom) {
+    return (
+      <AuthGuard>
+        <div className="flex h-screen w-full flex-col items-center justify-center bg-background p-4">
+            <Card className="max-w-sm">
+                <CardHeader>
+                    <CardTitle>Waiting Room</CardTitle>
+                    <CardDescription>The meeting is locked by the host. Please wait to be admitted.</CardDescription>
+                </CardHeader>
+                <CardFooter>
+                    <Button variant="outline" onClick={() => router.push('/dashboard')}>Leave</Button>
+                </CardFooter>
+            </Card>
+        </div>
+      </AuthGuard>
+    );
+  }
+
   return (
     <AuthGuard>
       <div className="flex h-screen w-full">
         <div className="flex flex-1 flex-col">
           <header className="flex h-16 items-center justify-between border-b bg-background px-6">
-            <div>
-              <h1 className="text-xl font-semibold">Meeting Room</h1>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-4">
+                <h1 className="text-xl font-semibold">Meeting Room</h1>
+                {meetingData?.isRecording && (
+                    <div className="flex items-center gap-2 text-sm text-red-500">
+                        <CircleDot className="h-4 w-4 animate-pulse" />
+                        <span>Recording</span>
+                    </div>
+                )}
+            </div>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Timer className="h-4 w-4" />
                 <span>{elapsedTime}</span>
-              </div>
             </div>
           </header>
           <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
@@ -453,7 +522,7 @@ function RoomPage() {
               <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center">
                  <video ref={remoteVideoRef} className="w-full h-full object-contain rounded-md" autoPlay playsInline />
                  <video ref={localVideoRef} className="absolute bottom-4 right-4 w-1/4 max-w-[200px] object-cover rounded-md border-2 border-background" autoPlay muted playsInline />
-                 {!remoteStream && participants && participants.length > 1 && (
+                 {!remoteStream && activeParticipants && activeParticipants.length > 1 && (
                     <div className="absolute inset-0 flex items-center justify-center">
                         <p className="text-white">Connecting...</p>
                     </div>
@@ -467,7 +536,7 @@ function RoomPage() {
                     </AlertDescription>
                   </Alert>
                 )}
-                 {participants && participants.length < 2 && !isLoading && (
+                 {activeParticipants && activeParticipants.length < 2 && !isLoading && (
                     <Alert>
                         <AlertTitle>Waiting for others</AlertTitle>
                         <AlertDescription>
@@ -475,7 +544,7 @@ function RoomPage() {
                         </AlertDescription>
                     </Alert>
                 )}
-                <div className="flex items-center justify-center gap-4">
+                <div className="flex items-center justify-center gap-2 flex-wrap">
                     <Button onClick={toggleAudio} variant={isAudioMuted ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
                       {isAudioMuted ? <MicOff /> : <Mic />}
                       <span className="sr-only">{isAudioMuted ? 'Unmute' : 'Mute'}</span>
@@ -488,6 +557,22 @@ function RoomPage() {
                       {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                       <span className="sr-only">{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
                     </Button>
+                    <Button onClick={toggleRaiseHand} variant={currentUserParticipant?.hasRaisedHand ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                        <Hand />
+                        <span className="sr-only">{currentUserParticipant?.hasRaisedHand ? 'Lower Hand' : 'Raise Hand'}</span>
+                    </Button>
+                    {isHost && (
+                        <Button onClick={toggleLockMeeting} variant={meetingData?.isLocked ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                            {meetingData?.isLocked ? <Unlock /> : <Lock />}
+                            <span className="sr-only">{meetingData?.isLocked ? 'Unlock Meeting' : 'Lock Meeting'}</span>
+                        </Button>
+                    )}
+                    {isHost && (
+                        <Button onClick={toggleRecording} variant={meetingData?.isRecording ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                            <CircleDot />
+                            <span className="sr-only">{meetingData?.isRecording ? 'Stop Recording' : 'Start Recording'}</span>
+                        </Button>
+                    )}
                     <Button onClick={leaveMeeting} variant="destructive" className="rounded-full h-12 px-6">
                       Leave
                     </Button>
@@ -499,20 +584,39 @@ function RoomPage() {
                   </div>
             </div>
             <div className="flex flex-col gap-4">
+              {isHost && waitingList && waitingList.length > 0 && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Waiting Room ({waitingList.length})</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                        {waitingList.map((p) => (
+                            <div key={p.id} className="flex items-center justify-between">
+                                <span>{p.name}</span>
+                                <Button size="sm" onClick={() => admitParticipant(p.id)}>Admit</Button>
+                            </div>
+                        ))}
+                    </CardContent>
+                </Card>
+              )}
               <Card>
                 <CardHeader>
-                  <CardTitle>Participants ({participants?.length || 0})</CardTitle>
+                  <CardTitle>Participants ({activeParticipants?.length || 0})</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {participants?.map((p) => (
+                  {activeParticipants?.map((p) => (
                     <div key={p.id} className="flex items-center gap-4">
                       <Avatar>
                         <AvatarImage src={`https://avatar.vercel.sh/${p.id}.png`} />
                         <AvatarFallback>{p.name?.[0].toUpperCase()}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
-                        <p className="font-medium">{p.name}</p>
+                        <p className="font-medium">{p.name} {p.role === 'host' && '(Host)'}</p>
                       </div>
+                      {p.hasRaisedHand && <Hand className="text-yellow-500" />}
+                      {isHost && p.hasRaisedHand && (
+                          <Button size="sm" variant="ghost" onClick={() => lowerHand(p.id)}>Lower Hand</Button>
+                      )}
                     </div>
                   ))}
                 </CardContent>
