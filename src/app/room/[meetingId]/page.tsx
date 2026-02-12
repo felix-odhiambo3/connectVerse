@@ -146,22 +146,20 @@ function RoomPage() {
     const isCallee = participants.length === 2 && participants[1].id === user.uid;
 
     const initializePeerConnection = () => {
-        peerConnectionRef.current = new RTCPeerConnection(servers);
+        const pc = new RTCPeerConnection(servers);
+        peerConnectionRef.current = pc;
         candidateQueueRef.current = [];
 
-        const remote = new MediaStream();
-        setRemoteStream(remote);
-
-        // Listen for tracks from the remote peer
-        peerConnectionRef.current.ontrack = (event) => {
-            event.streams[0].getTracks().forEach(track => {
-                remote.addTrack(track);
-            });
+        // Handle incoming remote tracks
+        pc.ontrack = (event) => {
+          if (event.streams && event.streams[0]) {
+            setRemoteStream(event.streams[0]);
+          }
         };
         
         // Add local tracks to the connection
         localStream.getTracks().forEach(track => {
-            peerConnectionRef.current?.addTrack(track, localStream);
+            pc.addTrack(track, localStream);
         });
     }
     
