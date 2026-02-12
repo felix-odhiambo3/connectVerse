@@ -46,6 +46,16 @@ const servers = {
     {
       urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
     },
+    // IMPORTANT: For production applications, you MUST configure a TURN server.
+    // A TURN server is necessary to relay traffic when a direct peer-to-peer
+    // connection cannot be established, for example, due to restrictive firewalls.
+    // You can use a managed service like Twilio's Network Traversal Service
+    // or host your own using an open-source solution like coturn.
+    // {
+    //   urls: 'turn:your-turn-server.com:3478',
+    //   username: 'your-username',
+    //   credential: 'your-password',
+    // },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -507,8 +517,6 @@ function RoomPage() {
       const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
       deleteDocumentNonBlocking(participantRef);
     }
-    cleanupPeerConnection();
-    cleanupLocalMedia();
     router.push('/dashboard');
   };
 
