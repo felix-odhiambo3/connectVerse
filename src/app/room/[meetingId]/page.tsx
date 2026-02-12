@@ -13,6 +13,7 @@ import {
   writeBatch,
   query,
   orderBy,
+  deleteDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -132,16 +133,38 @@ function RoomPage() {
     return () => clearInterval(intervalId);
   }, [meetingData?.createdAt]);
 
+  const cleanupConnection = () => {
+    if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+    }
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        setLocalStream(null);
+    }
+    if(remoteStream){
+        remoteStream.getTracks().forEach(track => track.stop());
+        setRemoteStream(null);
+    }
+  };
+  
   // Listen for meeting end
   useEffect(() => {
-    if (meetingData?.status === 'finished') {
-      toast({
-        title: "Meeting Ended",
-        description: "The host has ended the meeting for all participants.",
-      });
-      leaveMeeting();
-    }
-  }, [meetingData?.status, toast]);
+      if (meetingData?.status === 'finished') {
+          toast({
+              title: "Meeting Ended",
+              description: "The host has ended the meeting for all participants.",
+          });
+          cleanupConnection();
+          const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
+          getDocs(webrtcRef).then(snapshot => {
+              const batch = writeBatch(firestore);
+              snapshot.forEach(doc => batch.delete(doc.ref));
+              return batch.commit();
+          });
+          router.push('/dashboard');
+      }
+  }, [meetingData?.status, router, toast, firestore, meetingId]);
 
   // Get camera permissions and local stream
   useEffect(() => {
@@ -190,7 +213,8 @@ function RoomPage() {
 
     // Cleanup on unmount
     return () => {
-      leaveMeeting();
+      cleanupConnection();
+      deleteDoc(participantRef);
     };
   }, [user?.uid, meetingId, firestore]);
 
@@ -281,7 +305,7 @@ function RoomPage() {
         };
 
        const unsubOffer = onSnapshot(offerDescriptionRef, (snapshot) => {
-           if (snapshot.exists() && !pc.currentLocalDescription) {
+           if (snapshot.exists() && !pc.currentRemoteDescription && pc.signalingState !== 'stable') {
                const offerDescription = new RTCSessionDescription(snapshot.data());
                pc.setRemoteDescription(offerDescription).then(() => {
                     candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
@@ -364,25 +388,16 @@ function RoomPage() {
   };
 
   const leaveMeeting = () => {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
+    if (isHost && meetingRef) {
+        // Host leaving ends the meeting for all
+        updateDocumentNonBlocking(meetingRef, { status: 'finished' });
+    } else if(user) {
+        // Participant leaving just removes themselves
+        const participantRefToDelete = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
+        deleteDocumentNonBlocking(participantRefToDelete);
+        cleanupConnection();
+        router.push('/dashboard');
     }
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
-    }
-    if (user && meetingId && firestore) {
-      const participantRefToDelete = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
-      deleteDocumentNonBlocking(participantRefToDelete);
-
-      const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
-      getDocs(webrtcRef).then(snapshot => {
-         const batch = writeBatch(firestore);
-         snapshot.forEach(doc => batch.delete(doc.ref));
-         return batch.commit();
-      });
-    }
-    router.push('/dashboard');
   };
 
   const endMeetingForAll = () => {
