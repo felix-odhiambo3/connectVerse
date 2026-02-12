@@ -145,10 +145,7 @@ function RoomPage() {
         peerConnectionRef.current.close();
         peerConnectionRef.current = null;
     }
-    if (remoteStream) {
-        remoteStream.getTracks().forEach(track => track.stop());
-        setRemoteStream(null);
-    }
+    setRemoteStream(null);
   };
   
   // Listen for meeting end
@@ -218,8 +215,8 @@ function RoomPage() {
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
+    if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
 
@@ -253,7 +250,7 @@ function RoomPage() {
 
         // Handle incoming remote tracks
         pc.ontrack = (event) => {
-          setRemoteStream(event.streams[0]);
+            setRemoteStream(event.streams[0]);
         };
         
         // Add local tracks to the connection
@@ -327,7 +324,7 @@ function RoomPage() {
         };
 
        const unsubOffer = onSnapshot(offerDescriptionRef, (snapshot) => {
-           if (snapshot.exists() && !pc.currentRemoteDescription && pc.signalingState !== 'have-local-offer') {
+           if (snapshot.exists() && !pc.currentRemoteDescription) {
                const offerDescription = new RTCSessionDescription(snapshot.data());
                pc.setRemoteDescription(offerDescription).then(() => {
                     candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
@@ -414,13 +411,9 @@ function RoomPage() {
   const leaveMeeting = () => {
     cleanupPeerConnection();
     cleanupLocalMedia();
-    if (isHost && meetingRef) {
-        // Host leaving ends the meeting for all
-        updateDocumentNonBlocking(meetingRef, { status: 'finished' });
-    } else {
-        // Participant leaving just navigates away, useEffect handles firestore doc deletion
-        router.push('/dashboard');
-    }
+    // For both host and participant, leaving just navigates away.
+    // The component unmount will trigger the useEffect cleanup to remove the participant doc.
+    router.push('/dashboard');
   };
 
   const endMeetingForAll = () => {
