@@ -1,37 +1,3 @@
-/**
- * # Firestore Security Rules
- *
- * ## Core Philosophy
- * This ruleset enforces a strict user-ownership model. The fundamental principle is
- * that users can only interact with their own data. All user-specific information
- * is stored in a document where the ID directly corresponds to the user's
- * Firebase Authentication UID. This creates a secure, sandboxed environment for each user.
- *
- * ## Data Structure
- * The data is organized into a single top-level collection: `/users/{userId}`.
- * This flat structure avoids complex hierarchical lookups, making the rules both
- * highly performant and easy to understand. The document ID (`userId`) is the
- * single source of truth for authorization.
- *
- * ## Key Security Decisions
- * - **No Public Access**: By default, no user data is publicly readable. A user
- *   must be authenticated and have the correct UID to access a document.
- * - **User Enumeration Disabled**: The ability to `list` the entire `/users` collection
- *   is explicitly disabled to prevent malicious actors from scraping user IDs.
- * - **Self-Creation**: Users are permitted to create their own user document, which
- *   is a common requirement for new user registration flows.
- * - **Relational Integrity**: On creation, the rules enforce that the user document
- *   contains an internal `id` field that matches the document's `userId`. This
- *   field is then enforced as immutable to maintain data consistency.
- *
- * ## Denormalization for Authorization
- * These rules are built on the principle of authorization independence. By using the
- * user's Auth UID as the document ID in `/users/{userId}`, we can perform all
- * authorization checks without needing costly `get()` or `exists()` calls to other
- * documents. The user's identity is encoded directly in the path, which is the
- * most efficient and secure way to control access in Firestore.
- *
- */
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -67,49 +33,62 @@ service cloud.firestore {
      * This is critical for maintaining relational integrity.
      */
     function isNewUserDocumentValid(userId) {
-      return request.resource.data.id == userId;
+      let data = request.resource.data;
+      return data.id == userId &&
+             data.username is string && data.username.size() > 0 &&
+             data.email == request.auth.email;
     }
 
     /**
      * Validates user document on update.
-     * Enforces immutability of the critical `id` field to prevent re-associating
-     * the profile with a different user.
+     * Enforces immutability of the critical `id` and `email` fields.
      */
     function isUpdatedUserDocumentValid() {
-      return request.resource.data.id == resource.data.id;
+      let data = request.resource.data;
+      return data.id == resource.data.id &&
+             data.email == resource.data.email;
     }
-
+    
     // ----------------------------------------------------------------------
     // Collection Rules
     // ----------------------------------------------------------------------
 
     /**
-     * @description
-     *   Manages user profile documents. Access is strictly limited to the document owner.
-     *   Users can create, read, update, and delete their own profile, but cannot see or
-     *   interact with the profiles of other users.
-     * @path
-     *   `/users/{userId}`
-     * @allow
-     *   (create) An authenticated user 'user_abc' creating their own profile document at `/users/user_abc`.
-     * @allow
-     *   (get) User 'user_abc' reading their own document at `/users/user_abc`.
-     * @deny
-     *   (list) Any user attempting to list all documents in the `/users` collection.
-     * @deny
-     *   (update) User 'user_abc' trying to update a document at `/users/user_xyz`.
-     * @principle
-     *   Restricts access to a user's own data tree, preventing data leakage and user enumeration.
+     * User profiles
      */
     match /users/{userId} {
-      // READ: A user can only get their own document. Listing all users is forbidden.
-      allow get: if isOwner(userId);
+      allow get: if isSignedIn();
       allow list: if false;
-
-      // WRITE: A user can create their own document, and update or delete it thereafter.
       allow create: if isOwner(userId) && isNewUserDocumentValid(userId);
-      allow update: if isExistingOwner(userId) && isUpdatedUserDocumentValid();
-      allow delete: if isExistingOwner(userId);
+      allow update: if isOwner(userId) && isUpdatedUserDocumentValid();
+      allow delete: if isOwner(userId);
+    }
+
+    /**
+     * Meeting documents
+     */
+    match /meetings/{meetingId} {
+      // Any authenticated user can read a meeting document.
+      allow get: if isSignedIn();
+      // Any authenticated user can create a meeting.
+      // The hostId must match the creator's UID.
+      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
+      // Only the host can update or delete the meeting.
+      allow update, delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
+
+      /**
+       * Participant sub-collection
+       */
+      match /participants/{participantId} {
+        // Any authenticated user can read the list of participants.
+        allow get, list: if isSignedIn();
+        // A user can only add themselves as a participant.
+        allow create: if isOwner(participantId);
+        // A user can only remove themselves from the participants list.
+        allow delete: if isOwner(participantId);
+        // Participants cannot be updated. They are either there or not.
+        allow update: if false;
+      }
     }
   }
 }
