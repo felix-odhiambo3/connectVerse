@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user account within the ConnectVerse application, including authentication credentials and profile information.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the User entity."
+        },
+        "username": {
+          "type": "string",
+          "description": "A unique username for the user, used for identification and login."
+        },
+        "email": {
+          "type": "string",
+          "description": "The user's unique email address, used for login and notifications.",
+          "format": "email"
+        },
+        "hashedPassword": {
+          "type": "string",
+          "description": "The securely hashed password for the user, used for authentication. Raw passwords are never stored."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp indicating when the user account was created.",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Timestamp indicating the last time the user account details were updated.",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "email",
+        "hashedPassword",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/users/{userId}",
+        "definition": {
+          "entityName": "User",
+          "schema": {
+            "$ref": "#/backend/entities/User"
+          },
+          "description": "User profile document storing public information and metadata. The document ID (`userId`) MUST correspond to the Firebase Authentication UID. This collection will NOT store sensitive authentication data like `hashedPassword`, which is managed by the backend Node.js server using MongoDB. Includes denormalized 'id' as document ID for authorization independence.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier for the user, which matches the Firebase Authentication UID."
+            }
+          ]
+        }
+      }
+    ],
+    "reasoning": "The Firestore structure for the authentication system focuses on housing user profiles and metadata, distinct from the primary authentication credentials. Given the backend specification for Node.js, Express.js, and MongoDB (with Mongoose, JWT, and Bcrypt for password hashing), the `User` entity's sensitive authentication details, specifically `hashedPassword`, will reside exclusively in MongoDB. Firestore will therefore store a user's public profile information and any user-specific settings, rather than their authentication credentials.\n\nTo ensure **Authorization Independence**, user profiles are stored in a top-level collection `/users/{userId}`. Each document's ID (`userId`) is designed to directly correspond to the Firebase Authentication User ID (`request.auth.uid`). This direct mapping allows security rules to evaluate ownership atomically, using `request.auth.uid == userId`, without requiring any `get()` operations on parent documents or other collections. This design completely eliminates hierarchical authorization dependencies, making rules robust and easily debuggable.\n\n**Querying for Authorization Purposes (QAPs)** is inherently supported by this structure. A user can directly access their own profile document via `/users/{request.auth.uid}`. Listing operations for all users would typically be restricted or managed through a separate 'public_profiles' collection if public visibility is required, ensuring that sensitive user data is not inadvertently exposed. For the current module, only individual user profile access is anticipated.\n\n**Structural Segregation** is applied by ensuring that the `/users` collection only contains user profile data with consistent security requirements (i.e., each user owns and can modify their own profile, or specific fields are publicly readable). Any different security postures (e.g., administrator roles) would be managed via separate existence-based collections (e.g., `/roles_admin/{uid}`) or clearly defined fields within the user document itself, not by mixing different types of access within the same collection.\n\nThe use of `userId` as the document ID adheres to **Radical Consistency** and provides a clear, predictable schema for user-related data in Firestore, making security rules straightforward to write and verify."
+  }
+}
