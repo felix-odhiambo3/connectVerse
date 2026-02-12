@@ -110,7 +110,7 @@ function RoomPage() {
       });
       leaveMeeting();
     }
-  }, [meetingData]);
+  }, [meetingData, toast]);
 
   // Get camera permissions and local stream
   useEffect(() => {
@@ -183,12 +183,8 @@ function RoomPage() {
   useEffect(() => {
     if (!localStream || !meetingId || !firestore || !user || !participants) return;
 
-    const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
-
-    const isCaller = participants.length === 2 && participants[0].id === user.uid;
-    const isCallee = participants.length === 2 && participants[1].id === user.uid;
-
-    const initializePeerConnection = () => {
+    // Initialize peer connection only if it doesn't exist.
+    if (!peerConnectionRef.current) {
         const pc = new RTCPeerConnection(servers);
         peerConnectionRef.current = pc;
         candidateQueueRef.current = [];
@@ -203,12 +199,15 @@ function RoomPage() {
             pc.addTrack(track, localStream);
         });
     }
-    
+
+    const pc = peerConnectionRef.current;
+    const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
+
+    const isCaller = participants.length >= 2 && participants[0].id === user.uid;
+    const isCallee = participants.length >= 2 && participants[1].id === user.uid;
+
     // Caller logic
     if (isCaller) {
-        initializePeerConnection();
-        const pc = peerConnectionRef.current!;
-        
         const offerDescriptionRef = doc(webrtcRef, OFFER_DOC);
         const answerDescriptionRef = doc(webrtcRef, ANSWER_DOC);
         const callerCandidatesCollection = collection(offerDescriptionRef, CALLER_CANDIDATES_COLLECTION);
@@ -218,10 +217,12 @@ function RoomPage() {
             event.candidate && addDoc(callerCandidatesCollection, event.candidate.toJSON());
         };
 
-        pc.createOffer().then(offer => {
-            pc.setLocalDescription(offer);
-            setDocumentNonBlocking(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
-        });
+        if (pc.signalingState === 'stable') {
+          pc.createOffer().then(offer => {
+              pc.setLocalDescription(offer);
+              setDocumentNonBlocking(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
+          });
+        }
         
         const unsubAnswer = onSnapshot(answerDescriptionRef, (snapshot) => {
             if (snapshot.exists() && pc.currentRemoteDescription?.type !== 'answer') {
@@ -254,9 +255,6 @@ function RoomPage() {
 
     // Callee logic
     if (isCallee) {
-       initializePeerConnection();
-       const pc = peerConnectionRef.current!;
-
        const offerDescriptionRef = doc(webrtcRef, OFFER_DOC);
        const answerDescriptionRef = doc(webrtcRef, ANSWER_DOC);
        const callerCandidatesCollection = collection(offerDescriptionRef, CALLER_CANDIDATES_COLLECTION);
