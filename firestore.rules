@@ -89,6 +89,13 @@ service cloud.firestore {
         // Participants cannot be updated. They are either there or not.
         allow update: if false;
       }
+      
+      /**
+       * WebRTC Signaling sub-collection
+       */
+      match /webrtc/{channel}/{docId=**} {
+        allow read, write: if isSignedIn();
+      }
     }
   }
 }
