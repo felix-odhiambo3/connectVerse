@@ -35,6 +35,7 @@ export default function DashboardPage() {
   const [meetingId, setMeetingId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [openScheduleDialog, setOpenScheduleDialog] = useState(false);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const router = useRouter();
   const firestore = useFirestore();
   const auth = useAuth();
@@ -248,7 +249,7 @@ export default function DashboardPage() {
                             <FormField control={form.control} name="date" render={({ field }) => (
                                 <FormItem className="flex flex-col">
                                     <FormLabel>Date</FormLabel>
-                                    <Popover>
+                                    <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
                                         <PopoverTrigger asChild>
                                             <FormControl>
                                                 <Button variant={"outline"} className={cn("w-full pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
@@ -261,7 +262,10 @@ export default function DashboardPage() {
                                             <Calendar
                                                 mode="single"
                                                 selected={field.value}
-                                                onSelect={field.onChange}
+                                                onSelect={(date) => {
+                                                  field.onChange(date);
+                                                  setDatePickerOpen(false);
+                                                }}
                                                 disabled={(date) =>
                                                     date < new Date(new Date().setHours(0, 0, 0, 0))
                                                 }
