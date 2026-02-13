@@ -438,21 +438,27 @@ function RoomPage() {
         };
 
         if (pc.signalingState === 'stable') {
-          pc.createOffer().then(offer => {
-              pc.setLocalDescription(offer);
-              setDocumentNonBlocking(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
+          pc.createOffer().then(async (offer) => {
+              try {
+                await pc.setLocalDescription(offer);
+                setDocumentNonBlocking(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
+              } catch (e) {
+                console.error("Error setting local description for offer:", e);
+              }
           });
         }
         
-        const unsubAnswer = onSnapshot(answerDescriptionRef, (snapshot) => {
+        const unsubAnswer = onSnapshot(answerDescriptionRef, async (snapshot) => {
             if (snapshot.exists() && pc.signalingState === 'have-local-offer') {
                 const answerDescription = new RTCSessionDescription(snapshot.data());
-                pc.setRemoteDescription(answerDescription).then(() => {
-                    candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
-                    candidateQueueRef.current = [];
-                }).catch((e) => {
-                    console.error("Failed to set remote description for answer:", e);
-                });
+                try {
+                  await pc.setRemoteDescription(answerDescription);
+                  // Process any queued candidates
+                  candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
+                  candidateQueueRef.current = [];
+                } catch(e) {
+                  console.error("Failed to set remote description for answer:", e);
+                }
             }
         });
 
@@ -485,20 +491,23 @@ function RoomPage() {
             event.candidate && addDoc(calleeCandidatesCollection, event.candidate.toJSON());
         };
 
-       const unsubOffer = onSnapshot(offerDescriptionRef, (snapshot) => {
+       const unsubOffer = onSnapshot(offerDescriptionRef, async (snapshot) => {
            if (snapshot.exists() && !pc.currentRemoteDescription) {
                const offerDescription = new RTCSessionDescription(snapshot.data());
-               pc.setRemoteDescription(offerDescription).then(() => {
-                    candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
-                    candidateQueueRef.current = [];
+               try {
+                   await pc.setRemoteDescription(offerDescription);
+                   // Process any queued candidates
+                   candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
+                   candidateQueueRef.current = [];
 
-                   pc.createAnswer().then(answer => {
-                       if (!pc.currentLocalDescription) {
-                           pc.setLocalDescription(answer);
-                           setDocumentNonBlocking(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
-                       }
-                   });
-               });
+                   if (!pc.currentLocalDescription) {
+                       const answer = await pc.createAnswer();
+                       await pc.setLocalDescription(answer);
+                       setDocumentNonBlocking(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
+                   }
+               } catch (e) {
+                   console.error("Error in callee offer handling:", e);
+               }
            }
        });
 
