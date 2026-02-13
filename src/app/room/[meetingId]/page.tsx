@@ -15,6 +15,7 @@ import {
   orderBy,
   deleteDoc,
   getDoc,
+  setDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -441,7 +442,7 @@ function RoomPage() {
           pc.createOffer().then(async (offer) => {
               try {
                 await pc.setLocalDescription(offer);
-                setDocumentNonBlocking(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
+                await setDoc(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
               } catch (e) {
                 console.error("Error setting local description for offer:", e);
               }
@@ -503,7 +504,7 @@ function RoomPage() {
                    if (!pc.currentLocalDescription) {
                        const answer = await pc.createAnswer();
                        await pc.setLocalDescription(answer);
-                       setDocumentNonBlocking(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
+                       await setDoc(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
                    }
                } catch (e) {
                    console.error("Error in callee offer handling:", e);
