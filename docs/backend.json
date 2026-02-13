@@ -78,6 +78,38 @@
         "isRecording": {
           "type": "boolean",
           "description": "Indicates if the meeting is currently being recorded."
+        },
+        "geminiNotesEnabled": {
+          "type": "boolean",
+          "description": "If true, the Gemini Notes feature is available in the meeting."
+        },
+        "participantPermissions": {
+          "type": "object",
+          "description": "Defines permissions for participants, controlled by the host.",
+          "properties": {
+            "allowShareScreen": {
+              "type": "boolean",
+              "description": "If true, participants can share their screen."
+            },
+            "allowSendReactions": {
+              "type": "boolean",
+              "description": "If true, participants can send reactions like raising their hand."
+            },
+            "allowUnmute": {
+              "type": "boolean",
+              "description": "If true, participants can unmute their own microphone."
+            },
+            "allowStartVideo": {
+              "type": "boolean",
+              "description": "If true, participants can turn on their own video."
+            }
+          },
+          "required": [
+            "allowShareScreen",
+            "allowSendReactions",
+            "allowUnmute",
+            "allowStartVideo"
+          ]
         }
       },
       "required": [

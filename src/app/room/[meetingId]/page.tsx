@@ -29,7 +29,11 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2 } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
 
 
 // Firestore collections
@@ -71,6 +75,13 @@ interface Participant {
   isMuted?: boolean;
 }
 
+interface ParticipantPermissions {
+    allowShareScreen: boolean;
+    allowSendReactions: boolean;
+    allowUnmute: boolean;
+    allowStartVideo: boolean;
+}
+
 function RoomPage() {
   const params = useParams();
   const meetingId = params.meetingId as string;
@@ -88,6 +99,7 @@ function RoomPage() {
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
   const [wasInMeeting, setWasInMeeting] = useState(false);
+  const [openHostControls, setOpenHostControls] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -109,6 +121,8 @@ function RoomPage() {
     isRecording?: boolean;
     name?: string;
     scheduledAt?: { seconds: number };
+    geminiNotesEnabled?: boolean;
+    participantPermissions?: ParticipantPermissions;
   }>(meetingRef);
 
   const participantsRef = useMemoFirebase(() => {
@@ -552,10 +566,18 @@ function RoomPage() {
     }, [isAudioMuted, currentUserParticipant?.isMuted, localStream]);
 
     const toggleAudio = () => {
+        if (!isHost && !(meetingData?.participantPermissions?.allowUnmute ?? true) && !localStream?.getAudioTracks()[0].enabled) {
+            toast({ title: "The host has disabled microphones for participants." });
+            return;
+        }
         setIsAudioMuted(prev => !prev);
     };
 
   const toggleVideo = () => {
+      if (!isHost && !(meetingData?.participantPermissions?.allowStartVideo ?? true) && isVideoOff) {
+          toast({ title: "The host has disabled video for participants." });
+          return;
+      }
       const newVideoState = !isVideoOff;
       localStream?.getVideoTracks().forEach(track => {
           track.enabled = !newVideoState;
@@ -564,7 +586,12 @@ function RoomPage() {
   };
 
   const toggleScreenShare = async () => {
+    if (!isHost && !(meetingData?.participantPermissions?.allowShareScreen ?? true)) {
+        toast({ title: "The host has disabled screen sharing for participants." });
+        return;
+    }
     if (!peerConnectionRef.current || !localStream) return;
+
     const videoSender = peerConnectionRef.current.getSenders().find(sender => sender.track?.kind === 'video');
     if (!videoSender) return;
 
@@ -630,6 +657,10 @@ function RoomPage() {
 
   const toggleRaiseHand = () => {
       if (!user || !firestore || !meetingId || !currentUserParticipant) return;
+      if (!isHost && !(meetingData?.participantPermissions?.allowSendReactions ?? true)) {
+          toast({ title: "The host has disabled reactions." });
+          return;
+      }
       const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
       updateDocumentNonBlocking(participantRef, { hasRaisedHand: !currentUserParticipant.hasRaisedHand });
   };
@@ -643,11 +674,6 @@ function RoomPage() {
   const toggleLockMeeting = () => {
       if (!isHost || !meetingRef) return;
       updateDocumentNonBlocking(meetingRef, { isLocked: !meetingData?.isLocked });
-  };
-  
-  const toggleRecording = () => {
-      if (!isHost || !meetingRef) return;
-      updateDocumentNonBlocking(meetingRef, { isRecording: !meetingData?.isRecording });
   };
 
     const removeParticipant = (participantId: string) => {
@@ -678,22 +704,7 @@ function RoomPage() {
                 throw new Error('Web Share API not available.');
             }
         } catch (error: any) {
-            if (error.name === 'AbortError' || error.name === 'NotAllowedError') {
-                console.log('Share action was cancelled or denied.');
-                // Fallback to clipboard for desktops or when share is denied
-                try {
-                    await navigator.clipboard.writeText(shareUrl);
-                    toast({ title: 'Link copied to clipboard!' });
-                } catch (copyError) {
-                    console.error('Fallback to clipboard failed:', copyError);
-                    toast({ 
-                        variant: 'destructive', 
-                        title: 'Failed to share',
-                        description: 'Could not open share dialog or copy link to clipboard.'
-                    });
-                }
-            } else {
-                console.error('An unexpected error occurred during share:', error);
+            if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
                  try {
                     await navigator.clipboard.writeText(shareUrl);
                     toast({ title: 'Link copied to clipboard!' });
@@ -714,6 +725,20 @@ function RoomPage() {
         updateDocumentNonBlocking(meetingRef, { status: 'pending' });
         toast({ title: 'Meeting started!' });
     };
+    
+    const handlePermissionChange = (key: keyof ParticipantPermissions, value: boolean) => {
+        if (!isHost || !meetingRef) return;
+        const updatePayload = {
+            [`participantPermissions.${key}`]: value
+        };
+        updateDocumentNonBlocking(meetingRef, updatePayload);
+    };
+
+    const handleFeatureChange = (key: 'geminiNotesEnabled' | 'isRecording', value: boolean) => {
+        if (!isHost || !meetingRef) return;
+        const updatePayload = { [key]: value };
+        updateDocumentNonBlocking(meetingRef, updatePayload);
+    }
 
   const isLoading = areParticipantsLoading || !meetingData;
 
@@ -827,19 +852,43 @@ function RoomPage() {
                     </Alert>
                 )}
                 <div className="flex items-center justify-center gap-2 flex-wrap">
-                    <Button onClick={toggleAudio} variant={(isAudioMuted || !!currentUserParticipant?.isMuted) ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
+                    <Button 
+                        onClick={toggleAudio} 
+                        variant={(isAudioMuted || !!currentUserParticipant?.isMuted) ? "secondary" : "outline"} 
+                        size="icon" 
+                        className="rounded-full h-12 w-12" 
+                        disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowUnmute ?? true) && (isAudioMuted || !!currentUserParticipant?.isMuted))}
+                    >
                       {(isAudioMuted || !!currentUserParticipant?.isMuted) ? <MicOff /> : <Mic />}
                       <span className="sr-only">{(isAudioMuted || !!currentUserParticipant?.isMuted) ? 'Unmute' : 'Mute'}</span>
                     </Button>
-                     <Button onClick={toggleVideo} variant={isVideoOff ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
+                     <Button 
+                        onClick={toggleVideo} 
+                        variant={isVideoOff ? "secondary" : "outline"} 
+                        size="icon" 
+                        className="rounded-full h-12 w-12" 
+                        disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowStartVideo ?? true) && isVideoOff)}
+                    >
                       {isVideoOff ? <VideoOff /> : <Video />}
                       <span className="sr-only">{isVideoOff ? 'Turn camera on' : 'Turn camera off'}</span>
                     </Button>
-                    <Button onClick={toggleScreenShare} variant={isScreenSharing ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12" disabled={!hasCameraPermission}>
+                    <Button 
+                        onClick={toggleScreenShare} 
+                        variant={isScreenSharing ? "secondary" : "outline"} 
+                        size="icon" 
+                        className="rounded-full h-12 w-12" 
+                        disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowShareScreen ?? true))}
+                    >
                       {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                       <span className="sr-only">{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
                     </Button>
-                    <Button onClick={toggleRaiseHand} variant={currentUserParticipant?.hasRaisedHand ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                    <Button 
+                        onClick={toggleRaiseHand} 
+                        variant={currentUserParticipant?.hasRaisedHand ? "secondary" : "outline"} 
+                        size="icon" 
+                        className="rounded-full h-12 w-12"
+                        disabled={!isHost && !(meetingData?.participantPermissions?.allowSendReactions ?? true)}
+                    >
                         <Hand />
                         <span className="sr-only">{currentUserParticipant?.hasRaisedHand ? 'Lower Hand' : 'Raise Hand'}</span>
                     </Button>
@@ -850,10 +899,67 @@ function RoomPage() {
                         </Button>
                     )}
                     {isHost && (
-                        <Button onClick={toggleRecording} variant={meetingData?.isRecording ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
-                            <CircleDot />
-                            <span className="sr-only">{meetingData?.isRecording ? 'Stop Recording' : 'Start Recording'}</span>
-                        </Button>
+                        <Dialog open={openHostControls} onOpenChange={setOpenHostControls}>
+                            <DialogTrigger asChild>
+                                <Button variant="outline" size="icon" className="rounded-full h-12 w-12">
+                                    <Shield />
+                                    <span className="sr-only">Host Controls</span>
+                                </Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                                <DialogHeader>
+                                    <DialogTitle>Host Controls</DialogTitle>
+                                    <DialogDescription>Manage what features are enabled and what participants can do.</DialogDescription>
+                                </DialogHeader>
+                                <div className="space-y-6 py-2">
+                                    <div>
+                                        <h3 className="text-lg font-medium mb-4">Meeting Features</h3>
+                                        <div className="space-y-4">
+                                            <div className="flex items-center justify-between">
+                                                <Label htmlFor="recording-switch" className="flex flex-col space-y-1">
+                                                    <span>Recording</span>
+                                                    <span className="font-normal leading-snug text-muted-foreground">
+                                                        Enable/disable meeting recording.
+                                                    </span>
+                                                </Label>
+                                                <Switch id="recording-switch" checked={meetingData?.isRecording ?? false} onCheckedChange={(checked) => handleFeatureChange('isRecording', checked)} />
+                                            </div>
+                                            <div className="flex items-center justify-between">
+                                                <Label htmlFor="gemini-switch" className="flex flex-col space-y-1">
+                                                    <span>Gemini Notes (Beta)</span>
+                                                    <span className="font-normal leading-snug text-muted-foreground">
+                                                        Enable AI-powered meeting notes.
+                                                    </span>
+                                                </Label>
+                                                <Switch id="gemini-switch" checked={meetingData?.geminiNotesEnabled ?? false} onCheckedChange={(checked) => handleFeatureChange('geminiNotesEnabled', checked)} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <Separator />
+                                    <div>
+                                        <h3 className="text-lg font-medium mb-4">Participant Permissions</h3>
+                                        <div className="space-y-4">
+                                             <div className="flex items-center justify-between">
+                                                <Label htmlFor="share-screen-switch">Share their screen</Label>
+                                                <Switch id="share-screen-switch" checked={meetingData?.participantPermissions?.allowShareScreen ?? true} onCheckedChange={(checked) => handlePermissionChange('allowShareScreen', checked)} />
+                                            </div>
+                                             <div className="flex items-center justify-between">
+                                                <Label htmlFor="send-reactions-switch">Send reactions</Label>
+                                                <Switch id="send-reactions-switch" checked={meetingData?.participantPermissions?.allowSendReactions ?? true} onCheckedChange={(checked) => handlePermissionChange('allowSendReactions', checked)} />
+                                            </div>
+                                            <div className="flex items-center justify-between">
+                                                <Label htmlFor="unmute-switch">Turn on their microphone</Label>
+                                                <Switch id="unmute-switch" checked={meetingData?.participantPermissions?.allowUnmute ?? true} onCheckedChange={(checked) => handlePermissionChange('allowUnmute', checked)} />
+                                            </div>
+                                            <div className="flex items-center justify-between">
+                                                <Label htmlFor="start-video-switch">Turn on their video</Label>
+                                                <Switch id="start-video-switch" checked={meetingData?.participantPermissions?.allowStartVideo ?? true} onCheckedChange={(checked) => handlePermissionChange('allowStartVideo', checked)} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </DialogContent>
+                        </Dialog>
                     )}
                     <Button onClick={leaveMeeting} variant="destructive" className="rounded-full h-12 px-6">
                       Leave

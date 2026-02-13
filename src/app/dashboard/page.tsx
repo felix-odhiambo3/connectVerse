@@ -80,6 +80,13 @@ export default function DashboardPage() {
         status: 'pending',
         isLocked: false,
         isRecording: false,
+        geminiNotesEnabled: false,
+        participantPermissions: {
+            allowShareScreen: true,
+            allowSendReactions: true,
+            allowUnmute: true,
+            allowStartVideo: true,
+        },
       });
       toast({ title: 'Meeting created!' });
       router.push(`/room/${newMeetingRef.id}`);
@@ -125,6 +132,13 @@ export default function DashboardPage() {
             status: 'scheduled',
             isLocked: false,
             isRecording: false,
+            geminiNotesEnabled: false,
+            participantPermissions: {
+                allowShareScreen: true,
+                allowSendReactions: true,
+                allowUnmute: true,
+                allowStartVideo: true,
+            },
         });
         toast({ title: "Meeting scheduled successfully!" });
         setOpenScheduleDialog(false);
