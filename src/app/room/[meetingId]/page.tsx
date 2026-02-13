@@ -16,6 +16,7 @@ import {
   deleteDoc,
   getDoc,
   setDoc,
+  updateDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -241,16 +242,21 @@ function RoomPage() {
                 title: 'Camera Access Denied',
                 description: 'Please enable camera and microphone permissions in your browser settings to join the call.',
             });
-        } else if (error.name === 'AbortError') {
-            console.warn('Camera access request was aborted.', error);
+        } else if (error.name === 'NotReadableError') {
+            console.error('Could not start video source:', error);
             setHasCameraPermission(false);
+            toast({
+                variant: 'destructive',
+                title: 'Camera In Use?',
+                description: 'Could not access your camera. It may be in use by another application or disconnected.',
+            });
         } else {
             console.error('Error accessing camera/microphone:', error);
             setHasCameraPermission(false);
             toast({
                 variant: 'destructive',
                 title: 'Device Error',
-                description: 'Could not access your camera or microphone. Please check that they are connected and not in use by another application.',
+                description: 'An unexpected error occurred while trying to access your camera or microphone.',
             });
         }
       }
@@ -288,30 +294,23 @@ function RoomPage() {
 
     const setupParticipant = async () => {
         const docSnap = await getDoc(participantRef);
-
-        let role: 'host' | 'participant' | 'waiting';
-        if (user.uid === meetingData.hostId) {
-            role = 'host';
-        } else {
-            role = meetingData.isLocked ? 'waiting' : 'participant';
-        }
         
-        let initialData: any = {
-            name: user.displayName || user.email,
-            joinedAt: serverTimestamp(),
-            role: role,
-        };
-
         if (!docSnap.exists()) {
-            initialData.hasRaisedHand = false;
-            initialData.isMuted = false;
-            setDocumentNonBlocking(participantRef, initialData, { merge: false });
-        } else {
-            // Document exists, only update the role if it's different to prevent resetting other states.
-            const existingData = docSnap.data();
-            if (existingData.role !== role && existingData.role === 'waiting') {
-                updateDocumentNonBlocking(participantRef, { role: role });
+            let role: 'host' | 'participant' | 'waiting';
+            if (user.uid === meetingData.hostId) {
+                role = 'host';
+            } else {
+                role = meetingData.isLocked ? 'waiting' : 'participant';
             }
+            
+            const initialData = {
+                name: user.displayName || user.email,
+                joinedAt: serverTimestamp(),
+                role: role,
+                hasRaisedHand: false,
+                isMuted: false,
+            };
+            setDocumentNonBlocking(participantRef, initialData, { merge: false });
         }
     };
     setupParticipant();
@@ -442,7 +441,7 @@ function RoomPage() {
           pc.createOffer().then(async (offer) => {
               try {
                 await pc.setLocalDescription(offer);
-                await setDoc(offerDescriptionRef, { sdp: offer.sdp, type: offer.type }, { merge: true });
+                await setDoc(offerDescriptionRef, { sdp: offer.sdp, type: offer.type });
               } catch (e) {
                 console.error("Error setting local description for offer:", e);
               }
@@ -504,7 +503,7 @@ function RoomPage() {
                    if (!pc.currentLocalDescription) {
                        const answer = await pc.createAnswer();
                        await pc.setLocalDescription(answer);
-                       await setDoc(answerDescriptionRef, { sdp: answer.sdp, type: answer.type }, { merge: true });
+                       await setDoc(answerDescriptionRef, { sdp: answer.sdp, type: answer.type });
                    }
                } catch (e) {
                    console.error("Error in callee offer handling:", e);
@@ -563,24 +562,41 @@ function RoomPage() {
 
     if (isScreenSharing) {
         if (cameraTrackRef.current) {
-            await videoSender.replaceTrack(cameraTrackRef.current);
+            videoSender.replaceTrack(cameraTrackRef.current).catch(console.error);
             localStream.getVideoTracks()[0].enabled = !isVideoOff;
         }
         setIsScreenSharing(false);
     } else {
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        const screenTrack = screenStream.getVideoTracks()[0];
-        
-        await videoSender.replaceTrack(screenTrack);
-        setIsScreenSharing(true);
+        try {
+            const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            const screenTrack = screenStream.getVideoTracks()[0];
+            
+            await videoSender.replaceTrack(screenTrack);
+            setIsScreenSharing(true);
 
-        screenTrack.onended = async () => {
-            if (peerConnectionRef.current?.getSenders().find(s => s.track === screenTrack) && cameraTrackRef.current) {
-                await videoSender.replaceTrack(cameraTrackRef.current);
-                localStream.getVideoTracks()[0].enabled = !isVideoOff;
+            screenTrack.onended = async () => {
+                if (peerConnectionRef.current?.getSenders().find(s => s.track === screenTrack) && cameraTrackRef.current) {
+                    await videoSender.replaceTrack(cameraTrackRef.current);
+                    localStream.getVideoTracks()[0].enabled = !isVideoOff;
+                }
+                setIsScreenSharing(false);
+            };
+        } catch (error: any) {
+            console.error("Error starting screen share:", error);
+            if (error.name === 'NotAllowedError') {
+                toast({
+                    title: 'Screen Share Cancelled',
+                    description: 'You did not grant permission to share your screen.'
+                });
+            } else {
+                toast({
+                    variant: 'destructive',
+                    title: 'Screen Share Failed',
+                    description: 'Could not start screen sharing. Please try again.'
+                });
             }
             setIsScreenSharing(false);
-        };
+        }
     }
   };
 
