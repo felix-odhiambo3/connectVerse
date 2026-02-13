@@ -3,13 +3,13 @@
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
-import { addDoc, collection, serverTimestamp, query, where, orderBy, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, query, where, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LogOut, Plus, Video, Calendar as CalendarIcon, Clock, Copy, Trash2, ArrowRight } from 'lucide-react';
+import { LogOut, Plus, Video, Calendar as CalendarIcon, Copy, Trash2, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -49,17 +49,23 @@ export default function DashboardPage() {
     },
   });
 
-  const upcomingMeetingsQuery = useMemoFirebase(() => {
+  const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user || !firestore) return null;
     return query(
       collection(firestore, 'meetings'),
-      where('hostId', '==', user.uid),
-      where('status', '==', 'scheduled'),
-      orderBy('scheduledAt', 'asc')
+      where('hostId', '==', user.uid)
     );
   }, [user, firestore]);
 
-  const { data: upcomingMeetings } = useCollection(upcomingMeetingsQuery);
+  const { data: allUserMeetings } = useCollection(allUserMeetingsQuery);
+
+  const upcomingMeetings = useMemo(() => {
+    if (!allUserMeetings) return [];
+    return allUserMeetings
+      .filter(meeting => meeting.status === 'scheduled')
+      .sort((a, b) => (a.scheduledAt?.seconds || 0) - (b.scheduledAt?.seconds || 0));
+  }, [allUserMeetings]);
+
 
   const createInstantMeeting = async () => {
     if (!user || !firestore) return;

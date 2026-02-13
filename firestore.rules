@@ -68,9 +68,11 @@ service cloud.firestore {
      * Meeting documents
      */
     match /meetings/{meetingId} {
-      // Any authenticated user can get or list meetings.
-      // The client-side code is responsible for filtering meetings by host.
-      allow read: if isSignedIn();
+      // Any authenticated user can get a single meeting to join it.
+      allow get: if isSignedIn();
+      // A user can only list the meetings they are the host of.
+      // This requires the client query to include `where('hostId', '==', request.auth.uid)`.
+      allow list: if request.auth.uid == resource.data.hostId;
 
       // Allow creation for both instant and scheduled meetings with proper validation.
       allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid && request.resource.data.createdAt == request.time && (
