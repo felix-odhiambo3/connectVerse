@@ -107,6 +107,8 @@ function RoomPage() {
     status: string;
     isLocked?: boolean;
     isRecording?: boolean;
+    name?: string;
+    scheduledAt?: { seconds: number };
   }>(meetingRef);
 
   const participantsRef = useMemoFirebase(() => {
@@ -163,7 +165,10 @@ function RoomPage() {
 
   // Meeting Timer
   useEffect(() => {
-    if (!meetingData?.createdAt) return;
+    if (!meetingData?.createdAt || meetingData.status === 'scheduled') {
+        setElapsedTime('00:00:00');
+        return;
+    };
     
     const startTime = meetingData.createdAt.seconds * 1000;
     const intervalId = setInterval(() => {
@@ -178,7 +183,7 @@ function RoomPage() {
     }, 1000);
     
     return () => clearInterval(intervalId);
-  }, [meetingData?.createdAt]);
+  }, [meetingData?.createdAt, meetingData?.status]);
 
   const cleanupLocalMedia = () => {
     if (localStream) {
@@ -218,6 +223,7 @@ function RoomPage() {
 
   // Get camera permissions and local stream. Runs only once on mount.
   useEffect(() => {
+    if (meetingData?.status === 'scheduled') return;
     let isCancelled = false;
     const getCameraPermission = async () => {
       try {
@@ -269,7 +275,7 @@ function RoomPage() {
       cleanupPeerConnection();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [meetingData?.status]);
   
   // Effect to attach streams to video elements
   useEffect(() => {
@@ -288,7 +294,7 @@ function RoomPage() {
 
   // Join the room and manage participant list
   useEffect(() => {
-    if (!user || !meetingId || !firestore || !meetingData) return;
+    if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'scheduled') return;
 
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
 
@@ -324,7 +330,7 @@ function RoomPage() {
 
     // Effect to handle being removed from the meeting
     useEffect(() => {
-        if (!user || areParticipantsLoading) return;
+        if (!user || areParticipantsLoading || meetingData?.status === 'scheduled') return;
 
         const isCurrentlyInList = participants?.some(p => p.id === user.uid) ?? false;
 
@@ -335,7 +341,7 @@ function RoomPage() {
             });
             router.push('/dashboard');
         }
-    }, [participants, user, router, toast, wasInMeeting, areParticipantsLoading]);
+    }, [participants, user, router, toast, wasInMeeting, areParticipantsLoading, meetingData?.status]);
 
     // Effect for automatic host crowning
     useEffect(() => {
@@ -662,39 +668,51 @@ function RoomPage() {
         const shareText = "Join my ConnectVerse meeting!";
     
         try {
-            // Always try Web Share API first if it exists
             if (navigator.share) {
                 await navigator.share({
                     title: 'ConnectVerse Meeting',
                     text: shareText,
                     url: shareUrl,
                 });
-                toast({ title: 'Link shared!' });
             } else {
-                // If it doesn't exist, throw to go to the catch block for clipboard fallback.
-                throw new Error('Web Share API not supported.');
+                throw new Error('Web Share API not available.');
             }
         } catch (error: any) {
-            // If sharing is cancelled by user, just return.
-            if (error.name === 'AbortError') {
-                console.log('Share action cancelled by user.');
-                return;
-            }
-    
-            // For any other error (NotAllowedError, TypeError, or the one we threw), 
-            // try the clipboard fallback.
-            try {
-                await navigator.clipboard.writeText(shareUrl);
-                toast({ title: 'Link copied to clipboard!' });
-            } catch (copyError) {
-                console.error('Failed to share or copy link:', { shareError: error, copyError: copyError });
-                toast({ 
-                    variant: 'destructive', 
-                    title: 'Failed to share',
-                    description: 'Could not open share dialog or copy link to clipboard.'
-                });
+            if (error.name === 'AbortError' || error.name === 'NotAllowedError') {
+                console.log('Share action was cancelled or denied.');
+                // Fallback to clipboard for desktops or when share is denied
+                try {
+                    await navigator.clipboard.writeText(shareUrl);
+                    toast({ title: 'Link copied to clipboard!' });
+                } catch (copyError) {
+                    console.error('Fallback to clipboard failed:', copyError);
+                    toast({ 
+                        variant: 'destructive', 
+                        title: 'Failed to share',
+                        description: 'Could not open share dialog or copy link to clipboard.'
+                    });
+                }
+            } else {
+                console.error('An unexpected error occurred during share:', error);
+                 try {
+                    await navigator.clipboard.writeText(shareUrl);
+                    toast({ title: 'Link copied to clipboard!' });
+                } catch (copyError) {
+                    console.error('Fallback to clipboard failed after unexpected error:', copyError);
+                    toast({ 
+                        variant: 'destructive', 
+                        title: 'Failed to share',
+                        description: 'An unexpected error occurred.'
+                    });
+                }
             }
         }
+    };
+
+    const startMeeting = () => {
+        if (!isHost || !meetingRef) return;
+        updateDocumentNonBlocking(meetingRef, { status: 'pending' });
+        toast({ title: 'Meeting started!' });
     };
 
   const isLoading = areParticipantsLoading || !meetingData;
@@ -708,6 +726,34 @@ function RoomPage() {
         </div>
       </AuthGuard>
     );
+  }
+
+  if (meetingData?.status === 'scheduled') {
+    return (
+        <AuthGuard>
+            <div className="flex h-screen w-full flex-col items-center justify-center bg-background p-4">
+                <Card className="max-w-md text-center">
+                    <CardHeader>
+                        <CardTitle>{meetingData.name || 'Scheduled Meeting'}</CardTitle>
+                        <CardDescription>This meeting is scheduled to start on</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-2xl font-bold">
+                            {meetingData.scheduledAt ? format(new Date(meetingData.scheduledAt.seconds * 1000), 'PPP p') : '...'}
+                        </p>
+                    </CardContent>
+                    <CardFooter className="flex-col gap-4">
+                        {isHost ? (
+                             <Button onClick={startMeeting}>Start Meeting Now</Button>
+                        ) : (
+                            <p className="text-sm text-muted-foreground">Please wait for the host to start the meeting.</p>
+                        )}
+                        <Button variant="outline" onClick={() => router.push('/dashboard')}>Go to Dashboard</Button>
+                    </CardFooter>
+                </Card>
+            </div>
+      </AuthGuard>
+    )
   }
 
   if (isUserInWaitingRoom) {
@@ -734,7 +780,7 @@ function RoomPage() {
         <div className="flex flex-1 flex-col">
           <header className="flex h-16 items-center justify-between border-b bg-background px-6">
             <div className="flex items-center gap-4">
-                <h1 className="text-xl font-semibold">Meeting Room</h1>
+                <h1 className="text-xl font-semibold">{meetingData?.name || 'Meeting Room'}</h1>
                 {meetingData?.isRecording && (
                     <div className="flex items-center gap-2 text-sm text-red-500">
                         <CircleDot className="h-4 w-4 animate-pulse" />

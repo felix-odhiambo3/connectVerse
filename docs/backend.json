@@ -43,6 +43,10 @@
       "description": "Represents a video meeting session.",
       "type": "object",
       "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name or title of the meeting. Only present for scheduled meetings."
+        },
         "hostId": {
           "type": "string",
           "description": "The UID of the user who created the meeting."
@@ -52,9 +56,15 @@
           "format": "date-time",
           "description": "Timestamp indicating when the meeting was created."
         },
+        "scheduledAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The scheduled start time for the meeting. Only present for scheduled meetings."
+        },
         "status": {
           "type": "string",
           "enum": [
+            "scheduled",
             "pending",
             "active",
             "finished"

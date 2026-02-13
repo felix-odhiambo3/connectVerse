@@ -70,9 +70,23 @@ service cloud.firestore {
     match /meetings/{meetingId} {
       // Any authenticated user can read a meeting document.
       allow get: if isSignedIn();
-      // Any authenticated user can create a meeting.
-      // The hostId must match the creator's UID.
-      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
+      
+      // Allow creation for both instant and scheduled meetings with proper validation.
+      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid && request.resource.data.createdAt == request.time && (
+        // Instant meeting: status='pending'
+        (
+            request.resource.data.status == 'pending' &&
+            !('name' in request.resource.data) &&
+            !('scheduledAt' in request.resource.data)
+        ) ||
+        // Scheduled meeting: status='scheduled'
+        (
+            request.resource.data.status == 'scheduled' &&
+            'name' in request.resource.data && request.resource.data.name is string && request.resource.data.name.size() > 0 &&
+            'scheduledAt' in request.resource.data && request.resource.data.scheduledAt is timestamp && request.resource.data.scheduledAt > request.time
+        )
+      );
+
       // Host can update. If host is gone, a new host can be crowned.
       allow update: if isSignedIn() && (
         (resource.data.hostId == request.auth.uid) ||
