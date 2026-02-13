@@ -29,7 +29,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2 } from 'lucide-react';
 
 
 // Firestore collections
@@ -288,7 +288,7 @@ function RoomPage() {
 
   // Join the room and manage participant list
   useEffect(() => {
-    if (!user || !meetingId || !firestore || !meetingData) return;
+    if (!user || !meetingId || !firestore || !meetingData || wasInMeeting) return;
 
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
 
@@ -310,21 +310,19 @@ function RoomPage() {
                 hasRaisedHand: false,
                 isMuted: false,
             };
-            setDocumentNonBlocking(participantRef, initialData, { merge: false });
+            // Use blocking setDoc here to ensure user is in the list before other effects run
+            await setDoc(participantRef, initialData, { merge: false });
         }
+        setWasInMeeting(true); // Mark that initial setup is done
     };
     setupParticipant();
-  }, [user?.uid, meetingId, firestore, meetingData]);
+  }, [user, meetingId, firestore, meetingData, wasInMeeting]);
 
     // Effect to handle being removed from the meeting
     useEffect(() => {
         if (!user || areParticipantsLoading) return;
 
         const isCurrentlyInList = participants?.some(p => p.id === user.uid) ?? false;
-
-        if (isCurrentlyInList) {
-            setWasInMeeting(true);
-        }
 
         if (wasInMeeting && !isCurrentlyInList) {
             toast({
@@ -655,6 +653,37 @@ function RoomPage() {
         updateDocumentNonBlocking(participantRef, { isMuted: !currentState });
     };
 
+    const handleShare = async () => {
+        const shareUrl = window.location.href;
+        const shareText = "Join my ConnectVerse meeting!";
+    
+        if (navigator.share) {
+          try {
+            await navigator.share({
+              title: 'ConnectVerse Meeting',
+              text: shareText,
+              url: shareUrl,
+            });
+            toast({ title: 'Link shared!' });
+          } catch (error) {
+            console.error('Error sharing:', error);
+            // Don't show an error toast if user cancels the share dialog
+            if ((error as DOMException)?.name !== 'AbortError') {
+                toast({ variant: 'destructive', title: 'Could not share link', description: 'There was an error trying to share the meeting link.' });
+            }
+          }
+        } else {
+          // Fallback for browsers that don't support Web Share API
+          try {
+            await navigator.clipboard.writeText(shareUrl);
+            toast({ title: 'Link copied to clipboard!' });
+          } catch (err) {
+            console.error('Failed to copy: ', err);
+            toast({ variant: 'destructive', title: 'Failed to copy link' });
+          }
+        }
+    };
+
   const isLoading = areParticipantsLoading || !meetingData;
 
   if (isLoading && !isUserInWaitingRoom) {
@@ -700,9 +729,15 @@ function RoomPage() {
                     </div>
                 )}
             </div>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Timer className="h-4 w-4" />
-                <span>{elapsedTime}</span>
+            <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Timer className="h-4 w-4" />
+                    <span>{elapsedTime}</span>
+                </div>
+                <Button variant="outline" size="icon" onClick={handleShare}>
+                    <Share2 className="h-4 w-4" />
+                    <span className="sr-only">Share Meeting</span>
+                </Button>
             </div>
           </header>
           <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
