@@ -288,7 +288,7 @@ function RoomPage() {
 
   // Join the room and manage participant list
   useEffect(() => {
-    if (!user || !meetingId || !firestore || !meetingData || wasInMeeting) return;
+    if (!user || !meetingId || !firestore || !meetingData) return;
 
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
 
@@ -311,12 +311,16 @@ function RoomPage() {
                 isMuted: false,
             };
             // Use blocking setDoc here to ensure user is in the list before other effects run
-            await setDoc(participantRef, initialData, { merge: false });
+            await setDoc(participantRef, initialData);
         }
-        setWasInMeeting(true); // Mark that initial setup is done
     };
-    setupParticipant();
-  }, [user, meetingId, firestore, meetingData, wasInMeeting]);
+
+    if (!wasInMeeting) {
+        setupParticipant();
+        setWasInMeeting(true); // Mark that initial setup is done
+    }
+}, [user, meetingId, firestore, meetingData, wasInMeeting]);
+
 
     // Effect to handle being removed from the meeting
     useEffect(() => {
@@ -666,9 +670,9 @@ function RoomPage() {
             });
             toast({ title: 'Link shared!' });
           } catch (error: any) {
-            // Don't show an error if the user cancelled the share action.
-            if (error.name === 'AbortError') {
-                console.log('Share action cancelled by user.');
+            // Don't show an error if the user cancelled the share action or permission was denied.
+            if (error.name === 'AbortError' || error.name === 'NotAllowedError') {
+                console.log('Share action cancelled or denied by user.');
                 return;
             }
             
