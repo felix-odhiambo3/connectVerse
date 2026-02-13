@@ -661,33 +661,39 @@ function RoomPage() {
         const shareUrl = window.location.href;
         const shareText = "Join my ConnectVerse meeting!";
     
-        if (navigator.share) {
-          try {
-            await navigator.share({
-              title: 'ConnectVerse Meeting',
-              text: shareText,
-              url: shareUrl,
-            });
-            toast({ title: 'Link shared!' });
-          } catch (error: any) {
-            // Don't show an error if the user cancelled the share action or permission was denied.
-            if (error.name === 'AbortError' || error.name === 'NotAllowedError') {
-                console.log('Share action cancelled or denied by user.');
+        try {
+            // Always try Web Share API first if it exists
+            if (navigator.share) {
+                await navigator.share({
+                    title: 'ConnectVerse Meeting',
+                    text: shareText,
+                    url: shareUrl,
+                });
+                toast({ title: 'Link shared!' });
+            } else {
+                // If it doesn't exist, throw to go to the catch block for clipboard fallback.
+                throw new Error('Web Share API not supported.');
+            }
+        } catch (error: any) {
+            // If sharing is cancelled by user, just return.
+            if (error.name === 'AbortError') {
+                console.log('Share action cancelled by user.');
                 return;
             }
-            
-            console.error('Error sharing:', error);
-            toast({ variant: 'destructive', title: 'Could not share link', description: 'There was an error trying to share the meeting link.' });
-          }
-        } else {
-          // Fallback for browsers that don't support Web Share API
-          try {
-            await navigator.clipboard.writeText(shareUrl);
-            toast({ title: 'Link copied to clipboard!' });
-          } catch (err) {
-            console.error('Failed to copy: ', err);
-            toast({ variant: 'destructive', title: 'Failed to copy link' });
-          }
+    
+            // For any other error (NotAllowedError, TypeError, or the one we threw), 
+            // try the clipboard fallback.
+            try {
+                await navigator.clipboard.writeText(shareUrl);
+                toast({ title: 'Link copied to clipboard!' });
+            } catch (copyError) {
+                console.error('Failed to share or copy link:', { shareError: error, copyError: copyError });
+                toast({ 
+                    variant: 'destructive', 
+                    title: 'Failed to share',
+                    description: 'Could not open share dialog or copy link to clipboard.'
+                });
+            }
         }
     };
 
