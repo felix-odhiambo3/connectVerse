@@ -68,8 +68,8 @@ service cloud.firestore {
      * Meeting documents
      */
     match /meetings/{meetingId} {
-      // Any authenticated user can read a meeting document.
-      allow get: if isSignedIn();
+      // Any authenticated user can read a meeting document or list their own meetings.
+      allow get, list: if isSignedIn();
       
       // Allow creation for both instant and scheduled meetings with proper validation.
       allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid && request.resource.data.createdAt == request.time && (
