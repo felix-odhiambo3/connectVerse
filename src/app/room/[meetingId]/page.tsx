@@ -665,12 +665,15 @@ function RoomPage() {
               url: shareUrl,
             });
             toast({ title: 'Link shared!' });
-          } catch (error) {
-            console.error('Error sharing:', error);
-            // Don't show an error toast if user cancels the share dialog
-            if ((error as DOMException)?.name !== 'AbortError') {
-                toast({ variant: 'destructive', title: 'Could not share link', description: 'There was an error trying to share the meeting link.' });
+          } catch (error: any) {
+            // Don't show an error if the user cancelled the share action.
+            if (error.name === 'AbortError') {
+                console.log('Share action cancelled by user.');
+                return;
             }
+            
+            console.error('Error sharing:', error);
+            toast({ variant: 'destructive', title: 'Could not share link', description: 'There was an error trying to share the meeting link.' });
           }
         } else {
           // Fallback for browsers that don't support Web Share API
