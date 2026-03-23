@@ -3,13 +3,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
-import { addDoc, collection, serverTimestamp, query, where, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, query, where, doc, updateDoc } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LogOut, Plus, Video, Calendar as CalendarIcon, Copy, Trash2, ArrowRight, Check } from 'lucide-react';
+import { LogOut, Plus, Video, Calendar as CalendarIcon, Copy, Trash2, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -32,7 +32,7 @@ const scheduleMeetingSchema = z.object({
 
 
 export default function DashboardPage() {
-  const [meetingId, setMeetingId] = useState('');
+  const [meetingIdInput, setMeetingIdInput] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [openScheduleDialog, setOpenScheduleDialog] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -47,10 +47,11 @@ export default function DashboardPage() {
     defaultValues: {
       name: "",
       time: "12:00",
+      date: new Date(), // Set default date to today
     },
   });
 
-  // Set initial date on mount to avoid hydration mismatch while ensuring UX requirements
+  // Ensure current date is correctly set on mount for consistency
   useEffect(() => {
     form.setValue('date', new Date());
   }, [form]);
@@ -67,7 +68,6 @@ export default function DashboardPage() {
 
   const upcomingMeetings = useMemo(() => {
     if (!allUserMeetings) return [];
-    // Client-side filtering
     return allUserMeetings
       .filter(meeting => meeting.status === 'scheduled')
       .sort((a, b) => {
@@ -170,13 +170,21 @@ export default function DashboardPage() {
   }
 
   const joinMeeting = () => {
-    if (meetingId.trim()) {
-      router.push(`/room/${meetingId.trim()}`);
+    let id = meetingIdInput.trim();
+    
+    // If a full URL was pasted, extract the ID
+    if (id.includes('/room/')) {
+        const parts = id.split('/room/');
+        id = parts[parts.length - 1].split('?')[0];
+    }
+
+    if (id) {
+      router.push(`/room/${id}`);
     } else {
         toast({
             variant: 'destructive',
             title: 'Invalid Meeting ID',
-            description: 'Please enter a valid meeting ID.',
+            description: 'Please enter a valid meeting ID or link.',
         });
     }
   };
@@ -345,14 +353,14 @@ export default function DashboardPage() {
                         <Video className="h-5 w-5 text-primary" />
                         Join a meeting
                     </CardTitle>
-                    <CardDescription>Enter a meeting ID to join an existing call.</CardDescription>
+                    <CardDescription>Enter a meeting ID or paste a link to join.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <Input
                       type="text"
-                      placeholder="Meeting ID (e.g., abc-123)"
-                      value={meetingId}
-                      onChange={(e) => setMeetingId(e.target.value)}
+                      placeholder="Meeting ID or Link"
+                      value={meetingIdInput}
+                      onChange={(e) => setMeetingIdInput(e.target.value)}
                       className="w-full h-10"
                     />
                   </CardContent>
@@ -388,7 +396,7 @@ export default function DashboardPage() {
                                     <Button size="sm" onClick={() => startMeeting(meeting.id)} className="flex-1 shadow-sm">
                                         Start <ArrowRight className="ml-2 h-4 w-4" />
                                     </Button>
-                                    <Button size="sm" variant="outline" onClick={() => copyToClipboard(`${window.location.origin}/room/${meeting.id}`)} className="h-9 w-9 p-0 bg-white">
+                                    <Button size="sm" variant="outline" onClick={() => copyToClipboard(`${window.location.origin}/room/${meeting.id}`)} className="h-9 w-9 p-0 bg-white" title="Copy Meeting Link">
                                         <Copy className="h-4 w-4" />
                                     </Button>
                                     <Button size="sm" variant="ghost" onClick={() => deleteMeeting(meeting.id)} className="h-9 w-9 p-0 text-zinc-400 hover:text-destructive hover:bg-destructive/5">

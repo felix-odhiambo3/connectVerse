@@ -13,7 +13,6 @@ import {
   writeBatch,
   query,
   orderBy,
-  deleteDoc,
   getDoc,
   setDoc,
 } from 'firebase/firestore';
@@ -263,7 +262,7 @@ function RoomPage() {
 
   const handleNativeShare = async () => {
     const shareUrl = window.location.href;
-    const shareText = "Join my ConnectVerse meeting!";
+    const shareText = `Join my ConnectVerse meeting!\nMeeting ID: ${meetingId}\nLink: ${shareUrl}`;
     try {
         if (navigator.share) {
             await navigator.share({
@@ -296,7 +295,7 @@ function RoomPage() {
           playedReactionsRef.current[p.id] = p.lastReactionAt.seconds;
           
           setTimeout(() => {
-            setFloatingReactions(prev => setFloatingReactions(current => current.filter(r => r.id !== id)));
+            setFloatingReactions(prev => prev.filter(r => r.id !== id));
           }, 4000);
         }
       }
@@ -901,7 +900,10 @@ function RoomPage() {
         <div className="flex flex-1 flex-col overflow-hidden">
           <header className="flex h-16 items-center justify-between border-b bg-background px-6 shrink-0">
             <div className="flex items-center gap-4">
-                <h1 className="text-xl font-semibold">{meetingData?.name || 'Meeting Room'}</h1>
+                <div className="flex flex-col">
+                    <h1 className="text-xl font-semibold leading-none">{meetingData?.name || 'Meeting Room'}</h1>
+                    <span className="text-[10px] font-mono text-muted-foreground mt-1 uppercase tracking-wider">ID: {meetingId}</span>
+                </div>
                 {meetingData?.isRecording && (
                     <div className="flex items-center gap-2 text-sm text-red-500">
                         <CircleDot className="h-4 w-4 animate-pulse" />
@@ -917,53 +919,56 @@ function RoomPage() {
                 
                 <Dialog open={isShareDialogOpen} onOpenChange={setIsShareDialogOpen}>
                     <DialogTrigger asChild>
-                        <Button variant="outline" size="icon">
+                        <Button variant="outline" size="icon" title="Invite Participants">
                             <Share2 className="h-4 w-4" />
                             <span className="sr-only">Share Meeting</span>
                         </Button>
                     </DialogTrigger>
                     <DialogContent className="sm:max-w-md">
                         <DialogHeader>
-                            <DialogTitle>Share Meeting</DialogTitle>
+                            <DialogTitle>Invite Participants</DialogTitle>
                             <DialogDescription>
-                                Invite others to join this meeting by sharing the link below.
+                                Share this link or the Meeting ID to invite others.
                             </DialogDescription>
                         </DialogHeader>
-                        <div className="flex items-center space-x-2">
-                            <div className="grid flex-1 gap-2">
-                                <Label htmlFor="link" className="sr-only">
-                                    Link
+                        <div className="space-y-4 py-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="link" className="text-xs uppercase tracking-wider text-muted-foreground">
+                                    Meeting Link
                                 </Label>
-                                <Input
-                                    id="link"
-                                    defaultValue={meetingUrl}
-                                    readOnly
-                                    className="h-9"
-                                />
+                                <div className="flex items-center space-x-2">
+                                    <Input
+                                        id="link"
+                                        defaultValue={meetingUrl}
+                                        readOnly
+                                        className="h-10 bg-muted/50"
+                                    />
+                                    <Button size="icon" className="h-10 w-10 shrink-0" onClick={() => copyToClipboard(meetingUrl)}>
+                                        <span className="sr-only">Copy Link</span>
+                                        {linkCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                    </Button>
+                                </div>
                             </div>
-                            <Button size="sm" className="px-3" onClick={() => copyToClipboard(meetingUrl)}>
-                                <span className="sr-only">Copy</span>
-                                {linkCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                            </Button>
-                        </div>
-                        <div className="flex flex-col gap-2 mt-4">
-                            <Label className="text-xs text-muted-foreground">Meeting ID</Label>
-                            <div className="flex items-center justify-between p-2 bg-muted rounded-md border">
-                                <code className="text-sm font-mono">{meetingId}</code>
-                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => copyToClipboard(meetingId)}>
-                                    <Copy className="h-3 w-3" />
-                                </Button>
+                            <div className="space-y-2">
+                                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Meeting ID</Label>
+                                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-md border">
+                                    <code className="text-lg font-mono font-bold tracking-tight">{meetingId}</code>
+                                    <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => copyToClipboard(meetingId)}>
+                                        <Copy className="h-4 w-4" />
+                                        <span className="sr-only">Copy ID</span>
+                                    </Button>
+                                </div>
                             </div>
                         </div>
                         <DialogFooter className="sm:justify-start">
                              <Button
                                 type="button"
                                 variant="secondary"
-                                className="w-full"
+                                className="w-full h-11"
                                 onClick={handleNativeShare}
                              >
                                 <Share2 className="mr-2 h-4 w-4" />
-                                More share options
+                                Send Invite (Email/Chat)
                             </Button>
                         </DialogFooter>
                     </DialogContent>
@@ -1006,7 +1011,7 @@ function RoomPage() {
                     <Alert className="shrink-0">
                         <AlertTitle>Waiting for others</AlertTitle>
                         <AlertDescription>
-                        You are the only one here. The call will start when someone else joins.
+                        You are the only one here. Invite others using the Share button.
                         </AlertDescription>
                     </Alert>
                 )}
@@ -1153,15 +1158,15 @@ function RoomPage() {
             {/* Sidebar with Participants and Chat */}
             <div className="flex flex-col gap-4 min-h-0">
               {isHost && waitingList && waitingList.length > 0 && (
-                <Card className="shrink-0">
+                <Card className="shrink-0 border-primary/20 bg-primary/5">
                     <CardHeader className="py-3">
                         <CardTitle className="text-lg">Waiting Room ({waitingList.length})</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-2 py-0 pb-3 max-h-[150px] overflow-y-auto">
                         {waitingList.map((p) => (
-                            <div key={p.id} className="flex items-center justify-between text-sm">
-                                <span className="truncate mr-2">{p.name}</span>
-                                <Button size="sm" className="h-7 px-2" onClick={() => admitParticipant(p.id)}>Admit</Button>
+                            <div key={p.id} className="flex items-center justify-between text-sm bg-background p-2 rounded-md border shadow-sm">
+                                <span className="truncate mr-2 font-medium">{p.name}</span>
+                                <Button size="sm" className="h-7 px-3" onClick={() => admitParticipant(p.id)}>Admit</Button>
                             </div>
                         ))}
                     </CardContent>
