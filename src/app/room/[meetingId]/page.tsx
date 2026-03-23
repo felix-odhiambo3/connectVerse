@@ -130,17 +130,19 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
-  // Media Initialization with mounting safeguard and initialization lock
+  // Robust Media Initialization to prevent AbortError
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (localStreamRef.current || isInitializingRef.current) return;
     
     isInitializingRef.current = true;
     try {
+      // Step 1: Request Hardware access
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { width: { ideal: 1280 }, height: { ideal: 720 } }, 
         audio: true 
       });
       
+      // Step 2: Ensure we are still in the room
       if (!isMounted) {
         stream.getTracks().forEach(track => track.stop());
         return;
@@ -149,25 +151,24 @@ export default function RoomPage() {
       localStreamRef.current = stream;
       setHasMediaPermission(true);
 
-      // Apply initial states
-      stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
-      stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
+      // Step 3: Initial Track sync happens in a dedicated useEffect below
     } catch (error: any) {
       if (isMounted) {
         console.error('Media initialization error:', error);
         setHasMediaPermission(false);
-        if (error.name !== 'AbortError') {
+        // Silently handle AbortError/NotAllowedError or show alert if it's a real failure
+        if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
           toast({
             variant: 'destructive',
-            title: 'Camera Access Error',
-            description: 'Could not access your camera or microphone. Please check permissions.',
+            title: 'Connection Error',
+            description: 'Could not access your camera or microphone.',
           });
         }
       }
     } finally {
       isInitializingRef.current = false;
     }
-  }, [isAudioMuted, isVideoOff, toast]);
+  }, [toast]);
 
   useEffect(() => {
     let isMounted = true;
@@ -186,7 +187,19 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync video elements with streams
+  // Sync Hardware Tracks with UI Toggles
+  useEffect(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => {
+        if (track.enabled !== !isAudioMuted) track.enabled = !isAudioMuted;
+      });
+      localStreamRef.current.getVideoTracks().forEach(track => {
+        if (track.enabled !== !isVideoOff) track.enabled = !isVideoOff;
+      });
+    }
+  }, [isAudioMuted, isVideoOff]);
+
+  // Sync Video Elements with streams
   useEffect(() => {
     const mainVideo = mainVideoRef.current;
     const miniVideo = miniVideoRef.current;
@@ -205,12 +218,7 @@ export default function RoomPage() {
         miniVideo.srcObject = localStreamRef.current;
       }
     }
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
-      localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
-    }
-  }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission]);
+  }, [isScreenSharing, hasMediaPermission]);
 
   // Handle Host Screen Share Priority
   useEffect(() => {
@@ -218,7 +226,6 @@ export default function RoomPage() {
     const currentSharer = meetingData.screenSharerId;
 
     if (isScreenSharing && currentSharer && currentSharer !== user.uid) {
-      // Someone else (likely host) took over
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
@@ -226,7 +233,7 @@ export default function RoomPage() {
       setIsScreenSharing(false);
       toast({
         title: "Screen Share Stopped",
-        description: "The host or another user has started sharing their screen.",
+        description: "The host has started sharing their screen.",
       });
     }
   }, [meetingData?.screenSharerId, user?.uid, isScreenSharing, toast]);
@@ -328,7 +335,7 @@ export default function RoomPage() {
       if (meetingData?.screenSharerId && !isHost) {
         toast({
           variant: "destructive",
-          title: "Access Denied",
+          title: "Broadcast Occupied",
           description: "Someone is already sharing. Only the host can override a broadcast.",
         });
         return;
@@ -441,7 +448,7 @@ export default function RoomPage() {
               <BookOpen className="h-8 w-8 text-primary" />
             </div>
             <CardTitle className="text-3xl">Attendance Summary</CardTitle>
-            <CardDescription>Recurring Series: {meetingData?.name}</CardDescription>
+            <CardDescription>Series: {meetingData?.name}</CardDescription>
           </CardHeader>
           <CardContent className="pt-8 space-y-8">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -465,8 +472,8 @@ export default function RoomPage() {
             )}>
               {isPresentOverall ? <Trophy className="h-12 w-12" /> : <Frown className="h-12 w-12" />}
               <div>
-                <h3 className="text-2xl font-bold">Overall Status: {isPresentOverall ? 'PRESENT' : 'ABSENT'}</h3>
-                <p className="text-sm opacity-80 mt-1">Based on cumulative attendance requirement of 70%.</p>
+                <h3 className="text-2xl font-bold">Status: {isPresentOverall ? 'PRESENT' : 'ABSENT'}</h3>
+                <p className="text-sm opacity-80 mt-1">Based on cumulative 70% participation requirement.</p>
               </div>
             </div>
           </CardContent>
@@ -491,7 +498,7 @@ export default function RoomPage() {
               <h1 className="text-sm font-bold truncate max-w-[200px]">{meetingData?.name || 'Loading...'}</h1>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="text-[10px] py-0">{meetingId}</Badge>
-                {meetingData?.seriesId && <Badge className="text-[10px] py-0 bg-blue-100 text-blue-700 border-none">Recurring</Badge>}
+                {meetingData?.seriesId && <Badge className="text-[10px] py-0 bg-blue-100 text-blue-700 border-none">Series</Badge>}
               </div>
             </div>
           </div>
@@ -536,12 +543,12 @@ export default function RoomPage() {
               
               <div className="absolute top-6 left-6 flex items-center gap-2">
                 <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-md border-none px-3 py-1">
-                  {isScreenSharing ? `Broadcasting: ${currentUserParticipant?.name}` : `${currentUserParticipant?.name} (You)`}
+                  {isScreenSharing ? `Broadcast: ${meetingData?.screenSharerId === user?.uid ? 'You' : 'Host'}` : `${currentUserParticipant?.name} (You)`}
                 </Badge>
               </div>
 
-              {/* Mini Preview for Camera */}
-              <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-800 rounded-2xl border-2 border-zinc-700 shadow-2xl overflow-hidden group">
+              {/* Mini Preview for Camera - ALWAYS stays in corner if video is on */}
+              <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-800 rounded-2xl border-2 border-zinc-700 shadow-2xl overflow-hidden group z-20">
                  <div className="w-full h-full flex items-center justify-center relative">
                     <video 
                       ref={miniVideoRef} 
@@ -564,17 +571,16 @@ export default function RoomPage() {
               )}
 
               {hasMediaPermission === false && (
-                <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-20 px-6">
+                <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-30 px-6">
                   <div className="max-w-md w-full">
                     <Alert variant="destructive" className="bg-zinc-900 border-destructive mb-4">
-                      <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Hardware Access Required</AlertTitle>
+                      <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Hardware Access Error</AlertTitle>
                       <AlertDescription>
-                        Please allow camera and microphone access to continue. 
-                        Check your browser settings and retry.
+                        Could not start video/audio feed. Please ensure no other apps are using your camera and that you've granted permissions.
                       </AlertDescription>
                     </Alert>
                     <Button variant="secondary" className="w-full h-12 rounded-xl" onClick={() => window.location.reload()}>
-                      <RefreshCcw className="mr-2 h-4 w-4" /> Retry Connection
+                      <RefreshCcw className="mr-2 h-4 w-4" /> Retry Hardware Link
                     </Button>
                   </div>
                 </div>
@@ -582,105 +588,40 @@ export default function RoomPage() {
             </div>
 
             <div className="h-20 bg-card rounded-3xl border shadow-lg flex items-center justify-center px-6 gap-2 sm:gap-4 shrink-0">
-               <Button 
-                 variant={isAudioMuted ? "destructive" : "secondary"} 
-                 size="icon" 
-                 onClick={toggleMic} 
-                 className="rounded-full h-12 w-12"
-               >
-                 {isAudioMuted ? <MicOff /> : <Mic />}
-               </Button>
-               <Button 
-                 variant={isVideoOff ? "destructive" : "secondary"} 
-                 size="icon" 
-                 onClick={toggleVideo} 
-                 className="rounded-full h-12 w-12"
-               >
-                 {isVideoOff ? <VideoOff /> : <VideoIcon />}
-               </Button>
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={toggleMic} className="rounded-full h-12 w-12"><MicOff className={cn(!isAudioMuted && "hidden")} /><Mic className={cn(isAudioMuted && "hidden")} /></Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={toggleVideo} className="rounded-full h-12 w-12"><VideoOff className={cn(!isVideoOff && "hidden")} /><VideoIcon className={cn(isVideoOff && "hidden")} /></Button>
                <Separator orientation="vertical" className="h-8 mx-2" />
-               <Button 
-                 variant={isScreenSharing ? "default" : "secondary"} 
-                 size="icon" 
-                 onClick={toggleScreenShare} 
-                 className={cn("rounded-full h-12 w-12", isScreenSharing && "bg-blue-600 text-white hover:bg-blue-700")}
-               >
-                 {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
-               </Button>
-               <Button 
-                 variant={hasHandRaised ? "default" : "secondary"} 
-                 size="icon" 
-                 onClick={toggleHand} 
-                 className={cn("rounded-full h-12 w-12", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}
-               >
-                 <Hand />
-               </Button>
+               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={toggleScreenShare} className={cn("rounded-full h-12 w-12", isScreenSharing && "bg-blue-600 text-white hover:bg-blue-700")}><ScreenShareOff className={cn(!isScreenSharing && "hidden")} /><ScreenShare className={cn(isScreenSharing && "hidden")} /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={toggleHand} className={cn("rounded-full h-12 w-12", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="secondary" size="icon" className="rounded-full h-12 w-12">
-                      <Smile />
-                    </Button>
-                  </PopoverTrigger>
+                  <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12"><Smile /></Button></PopoverTrigger>
                   <PopoverContent className="w-auto p-2 grid grid-cols-4 gap-2">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
-                       <Button key={emoji} variant="ghost" className="h-10 w-10 p-0 text-xl" onClick={() => {
-                          if (firestore && user && meetingId) {
-                            updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { lastReaction: emoji });
-                          }
-                       }}>{emoji}</Button>
+                       <Button key={emoji} variant="ghost" className="h-10 w-10 p-0 text-xl" onClick={() => { if (firestore && user && meetingId) updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { lastReaction: emoji }); }}>{emoji}</Button>
                      ))}
                   </PopoverContent>
                </Popover>
                <Separator orientation="vertical" className="h-8 mx-2" />
                <Dialog>
-                 <DialogTrigger asChild>
-                    <Button variant="secondary" size="icon" className="rounded-full h-12 w-12">
-                      <BarChart3 />
-                    </Button>
-                 </DialogTrigger>
+                 <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12"><BarChart3 /></Button></DialogTrigger>
                  <DialogContent className="max-w-3xl">
-                    <DialogHeader>
-                      <DialogTitle>Participation Monitor</DialogTitle>
-                      <DialogDescription>Track real-time engagement and cumulative progress.</DialogDescription>
-                    </DialogHeader>
+                    <DialogHeader><DialogTitle>Session Participation</DialogTitle><DialogDescription>Real-time eligibility tracking.</DialogDescription></DialogHeader>
                     <div className="py-4">
                        <Table>
-                          <TableHeader>
-                             <TableRow>
-                                <TableHead>Student</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Join Time</TableHead>
-                                <TableHead className="text-right">Active Time</TableHead>
-                                <TableHead className="text-right">Eligibility</TableHead>
-                             </TableRow>
-                          </TableHeader>
+                          <TableHeader><TableRow><TableHead>Student</TableHead><TableHead>Status</TableHead><TableHead>Join Time</TableHead><TableHead className="text-right">Active Time</TableHead><TableHead className="text-right">Credit Status</TableHead></TableRow></TableHeader>
                           <TableBody>
                              {participants?.filter(p => p.role !== 'left').map(p => {
-                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
-                               const meetingStartTime = meetingData?.createdAt?.seconds || currentTime;
-                               const maxPossibleDuration = currentTime - meetingStartTime;
-                               const cappedDuration = Math.max(0, Math.min(durationSeconds, maxPossibleDuration));
-                               
-                               const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
-                               const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
-                               
-                               const meetingDuration = maxPossibleDuration || 1;
-                               const ratio = cappedDuration / meetingDuration;
-
+                               const dur = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
+                               const maxDur = currentTime - (meetingData?.createdAt?.seconds || currentTime);
+                               const capped = Math.max(0, Math.min(dur, maxDur));
+                               const ratio = capped / (maxDur || 1);
                                return (
                                  <TableRow key={p.id}>
-                                    <TableCell className="font-medium flex items-center gap-2">
-                                       {p.name} {p.id === user?.uid && "(You)"}
-                                       {isLate && <Badge variant="destructive" className="text-[8px] h-4 py-0">Late</Badge>}
-                                    </TableCell>
+                                    <TableCell className="font-medium flex items-center gap-2">{p.name} {p.id === user?.uid && "(You)"}</TableCell>
                                     <TableCell className="capitalize">{p.role}</TableCell>
-                                    <TableCell className="text-muted-foreground">{format(joinDate, 'p')}</TableCell>
-                                    <TableCell className="text-right font-mono">{formatDuration(cappedDuration)}</TableCell>
-                                    <TableCell className="text-right">
-                                       <Badge variant={ratio >= 0.7 ? "default" : "secondary"}>
-                                          {ratio >= 0.7 ? 'Qualified' : 'Ineligible'}
-                                       </Badge>
-                                    </TableCell>
+                                    <TableCell className="text-muted-foreground">{p.joinedAt ? format(new Date(p.joinedAt.seconds * 1000), 'p') : '--'}</TableCell>
+                                    <TableCell className="text-right font-mono">{formatDuration(capped)}</TableCell>
+                                    <TableCell className="text-right"><Badge variant={ratio >= 0.7 ? "default" : "secondary"}>{ratio >= 0.7 ? 'Qualified' : 'Ineligible'}</Badge></TableCell>
                                  </TableRow>
                                );
                              })}
@@ -696,12 +637,8 @@ export default function RoomPage() {
              <Tabs defaultValue="participants" className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-4 pt-4 border-b">
                    <TabsList className="w-full h-12 grid grid-cols-2 rounded-2xl">
-                      <TabsTrigger value="participants" className="rounded-xl flex items-center gap-2">
-                        <Users className="h-4 w-4" /> Students
-                      </TabsTrigger>
-                      <TabsTrigger value="chat" className="rounded-xl flex items-center gap-2">
-                        <MessageSquare className="h-4 w-4" /> Chat
-                      </TabsTrigger>
+                      <TabsTrigger value="participants" className="rounded-xl flex items-center gap-2"><Users className="h-4 w-4" /> Students</TabsTrigger>
+                      <TabsTrigger value="chat" className="rounded-xl flex items-center gap-2"><MessageSquare className="h-4 w-4" /> Chat</TabsTrigger>
                    </TabsList>
                 </div>
 
@@ -710,8 +647,6 @@ export default function RoomPage() {
                       <div className="space-y-4">
                         {participants?.map(p => {
                           const isOnline = p.role !== 'left';
-                          const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
-                          
                           return (
                             <div key={p.id} className={cn("flex items-center gap-3 group", !isOnline && "opacity-50")}>
                                <div className="relative">
@@ -724,22 +659,16 @@ export default function RoomPage() {
                                   <div className="flex items-center gap-1.5 overflow-hidden">
                                      <p className="text-xs font-bold truncate">{p.name}</p>
                                      {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
-                                     {isLate && <Badge variant="destructive" className="text-[8px] h-3 px-1 py-0 shrink-0">Late</Badge>}
                                   </div>
                                   <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
                                      {!isOnline ? <Badge variant="outline" className="text-[8px] h-3 px-1 py-0">Left</Badge> : (
-                                       <>
+                                       <div className="flex items-center gap-2">
                                          {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
                                          {p.isVideoOff ? <VideoOff className="h-3 w-3 text-zinc-400" /> : <VideoIcon className="h-3 w-3 text-primary" />}
-                                       </>
+                                       </div>
                                      )}
                                   </div>
                                </div>
-                               {isHost && p.id !== user?.uid && (
-                                 <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
-                                   <MoreVertical className="h-4 w-4" />
-                                 </Button>
-                               )}
                             </div>
                           );
                         })}
@@ -760,7 +689,7 @@ export default function RoomPage() {
                             />
                          </div>
                          <p className="text-[10px] text-center text-muted-foreground leading-relaxed px-2">
-                            Need 70% active participation in <b>Session {meetingData?.sessionIndex || 1}</b> to earn credit.
+                            Need 70% participation in <b>Session {meetingData?.sessionIndex || 1}</b> for credit.
                          </p>
                       </div>
                    </div>
@@ -772,33 +701,15 @@ export default function RoomPage() {
                          {chatMessages?.map((msg) => (
                            <div key={msg.id} className={cn("flex flex-col gap-1", msg.senderId === user?.uid ? "items-end" : "items-start")}>
                               <p className="text-[10px] font-bold text-muted-foreground px-1">{msg.senderName}</p>
-                              <div className={cn(
-                                "max-w-[90%] px-3 py-2 rounded-2xl text-xs",
-                                msg.senderId === user?.uid ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-muted rounded-tl-none"
-                              )}>
-                                 {msg.text}
-                              </div>
+                              <div className={cn("max-w-[90%] px-3 py-2 rounded-2xl text-xs", msg.senderId === user?.uid ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-muted rounded-tl-none")}>{msg.text}</div>
                            </div>
                          ))}
                       </div>
                    </ScrollArea>
                    <div className="p-4 border-t bg-card">
                       <div className="relative flex items-center">
-                        <Input 
-                          placeholder="Type message..." 
-                          value={chatInput} 
-                          onChange={(e) => setChatInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                          className="pr-10 rounded-xl h-11"
-                        />
-                        <Button 
-                          size="icon" 
-                          variant="ghost" 
-                          onClick={handleSendMessage} 
-                          className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 text-primary"
-                        >
-                          <Send className="h-4 w-4" />
-                        </Button>
+                        <Input placeholder="Type message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="pr-10 rounded-xl h-11" />
+                        <Button size="icon" variant="ghost" onClick={handleSendMessage} className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 text-primary"><Send className="h-4 w-4" /></Button>
                       </div>
                    </div>
                 </TabsContent>
