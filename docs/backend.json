@@ -46,7 +46,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "description": "The name or title of the meeting. Only present for scheduled meetings."
+          "description": "The name or title of the meeting."
         },
         "hostId": {
           "type": "string",
@@ -60,7 +60,12 @@
         "scheduledAt": {
           "type": "string",
           "format": "date-time",
-          "description": "The scheduled start time for the meeting. Only present for scheduled meetings."
+          "description": "The scheduled start time for the meeting."
+        },
+        "endedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp indicating when the meeting was ended."
         },
         "status": {
           "type": "string",
@@ -72,45 +77,38 @@
           ],
           "description": "The current status of the meeting."
         },
+        "seriesId": {
+          "type": "string",
+          "description": "ID of the recurring series this meeting belongs to."
+        },
+        "fixedDurationHours": {
+          "type": "number",
+          "description": "Fixed duration in hours for this session."
+        },
+        "sessionIndex": {
+          "type": "integer",
+          "description": "The index of this session in a series (e.g., Session 1 of 10)."
+        },
+        "totalSessionsInSeries": {
+          "type": "integer",
+          "description": "Total number of sessions expected in this series."
+        },
         "isLocked": {
           "type": "boolean",
-          "description": "Indicates if the meeting is locked. If true, new users are placed in the waiting room."
+          "description": "Indicates if the meeting is locked."
         },
         "isRecording": {
           "type": "boolean",
           "description": "Indicates if the meeting is currently being recorded."
         },
-        "geminiNotesEnabled": {
-          "type": "boolean",
-          "description": "If true, the Gemini Notes feature is available in the meeting."
-        },
         "participantPermissions": {
           "type": "object",
-          "description": "Defines permissions for participants, controlled by the host.",
           "properties": {
-            "allowShareScreen": {
-              "type": "boolean",
-              "description": "If true, participants can share their screen."
-            },
-            "allowSendReactions": {
-              "type": "boolean",
-              "description": "If true, participants can send reactions like raising their hand."
-            },
-            "allowUnmute": {
-              "type": "boolean",
-              "description": "If true, participants can unmute their own microphone."
-            },
-            "allowStartVideo": {
-              "type": "boolean",
-              "description": "If true, participants can turn on their own video."
-            }
-          },
-          "required": [
-            "allowShareScreen",
-            "allowSendReactions",
-            "allowUnmute",
-            "allowStartVideo"
-          ]
+            "allowShareScreen": { "type": "boolean" },
+            "allowSendReactions": { "type": "boolean" },
+            "allowUnmute": { "type": "boolean" },
+            "allowStartVideo": { "type": "boolean" }
+          }
         }
       },
       "required": [
@@ -119,87 +117,22 @@
         "status"
       ]
     },
-    "Participant": {
-      "title": "Participant",
-      "description": "Represents a participant in a meeting.",
+    "SeriesAttendance": {
+      "title": "SeriesAttendance",
+      "description": "Tracks a user's cumulative attendance in a specific recurring series.",
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string",
-          "description": "The display name of the participant."
+        "userId": { "type": "string" },
+        "seriesId": { "type": "string" },
+        "attendedHours": { "type": "number" },
+        "sessionsAttended": { "type": "integer" },
+        "completedSessionIds": {
+          "type": "array",
+          "items": { "type": "string" }
         },
-        "joinedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Timestamp indicating when the participant first joined."
-        },
-        "activeSegmentStart": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Timestamp indicating the start of the current active session segment."
-        },
-        "totalDuration": {
-          "type": "integer",
-          "description": "Cumulative duration in seconds spent in the meeting across all segments."
-        },
-        "role": {
-          "type": "string",
-          "enum": ["host", "participant", "waiting", "left"],
-          "description": "The role of the user. 'left' means they are currently inactive but their session data is preserved."
-        },
-        "hasRaisedHand": {
-          "type": "boolean",
-          "description": "Indicates if the participant has raised their hand."
-        },
-        "isMuted": {
-          "type": "boolean",
-          "description": "Indicates if the participant has been muted by the host."
-        },
-        "lastReaction": {
-          "type": "string",
-          "description": "The last emoji reaction sent by the participant."
-        },
-        "lastReactionAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Timestamp of the last reaction sent."
-        }
+        "lastUpdated": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "name",
-        "joinedAt",
-        "role"
-      ]
-    },
-    "ChatMessage": {
-      "title": "ChatMessage",
-      "description": "Represents a single chat message within a meeting.",
-      "type": "object",
-      "properties": {
-        "senderId": {
-          "type": "string",
-          "description": "The UID of the user who sent the message."
-        },
-        "senderName": {
-          "type": "string",
-          "description": "The display name of the sender."
-        },
-        "text": {
-          "type": "string",
-          "description": "The content of the chat message."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Timestamp indicating when the message was sent."
-        }
-      },
-      "required": [
-        "senderId",
-        "senderName",
-        "text",
-        "createdAt"
-      ]
+      "required": ["userId", "seriesId", "attendedHours", "sessionsAttended"]
     }
   },
   "auth": {
@@ -214,40 +147,24 @@
         "path": "/users/{userId}",
         "definition": {
           "entityName": "User",
-          "schema": {
-            "$ref": "#/backend/entities/User"
-          },
-          "description": "User profile document storing public information. The document ID (`userId`) MUST correspond to the Firebase Authentication UID."
+          "schema": { "$ref": "#/backend/entities/User" },
+          "description": "User profile document."
         }
       },
       {
         "path": "/meetings/{meetingId}",
         "definition": {
           "entityName": "Meeting",
-          "schema": {
-            "$ref": "#/backend/entities/Meeting"
-          },
-          "description": "Stores information about a video meeting session."
+          "schema": { "$ref": "#/backend/entities/Meeting" },
+          "description": "Meeting session document."
         }
       },
       {
-        "path": "/meetings/{meetingId}/participants/{participantId}",
+        "path": "/seriesAttendance/{seriesId}/users/{userId}",
         "definition": {
-          "entityName": "Participant",
-          "schema": {
-            "$ref": "#/backend/entities/Participant"
-          },
-          "description": "A sub-collection representing participants in a meeting. The participantId should be the user's UID."
-        }
-      },
-      {
-        "path": "/meetings/{meetingId}/chat/{chatMessageId}",
-        "definition": {
-          "entityName": "ChatMessage",
-          "schema": {
-            "$ref": "#/backend/entities/ChatMessage"
-          },
-          "description": "A sub-collection representing the chat history for a meeting."
+          "entityName": "SeriesAttendance",
+          "schema": { "$ref": "#/backend/entities/SeriesAttendance" },
+          "description": "Cumulative attendance record for a user in a series."
         }
       }
     ]

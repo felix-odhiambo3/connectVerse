@@ -1,135 +1,50 @@
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ----------------------------------------------------------------------
-    // Helper Functions
-    // ----------------------------------------------------------------------
-
-    /**
-     * Checks if a user is authenticated.
-     */
     function isSignedIn() {
       return request.auth != null;
     }
 
-    /**
-     * Checks if the currently authenticated user's UID matches the requested document's userId.
-     */
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    /**
-     * Checks for ownership on an existing document. Used for update and delete operations.
-     */
-    function isExistingOwner(userId) {
-      return isOwner(userId) && resource != null;
-    }
-
-    /**
-     * Validates required relational fields on user document creation.
-     * Ensures the internal `id` field is consistent with the document's path ID (`userId`).
-     * This is critical for maintaining relational integrity.
-     */
-    function isNewUserDocumentValid(userId) {
-      let data = request.resource.data;
-      return data.id == userId &&
-             data.username is string && data.username.size() > 0 &&
-             data.email == request.auth.email;
-    }
-
-    /**
-     * Validates user document on update.
-     * Enforces immutability of the critical `id` and `email` fields.
-     */
-    function isUpdatedUserDocumentValid() {
-      let data = request.resource.data;
-      return data.id == resource.data.id &&
-             data.email == resource.data.email;
-    }
-    
-    // ----------------------------------------------------------------------
-    // Collection Rules
-    // ----------------------------------------------------------------------
-
-    /**
-     * User profiles
-     */
     match /users/{userId} {
       allow get: if isSignedIn();
       allow list: if false;
-      allow create: if isOwner(userId) && isNewUserDocumentValid(userId);
-      allow update: if isOwner(userId) && isUpdatedUserDocumentValid();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId);
       allow delete: if isOwner(userId);
     }
 
-    /**
-     * Meeting documents
-     */
     match /meetings/{meetingId} {
-      // Any authenticated user can get a single meeting to join it.
       allow get: if isSignedIn();
-      // A user can only list the meetings they are the host of.
-      // This requires the client query to include `where('hostId', '==', request.auth.uid)`.
-      allow list: if request.auth.uid == resource.data.hostId;
-
-      // Allow creation for both instant and scheduled meetings with proper validation.
-      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid && request.resource.data.createdAt == request.time && (
-        // Instant meeting: status='pending'
-        (
-            request.resource.data.status == 'pending' &&
-            !('name' in request.resource.data) &&
-            !('scheduledAt' in request.resource.data)
-        ) ||
-        // Scheduled meeting: status='scheduled'
-        (
-            request.resource.data.status == 'scheduled' &&
-            'name' in request.resource.data && request.resource.data.name is string && request.resource.data.name.size() > 0 &&
-            'scheduledAt' in request.resource.data && request.resource.data.scheduledAt is timestamp && request.resource.data.scheduledAt > request.time
-        )
-      );
-
-      // Host can update. If host is gone, a new host can be crowned.
-      allow update: if isSignedIn() && (
-        (resource.data.hostId == request.auth.uid) ||
-        (!exists(/databases/$(database)/documents/meetings/$(meetingId)/participants/$(resource.data.hostId)))
-      );
-      // Only the host can delete the meeting document itself.
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
       allow delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
 
-      /**
-       * Participant sub-collection
-       */
       match /participants/{participantId} {
-        // Any authenticated user can read the list of participants.
-        allow get, list: if isSignedIn();
-        // A user can only add themselves as a participant.
-        allow create: if isOwner(participantId);
-        // A user can update their own document, or the host can update any document.
-        allow update: if isOwner(participantId) || request.auth.uid == get(/databases/$(database)/documents/meetings/$(meetingId)).data.hostId;
-        // A user can only remove themselves, or the host can remove anyone.
-        allow delete: if isOwner(participantId) || request.auth.uid == get(/databases/$(database)/documents/meetings/$(meetingId)).data.hostId;
-      }
-      
-      /**
-       * Chat Message sub-collection
-       */
-      match /chat/{chatMessageId} {
-        // Any authenticated user can read chat messages.
         allow read: if isSignedIn();
-        // A user can only create messages as themselves.
-        allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
-        // Messages are immutable.
-        allow update, delete: if false;
+        allow write: if isSignedIn();
       }
       
-      /**
-       * WebRTC Signaling sub-collection
-       */
+      match /chat/{chatMessageId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn();
+      }
+      
       match /webrtc/{channel}/{docId=**} {
         allow read, write: if isSignedIn();
       }
+    }
+
+    match /seriesAttendance/{seriesId}/users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn(); // Host needs to list to see reports
+      allow write: if isSignedIn(); // Simplified for MVP updates from client
     }
   }
 }
