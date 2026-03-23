@@ -131,12 +131,21 @@
         "joinedAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Timestamp indicating when the participant joined."
+          "description": "Timestamp indicating when the participant first joined."
+        },
+        "activeSegmentStart": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp indicating the start of the current active session segment."
+        },
+        "totalDuration": {
+          "type": "integer",
+          "description": "Cumulative duration in seconds spent in the meeting across all segments."
         },
         "role": {
           "type": "string",
-          "enum": ["host", "participant", "waiting"],
-          "description": "The role of the user in the meeting. 'waiting' means they are in the waiting room."
+          "enum": ["host", "participant", "waiting", "left"],
+          "description": "The role of the user. 'left' means they are currently inactive but their session data is preserved."
         },
         "hasRaisedHand": {
           "type": "boolean",

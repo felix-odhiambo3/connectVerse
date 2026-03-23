@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -15,6 +16,8 @@ import {
   orderBy,
   getDoc,
   setDoc,
+  updateDoc,
+  increment,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -24,7 +27,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock } from 'lucide-react';
@@ -52,30 +55,34 @@ function AudioVisualizer({ stream, isMuted }: { stream: MediaStream | null; isMu
       return;
     }
 
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    audioContextRef.current = audioContext;
-    const analyser = audioContext.createAnalyser();
-    analyserRef.current = analyser;
-    analyser.fftSize = 32;
-    const source = audioContext.createMediaStreamSource(stream);
-    source.connect(analyser);
+    try {
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        audioContextRef.current = audioContext;
+        const analyser = audioContext.createAnalyser();
+        analyserRef.current = analyser;
+        analyser.fftSize = 32;
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
 
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    
-    const update = () => {
-      if (!analyserRef.current) return;
-      analyserRef.current.getByteFrequencyData(dataArray);
-      const newFrequencies = [
-        dataArray[1],
-        dataArray[3],
-        dataArray[5],
-        dataArray[7],
-      ].map(v => (v / 255) * 100);
-      setFrequencies(newFrequencies);
-      animationRef.current = requestAnimationFrame(update);
-    };
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        const update = () => {
+          if (!analyserRef.current) return;
+          analyserRef.current.getByteFrequencyData(dataArray);
+          const newFrequencies = [
+            dataArray[1],
+            dataArray[3],
+            dataArray[5],
+            dataArray[7],
+          ].map(v => (v / 255) * 100);
+          setFrequencies(newFrequencies);
+          animationRef.current = requestAnimationFrame(update);
+        };
 
-    update();
+        update();
+    } catch (e) {
+        console.warn("Audio Context creation failed (user interaction might be required)");
+    }
 
     return () => {
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
@@ -120,7 +127,9 @@ interface Participant {
   id: string;
   name: string;
   joinedAt: { seconds: number };
-  role: 'host' | 'participant' | 'waiting';
+  activeSegmentStart?: { seconds: number } | null;
+  totalDuration?: number;
+  role: 'host' | 'participant' | 'waiting' | 'left';
   hasRaisedHand?: boolean;
   isMuted?: boolean;
   lastReaction?: string;
@@ -148,6 +157,19 @@ function formatDuration(seconds: number) {
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+}
+
+/**
+ * Calculates the total cumulative duration for a participant.
+ * Sums the stored totalDuration with the time elapsed in the current active segment.
+ */
+function calculateParticipantDuration(p: Participant, currentTime: number) {
+    let total = p.totalDuration || 0;
+    if (p.activeSegmentStart) {
+        const segmentDuration = Math.max(0, Math.floor(currentTime / 1000) - p.activeSegmentStart.seconds);
+        total += segmentDuration;
+    }
+    return total;
 }
 
 function RoomPage() {
@@ -298,6 +320,27 @@ function RoomPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // Periodic Checkpoint: Every 30 seconds, save current segment to totalDuration
+  // This ensures fairness if network issues occur or browser is closed.
+  useEffect(() => {
+    if (!user || !firestore || !meetingId || !currentUserParticipant?.activeSegmentStart || meetingData?.status === 'finished') return;
+
+    const interval = setInterval(() => {
+        const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
+        const nowInSeconds = Math.floor(Date.now() / 1000);
+        const segmentSeconds = nowInSeconds - currentUserParticipant.activeSegmentStart!.seconds;
+
+        if (segmentSeconds > 0) {
+            updateDoc(participantRef, {
+                totalDuration: increment(segmentSeconds),
+                activeSegmentStart: serverTimestamp() // Reset the segment start to now
+            });
+        }
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [user, firestore, meetingId, currentUserParticipant?.activeSegmentStart, meetingData?.status]);
+
   // Watch for new reactions to trigger floating animation
   useEffect(() => {
     if (!participants) return;
@@ -438,7 +481,19 @@ function RoomPage() {
     const setupParticipant = async () => {
         const docSnap = await getDoc(participantRef);
         
-        if (!docSnap.exists()) {
+        if (docSnap.exists()) {
+            // Rejoining user: Restore role if necessary and start new active segment
+            const data = docSnap.data();
+            let newRole = data.role;
+            if (newRole === 'left') {
+                newRole = meetingData.isLocked ? 'waiting' : 'participant';
+            }
+            updateDoc(participantRef, {
+                activeSegmentStart: serverTimestamp(),
+                role: newRole
+            });
+        } else {
+            // New participant
             let role: 'host' | 'participant' | 'waiting';
             if (user.uid === meetingData.hostId) {
                 role = 'host';
@@ -449,6 +504,8 @@ function RoomPage() {
             const initialData = {
                 name: user.displayName || user.email,
                 joinedAt: serverTimestamp(),
+                activeSegmentStart: serverTimestamp(),
+                totalDuration: 0,
                 role: role,
                 hasRaisedHand: false,
                 isMuted: false,
@@ -749,10 +806,18 @@ function RoomPage() {
     }
   };
 
-  const leaveMeeting = () => {
-    if (user && meetingId && firestore) {
+  const leaveMeeting = async () => {
+    if (user && meetingId && firestore && currentUserParticipant && currentUserParticipant.activeSegmentStart) {
       const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
-      deleteDocumentNonBlocking(participantRef);
+      const nowInSeconds = Math.floor(Date.now() / 1000);
+      const segmentSeconds = nowInSeconds - currentUserParticipant.activeSegmentStart.seconds;
+      
+      // Update the total duration before leaving and mark as 'left' (inactive but record preserved)
+      updateDocumentNonBlocking(participantRef, { 
+          totalDuration: increment(Math.max(0, segmentSeconds)),
+          activeSegmentStart: null,
+          role: 'left'
+      });
     }
     router.push('/dashboard');
   };
@@ -807,7 +872,8 @@ function RoomPage() {
     const removeParticipant = (participantId: string) => {
         if (!isHost || !firestore || !meetingId) return;
         const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, participantId);
-        deleteDocumentNonBlocking(participantRef);
+        // We actually delete the record if the host kicks them
+        updateDocumentNonBlocking(participantRef, { role: 'left', activeSegmentStart: null });
         toast({ title: "Participant removed." });
     };
 
@@ -1004,7 +1070,7 @@ function RoomPage() {
                             <DialogHeader>
                                 <DialogTitle>Session Participation Monitor</DialogTitle>
                                 <DialogDescription>
-                                    Review engagement and participation time for all students.
+                                    Review total cumulative participation time for all students.
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="py-4">
@@ -1012,17 +1078,20 @@ function RoomPage() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Student Name</TableHead>
-                                            <TableHead>Joined At</TableHead>
-                                            <TableHead className="text-right">Total Duration</TableHead>
+                                            <TableHead>First Joined</TableHead>
+                                            <TableHead className="text-right">Cumulative Duration</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {activeParticipants?.map((p) => {
+                                        {participants?.map((p) => {
                                             const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
-                                            const durationSeconds = (currentTime - joinDate.getTime()) / 1000;
+                                            const durationSeconds = calculateParticipantDuration(p as Participant, currentTime);
                                             return (
                                                 <TableRow key={p.id}>
-                                                    <TableCell className="font-medium">{p.name} {p.id === user?.uid && "(You)"}</TableCell>
+                                                    <TableCell className="font-medium flex items-center gap-2">
+                                                        {p.name} {p.id === user?.uid && "(You)"}
+                                                        {p.role === 'left' && <Badge variant="outline" className="text-[10px] py-0">Inactive</Badge>}
+                                                    </TableCell>
                                                     <TableCell className="text-muted-foreground">{format(joinDate, 'p')}</TableCell>
                                                     <TableCell className="text-right font-mono">{formatDuration(durationSeconds)}</TableCell>
                                                 </TableRow>
@@ -1242,8 +1311,7 @@ function RoomPage() {
                 </CardHeader>
                 <CardContent className="flex-1 space-y-4 overflow-y-auto pt-4">
                   {activeParticipants?.map((p) => {
-                    const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
-                    const participationDuration = (currentTime - joinDate.getTime()) / 1000;
+                    const participationDuration = calculateParticipantDuration(p as Participant, currentTime);
                     
                     return (
                       <div key={p.id} className="flex items-center gap-3 group">
