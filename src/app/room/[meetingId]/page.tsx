@@ -28,13 +28,14 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile } from 'lucide-react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Input } from '@/components/ui/input';
 
 /**
  * AudioVisualizer component that renders moving bars based on a MediaStream.
@@ -163,6 +164,8 @@ function RoomPage() {
   const [openHostControls, setOpenHostControls] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -221,6 +224,8 @@ function RoomPage() {
     [activeParticipants]
   );
 
+  const meetingUrl = typeof window !== 'undefined' ? window.location.href : '';
+
   const isReactionRecent = (reactionAt?: { seconds: number }) => {
     if (!reactionAt) return false;
     const now = Math.floor(Date.now() / 1000);
@@ -245,6 +250,37 @@ function RoomPage() {
     setChatInput('');
   };
 
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setLinkCopied(true);
+      toast({ title: 'Copied to clipboard!' });
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Failed to copy.' });
+    }
+  };
+
+  const handleNativeShare = async () => {
+    const shareUrl = window.location.href;
+    const shareText = "Join my ConnectVerse meeting!";
+    try {
+        if (navigator.share) {
+            await navigator.share({
+                title: 'ConnectVerse Meeting',
+                text: shareText,
+                url: shareUrl,
+            });
+        } else {
+            await copyToClipboard(shareUrl);
+        }
+    } catch (error: any) {
+        if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
+             await copyToClipboard(shareUrl);
+        }
+    }
+  };
+
   // Watch for new reactions to trigger floating animation
   useEffect(() => {
     if (!participants) return;
@@ -260,7 +296,7 @@ function RoomPage() {
           playedReactionsRef.current[p.id] = p.lastReactionAt.seconds;
           
           setTimeout(() => {
-            setFloatingReactions(prev => prev.filter(r => r.id !== id));
+            setFloatingReactions(prev => setFloatingReactions(current => current.filter(r => r.id !== id)));
           }, 4000);
         }
       }
@@ -764,32 +800,6 @@ function RoomPage() {
         updateDocumentNonBlocking(participantRef, { isMuted: !currentState });
     };
 
-    const handleShare = async () => {
-        const shareUrl = window.location.href;
-        const shareText = "Join my ConnectVerse meeting!";
-        try {
-            if (navigator.share) {
-                await navigator.share({
-                    title: 'ConnectVerse Meeting',
-                    text: shareText,
-                    url: shareUrl,
-                });
-            } else {
-                await navigator.clipboard.writeText(shareUrl);
-                toast({ title: 'Link copied to clipboard!' });
-            }
-        } catch (error: any) {
-            if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
-                 try {
-                    await navigator.clipboard.writeText(shareUrl);
-                    toast({ title: 'Link copied to clipboard!' });
-                } catch (copyError) {
-                    toast({ variant: 'destructive', title: 'Failed to share' });
-                }
-            }
-        }
-    };
-
     const startMeeting = () => {
         if (!isHost || !meetingRef) return;
         updateDocumentNonBlocking(meetingRef, { status: 'pending' });
@@ -904,10 +914,60 @@ function RoomPage() {
                     <Timer className="h-4 w-4" />
                     <span>{elapsedTime}</span>
                 </div>
-                <Button variant="outline" size="icon" onClick={handleShare}>
-                    <Share2 className="h-4 w-4" />
-                    <span className="sr-only">Share Meeting</span>
-                </Button>
+                
+                <Dialog open={isShareDialogOpen} onOpenChange={setIsShareDialogOpen}>
+                    <DialogTrigger asChild>
+                        <Button variant="outline" size="icon">
+                            <Share2 className="h-4 w-4" />
+                            <span className="sr-only">Share Meeting</span>
+                        </Button>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>Share Meeting</DialogTitle>
+                            <DialogDescription>
+                                Invite others to join this meeting by sharing the link below.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="flex items-center space-x-2">
+                            <div className="grid flex-1 gap-2">
+                                <Label htmlFor="link" className="sr-only">
+                                    Link
+                                </Label>
+                                <Input
+                                    id="link"
+                                    defaultValue={meetingUrl}
+                                    readOnly
+                                    className="h-9"
+                                />
+                            </div>
+                            <Button size="sm" className="px-3" onClick={() => copyToClipboard(meetingUrl)}>
+                                <span className="sr-only">Copy</span>
+                                {linkCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                        </div>
+                        <div className="flex flex-col gap-2 mt-4">
+                            <Label className="text-xs text-muted-foreground">Meeting ID</Label>
+                            <div className="flex items-center justify-between p-2 bg-muted rounded-md border">
+                                <code className="text-sm font-mono">{meetingId}</code>
+                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => copyToClipboard(meetingId)}>
+                                    <Copy className="h-3 w-3" />
+                                </Button>
+                            </div>
+                        </div>
+                        <DialogFooter className="sm:justify-start">
+                             <Button
+                                type="button"
+                                variant="secondary"
+                                className="w-full"
+                                onClick={handleNativeShare}
+                             >
+                                <Share2 className="mr-2 h-4 w-4" />
+                                More share options
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
             </div>
           </header>
           <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 min-h-0">
