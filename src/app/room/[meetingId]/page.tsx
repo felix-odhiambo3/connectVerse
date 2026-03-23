@@ -29,7 +29,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -83,8 +83,9 @@ function RoomPage() {
   const [hasCameraPermission, setHasCameraPermission] = useState(true);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [isAudioMuted, setIsAudioMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
+  // Join muted and video off by default
+  const [isAudioMuted, setIsAudioMuted] = useState(true);
+  const [isVideoOff, setIsVideoOff] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
@@ -234,6 +235,10 @@ function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         if (!isCancelled) {
+          // Immediately apply initial muted/off states to the fresh stream
+          stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
+          stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
+          
           setLocalStream(stream);
           setHasCameraPermission(true);
         } else {
@@ -531,7 +536,7 @@ function RoomPage() {
 
   }, [localStream, meetingId, firestore, user, activeParticipantIds, isUserInWaitingRoom, participants]);
   
-    // Effect to handle host muting participant
+    // Effect to handle host muting participant and self mute
     useEffect(() => {
         if (localStream) {
             const selfMuted = isAudioMuted;
@@ -542,8 +547,17 @@ function RoomPage() {
         }
     }, [isAudioMuted, currentUserParticipant?.isMuted, localStream]);
 
+    // Effect to handle video track enabled state reactively
+    useEffect(() => {
+        if (localStream) {
+            localStream.getVideoTracks().forEach(track => {
+                track.enabled = !isVideoOff;
+            });
+        }
+    }, [isVideoOff, localStream]);
+
     const toggleAudio = () => {
-        if (!isHost && !(meetingData?.participantPermissions?.allowUnmute ?? true) && !localStream?.getAudioTracks()[0].enabled) {
+        if (!isHost && !(meetingData?.participantPermissions?.allowUnmute ?? true) && (isAudioMuted || !!currentUserParticipant?.isMuted)) {
             toast({ title: "The host has disabled microphones for participants." });
             return;
         }
@@ -555,11 +569,7 @@ function RoomPage() {
           toast({ title: "The host has disabled video for participants." });
           return;
       }
-      const newVideoState = !isVideoOff;
-      localStream?.getVideoTracks().forEach(track => {
-          track.enabled = !newVideoState;
-      });
-      setIsVideoOff(newVideoState);
+      setIsVideoOff(prev => !prev);
   };
 
   const toggleScreenShare = async () => {
@@ -790,9 +800,25 @@ function RoomPage() {
           </header>
           <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
             <div className="md:col-span-2 bg-muted rounded-lg flex flex-col items-center justify-center p-4 gap-4">
-              <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center">
+              <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center overflow-hidden">
                  <video ref={remoteVideoRef} className="w-full h-full object-contain rounded-md" autoPlay playsInline />
-                 <video ref={localVideoRef} className="absolute bottom-4 right-4 w-1/4 max-w-[200px] object-cover rounded-md border-2 border-background" autoPlay muted playsInline />
+                 
+                 {/* Local Video Container */}
+                 <div className="absolute bottom-4 right-4 w-1/4 max-w-[200px] aspect-video rounded-md border-2 border-background overflow-hidden shadow-lg bg-zinc-900">
+                    <video ref={localVideoRef} className={cn("w-full h-full object-cover", isVideoOff && "hidden")} autoPlay muted playsInline />
+                    {/* Visual feedback for camera off */}
+                    {isVideoOff && (
+                        <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-800 text-zinc-400 gap-2">
+                             <Avatar className="h-10 w-10 border border-zinc-700">
+                                <AvatarFallback className="bg-zinc-700">
+                                    <UserIcon className="h-6 w-6" />
+                                </AvatarFallback>
+                             </Avatar>
+                             <span className="text-[10px] font-medium uppercase tracking-wider">Camera Off</span>
+                        </div>
+                    )}
+                 </div>
+
                  {!remoteStream && isCurrentUserInCall && activeParticipants && activeParticipants.length > 1 && (
                     <div className="absolute inset-0 flex items-center justify-center">
                         <p className="text-white">Connecting...</p>
@@ -833,7 +859,7 @@ function RoomPage() {
                         className="rounded-full h-12 w-12" 
                         disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowStartVideo ?? true) && isVideoOff)}
                     >
-                      {isVideoOff ? <VideoOff /> : <Video />}
+                      {isVideoOff ? <VideoOff /> : <VideoIcon />}
                       <span className="sr-only">Toggle Video</span>
                     </Button>
                     <Button 
