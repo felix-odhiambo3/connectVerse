@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -39,6 +38,7 @@ import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from '@/components/ui/badge';
 
 /**
  * AudioVisualizer component that renders moving bars based on a MediaStream.
@@ -255,7 +255,7 @@ function RoomPage() {
     [activeParticipants]
   );
 
-  const meetingUrl = typeof window !== 'undefined' ? window.location.href : '';
+  const meetingUrl = typeof window !== 'undefined' ? `${window.location.origin}/room/${meetingId}` : '';
 
   const isReactionRecent = (reactionAt?: { seconds: number }) => {
     if (!reactionAt) return false;
@@ -293,7 +293,7 @@ function RoomPage() {
   };
 
   const handleNativeShare = async () => {
-    const shareUrl = window.location.href;
+    const shareUrl = meetingUrl;
     const shareText = `Join my ConnectVerse meeting!\nMeeting ID: ${meetingId}\nLink: ${shareUrl}`;
     try {
         if (navigator.share) {
@@ -321,7 +321,6 @@ function RoomPage() {
   }, []);
 
   // Periodic Checkpoint: Every 30 seconds, save current segment to totalDuration
-  // This ensures fairness if network issues occur or browser is closed.
   useEffect(() => {
     if (!user || !firestore || !meetingId || !currentUserParticipant?.activeSegmentStart || meetingData?.status === 'finished') return;
 
@@ -333,7 +332,7 @@ function RoomPage() {
         if (segmentSeconds > 0) {
             updateDoc(participantRef, {
                 totalDuration: increment(segmentSeconds),
-                activeSegmentStart: serverTimestamp() // Reset the segment start to now
+                activeSegmentStart: serverTimestamp()
             });
         }
     }, 30000);
@@ -350,7 +349,7 @@ function RoomPage() {
         const lastPlayed = playedReactionsRef.current[p.id] || 0;
         if (p.lastReactionAt.seconds > lastPlayed && isReactionRecent(p.lastReactionAt)) {
           const id = Math.random().toString(36).substr(2, 9);
-          const left = Math.random() * 80 + 10; // 10% to 90% from left
+          const left = Math.random() * 80 + 10;
           
           setFloatingReactions(prev => [...prev, { id, emoji: p.lastReaction!, senderName: p.name, left }]);
           playedReactionsRef.current[p.id] = p.lastReactionAt.seconds;
@@ -430,11 +429,14 @@ function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         if (!isCancelled) {
-          stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
-          stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
+          // Force initial mute state as requested
+          stream.getAudioTracks().forEach(track => track.enabled = false);
+          stream.getVideoTracks().forEach(track => track.enabled = false);
           
           setLocalStream(stream);
           setHasCameraPermission(true);
+          setIsAudioMuted(true);
+          setIsVideoOff(true);
         } else {
           stream.getTracks().forEach(track => track.stop());
         }
@@ -482,7 +484,6 @@ function RoomPage() {
         const docSnap = await getDoc(participantRef);
         
         if (docSnap.exists()) {
-            // Rejoining user: Restore role if necessary and start new active segment
             const data = docSnap.data();
             let newRole = data.role;
             if (newRole === 'left') {
@@ -493,7 +494,6 @@ function RoomPage() {
                 role: newRole
             });
         } else {
-            // New participant
             let role: 'host' | 'participant' | 'waiting';
             if (user.uid === meetingData.hostId) {
                 role = 'host';
@@ -812,7 +812,6 @@ function RoomPage() {
       const nowInSeconds = Math.floor(Date.now() / 1000);
       const segmentSeconds = nowInSeconds - currentUserParticipant.activeSegmentStart.seconds;
       
-      // Update the total duration before leaving and mark as 'left' (inactive but record preserved)
       updateDocumentNonBlocking(participantRef, { 
           totalDuration: increment(Math.max(0, segmentSeconds)),
           activeSegmentStart: null,
@@ -872,7 +871,6 @@ function RoomPage() {
     const removeParticipant = (participantId: string) => {
         if (!isHost || !firestore || !meetingId) return;
         const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, participantId);
-        // We actually delete the record if the host kicks them
         updateDocumentNonBlocking(participantRef, { role: 'left', activeSegmentStart: null });
         toast({ title: "Participant removed." });
     };
