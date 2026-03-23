@@ -152,6 +152,7 @@ interface FloatingReaction {
 
 const REACTION_EMOJIS = ['❤️', '👍', '🎉', '😮', '😢', '🔥', '👏', '💯'];
 const LATE_THRESHOLD_SECONDS = 15 * 60; // 15 minutes
+const ATTENDANCE_REQUIREMENT = 0.7; // 70%
 
 function formatDuration(seconds: number) {
   const h = Math.floor(seconds / 3600);
@@ -163,11 +164,13 @@ function formatDuration(seconds: number) {
 /**
  * Calculates the total cumulative duration for a participant.
  * Sums the stored totalDuration with the time elapsed in the current active segment.
+ * @param p The participant object
+ * @param referenceTimeMs Current time in milliseconds (or end time if session is over)
  */
-function calculateParticipantDuration(p: Participant, currentTime: number) {
+function calculateParticipantDuration(p: Participant, referenceTimeMs: number) {
     let total = p.totalDuration || 0;
     if (p.activeSegmentStart) {
-        const segmentDuration = Math.max(0, Math.floor(currentTime / 1000) - p.activeSegmentStart.seconds);
+        const segmentDuration = Math.max(0, Math.floor(referenceTimeMs / 1000) - p.activeSegmentStart.seconds);
         total += segmentDuration;
     }
     return total;
@@ -981,9 +984,12 @@ function RoomPage() {
 
   // Attendance Summary View
   if (showSummary && meetingData?.status === 'finished') {
+    // Calculate total meeting span from start to end
     const totalMeetingSeconds = (meetingData.endedAt?.seconds && meetingData.createdAt?.seconds)
         ? meetingData.endedAt.seconds - meetingData.createdAt.seconds 
         : Math.floor(Date.now() / 1000) - (meetingData.createdAt?.seconds || Math.floor(Date.now() / 1000));
+
+    const referenceTimeMs = meetingData.endedAt?.seconds ? meetingData.endedAt.seconds * 1000 : Date.now();
 
     return (
         <AuthGuard>
@@ -1004,7 +1010,7 @@ function RoomPage() {
                             </div>
                             <div className="bg-white p-4 rounded-lg border shadow-sm">
                                 <p className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">Requirement</p>
-                                <p className="text-2xl font-bold">70% Attendance</p>
+                                <p className="text-2xl font-bold">{ATTENDANCE_REQUIREMENT * 100}% Participation</p>
                             </div>
                         </div>
 
@@ -1019,17 +1025,26 @@ function RoomPage() {
                                 </TableHeader>
                                 <TableBody>
                                     {participants?.map((p) => {
-                                        const participationSeconds = p.totalDuration || 0;
+                                        // Use referenceTimeMs to include the final segment accurately
+                                        const participationSeconds = calculateParticipantDuration(p as Participant, referenceTimeMs);
                                         const attendancePercentage = totalMeetingSeconds > 0 ? (participationSeconds / totalMeetingSeconds) : 0;
-                                        const isPresent = attendancePercentage >= 0.7;
-                                        const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                                        const isPresent = attendancePercentage >= ATTENDANCE_REQUIREMENT;
+                                        
+                                        // Punctuality check: Joined within 15 mins of meeting creation
+                                        const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) 
+                                            ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS 
+                                            : false;
 
                                         return (
                                             <TableRow key={p.id}>
                                                 <TableCell className="font-medium">
                                                     <div className="flex flex-col">
                                                         <span>{p.name} {p.id === user?.uid && "(You)"}</span>
-                                                        {isLate && <span className="text-[10px] text-destructive font-semibold flex items-center gap-1"><AlertCircle className="h-2 w-2" /> Late Arrival</span>}
+                                                        {isLate && (
+                                                            <span className="text-[10px] text-destructive font-semibold flex items-center gap-1">
+                                                                <AlertCircle className="h-2 w-2" /> Late Arrival
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="font-mono text-zinc-600">
