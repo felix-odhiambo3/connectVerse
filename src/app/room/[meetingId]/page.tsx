@@ -164,14 +164,20 @@ function formatDuration(seconds: number) {
 /**
  * Calculates the total cumulative duration for a participant.
  * Sums the stored totalDuration with the time elapsed in the current active segment.
+ * Caps the duration to the total meeting duration to avoid drift discrepancies.
  * @param p The participant object
- * @param referenceTimeMs Current time in milliseconds (or end time if session is over)
+ * @param referenceTimeMs Current time in milliseconds
+ * @param maxDuration Optional cap for the duration (usually total meeting time)
  */
-function calculateParticipantDuration(p: Participant, referenceTimeMs: number) {
+function calculateParticipantDuration(p: Participant, referenceTimeMs: number, maxDuration?: number) {
     let total = p.totalDuration || 0;
     if (p.activeSegmentStart) {
         const segmentDuration = Math.max(0, Math.floor(referenceTimeMs / 1000) - p.activeSegmentStart.seconds);
         total += segmentDuration;
+    }
+    
+    if (maxDuration !== undefined) {
+        return Math.min(total, maxDuration);
     }
     return total;
 }
@@ -211,6 +217,7 @@ function RoomPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasInitiatedJoin = useRef(false);
   const playedReactionsRef = useRef<Record<string, number>>({});
+  const initialLocalJoinTimeRef = useRef<number | null>(null);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -320,7 +327,6 @@ function RoomPage() {
 
   /**
    * Triggers the PDF download by calling the browser's print dialog.
-   * Prints only the content targeted by CSS print media queries.
    */
   const handleDownloadPDF = () => {
     const originalTitle = document.title;
@@ -329,7 +335,6 @@ function RoomPage() {
     
     window.print();
     
-    // Restore the original document title after a short delay
     setTimeout(() => {
       document.title = originalTitle;
     }, 1000);
@@ -392,16 +397,20 @@ function RoomPage() {
     };
     
     const startTime = meetingData.createdAt.seconds * 1000;
-    const intervalId = setInterval(() => {
+    
+    const updateSessionTimer = () => {
       const now = Date.now();
-      const difference = now - startTime;
+      const difference = Math.max(0, now - startTime);
       
       const hours = String(Math.floor(difference / 3600000)).padStart(2, '0');
       const minutes = String(Math.floor((difference % 3600000) / 60000)).padStart(2, '0');
       const seconds = String(Math.floor((difference % 60000) / 1000)).padStart(2, '0');
       
       setElapsedTime(`${hours}:${minutes}:${seconds}`);
-    }, 1000);
+    };
+
+    updateSessionTimer();
+    const intervalId = setInterval(updateSessionTimer, 1000);
     
     return () => clearInterval(intervalId);
   }, [meetingData?.createdAt, meetingData?.status]);
@@ -448,7 +457,6 @@ function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         if (!isCancelled) {
-          // Force initial mute state as requested
           stream.getAudioTracks().forEach(track => track.enabled = false);
           stream.getVideoTracks().forEach(track => track.enabled = false);
           
@@ -496,6 +504,7 @@ function RoomPage() {
 
     if (hasInitiatedJoin.current) return;
     hasInitiatedJoin.current = true;
+    initialLocalJoinTimeRef.current = Date.now();
 
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
 
@@ -984,10 +993,9 @@ function RoomPage() {
 
   // Attendance Summary View
   if (showSummary && meetingData?.status === 'finished') {
-    // Calculate total meeting span from start to end
     const totalMeetingSeconds = (meetingData.endedAt?.seconds && meetingData.createdAt?.seconds)
-        ? meetingData.endedAt.seconds - meetingData.createdAt.seconds 
-        : Math.floor(Date.now() / 1000) - (meetingData.createdAt?.seconds || Math.floor(Date.now() / 1000));
+        ? Math.max(0, meetingData.endedAt.seconds - meetingData.createdAt.seconds)
+        : 0;
 
     const referenceTimeMs = meetingData.endedAt?.seconds ? meetingData.endedAt.seconds * 1000 : Date.now();
 
@@ -1025,12 +1033,11 @@ function RoomPage() {
                                 </TableHeader>
                                 <TableBody>
                                     {participants?.map((p) => {
-                                        // Use referenceTimeMs to include the final segment accurately
-                                        const participationSeconds = calculateParticipantDuration(p as Participant, referenceTimeMs);
+                                        // Cap the participation duration to total meeting time for accuracy
+                                        const participationSeconds = calculateParticipantDuration(p as Participant, referenceTimeMs, totalMeetingSeconds);
                                         const attendancePercentage = totalMeetingSeconds > 0 ? (participationSeconds / totalMeetingSeconds) : 0;
                                         const isPresent = attendancePercentage >= ATTENDANCE_REQUIREMENT;
                                         
-                                        // Punctuality check: Joined within 15 mins of meeting creation
                                         const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) 
                                             ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS 
                                             : false;
@@ -1085,7 +1092,6 @@ function RoomPage() {
   return (
     <AuthGuard>
       <div className="flex h-screen w-full relative overflow-hidden">
-        {/* Floating Reactions Overlay */}
         <div className="absolute inset-0 pointer-events-none z-50">
           {floatingReactions.map((reaction) => (
             <div
@@ -1238,7 +1244,6 @@ function RoomPage() {
             <div className="md:col-span-2 bg-muted rounded-lg flex flex-col p-4 gap-4 min-h-0">
               <div className="flex-1 w-full relative bg-black rounded-md flex items-center justify-center overflow-hidden min-h-0">
                  <video ref={remoteVideoRef} className="w-full h-full object-contain" autoPlay playsInline />
-                 {/* Local Video Preview */}
                  <div className="absolute bottom-4 right-4 w-1/4 max-w-[200px] aspect-video rounded-md border-2 border-background overflow-hidden shadow-lg bg-zinc-900 z-10">
                     <video ref={localVideoRef} className={cn("w-full h-full object-cover", (isVideoOff && !isScreenSharing) && "hidden")} autoPlay muted playsInline />
                     {(isVideoOff && !isScreenSharing) && (
@@ -1274,7 +1279,6 @@ function RoomPage() {
                         </AlertDescription>
                     </Alert>
                 )}
-                {/* Control Bar */}
                 <div className="flex items-center justify-center gap-2 flex-wrap shrink-0">
                     <Button 
                         onClick={toggleAudio} 
@@ -1414,7 +1418,6 @@ function RoomPage() {
                     )}
                   </div>
             </div>
-            {/* Sidebar with Participants and Chat */}
             <div className="flex flex-col gap-4 min-h-0">
               {isHost && waitingList && waitingList.length > 0 && (
                 <Card className="shrink-0 border-primary/20 bg-primary/5">
@@ -1437,7 +1440,13 @@ function RoomPage() {
                 </CardHeader>
                 <CardContent className="flex-1 space-y-4 overflow-y-auto pt-4">
                   {activeParticipants?.map((p) => {
-                    const participationDuration = calculateParticipantDuration(p as Participant, currentTime);
+                    // Use currentTime if meeting is active, otherwise cap at meeting duration
+                    const referenceTime = meetingData?.endedAt?.seconds ? meetingData.endedAt.seconds * 1000 : currentTime;
+                    const maxDuration = meetingData?.createdAt?.seconds && meetingData?.endedAt?.seconds 
+                        ? meetingData.endedAt.seconds - meetingData.createdAt.seconds 
+                        : undefined;
+                    
+                    const participationDuration = calculateParticipantDuration(p as Participant, referenceTime, maxDuration);
                     const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                     
                     return (
