@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -19,6 +18,7 @@ import {
   updateDoc,
   increment,
   arrayUnion,
+  where,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -30,7 +30,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown, AlertCircle, Download, FileText, TrendingUp, BookOpen } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown, AlertCircle, Download, FileText, TrendingUp, BookOpen, MessageSquare, Users, Settings, MoreVertical } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -40,9 +40,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // Constants
 const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
+const LATE_THRESHOLD_SECONDS = 15 * 60; // 15 minutes
 
 interface Participant {
   id: string;
@@ -53,7 +55,16 @@ interface Participant {
   role: 'host' | 'participant' | 'waiting' | 'left';
   hasRaisedHand?: boolean;
   isMuted?: boolean;
+  isVideoOff?: boolean;
   lastReaction?: string;
+}
+
+interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  createdAt: { seconds: number };
 }
 
 interface CumulativeStats {
@@ -77,13 +88,16 @@ export default function RoomPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isAudioMuted, setIsAudioMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(true);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [hasHandRaised, setHasHandRaised] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
   const [showSummary, setShowSummary] = useState(false);
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<'participants' | 'chat'>('participants');
+  const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -97,7 +111,14 @@ export default function RoomPage() {
     return query(collection(firestore, 'meetings', meetingId, 'participants'), orderBy('joinedAt', 'asc'));
   }, [firestore, meetingId]);
 
-  const { data: participants, isLoading: areParticipantsLoading } = useCollection<Participant>(participantsRef);
+  const { data: participants } = useCollection<Participant>(participantsRef);
+
+  const chatRef = useMemoFirebase(() => {
+    if (!firestore || !meetingId) return null;
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'asc'));
+  }, [firestore, meetingId]);
+
+  const { data: chatMessages } = useCollection<ChatMessage>(chatRef);
 
   const seriesAttendanceRef = useMemoFirebase(() => {
     if (!firestore || !meetingData?.seriesId || !user) return null;
@@ -106,42 +127,109 @@ export default function RoomPage() {
 
   const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
 
-  const currentUserParticipant = participants?.find(p => p.id === user?.uid);
   const isHost = user?.uid === meetingData?.hostId;
+  const currentUserParticipant = participants?.find(p => p.id === user?.uid);
+
+  // Update current time for live calculations
+  useEffect(() => {
+    const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Track session time
   useEffect(() => {
-    if (!meetingData?.createdAt || meetingData.status === 'scheduled') return;
+    if (!meetingData?.createdAt || meetingData.status === 'finished') return;
     const interval = setInterval(() => {
-      const now = Date.now();
       const start = meetingData.createdAt.seconds * 1000;
-      const diff = Math.max(0, now - start);
+      const diff = Math.max(0, Date.now() - start);
       setElapsedTime(formatDuration(diff / 1000));
     }, 1000);
     return () => clearInterval(interval);
   }, [meetingData]);
 
-  // Handle meeting end and attendance logic
+  // Join/Update participant status
+  useEffect(() => {
+    if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
+    const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
+    
+    // Use a checkpointing strategy: update total duration when leaving or periodically
+    setDoc(pRef, {
+      id: user.uid,
+      name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
+      joinedAt: serverTimestamp(),
+      activeSegmentStart: serverTimestamp(),
+      role: user.uid === meetingData.hostId ? 'host' : 'participant',
+      isMuted: isAudioMuted,
+      isVideoOff: isVideoOff,
+    }, { merge: true });
+
+    const checkpointInterval = setInterval(() => {
+      if (meetingData.status === 'active' || meetingData.status === 'pending') {
+        const currentTotal = (currentUserParticipant?.totalDuration || 0) + 
+          (currentUserParticipant?.activeSegmentStart ? (currentTime - currentUserParticipant.activeSegmentStart.seconds) : 0);
+        updateDoc(pRef, { 
+          totalDuration: Math.min(currentTotal, currentTime - meetingData.createdAt.seconds),
+          activeSegmentStart: serverTimestamp() 
+        });
+      }
+    }, 30000);
+
+    return () => {
+      clearInterval(checkpointInterval);
+      updateDoc(pRef, { role: 'left', activeSegmentStart: null });
+    };
+  }, [user, meetingId, firestore, meetingData?.status]);
+
+  const handleSendMessage = () => {
+    if (!chatInput.trim() || !user || !firestore) return;
+    addDoc(collection(firestore, 'meetings', meetingId, 'chat'), {
+      senderId: user.uid,
+      senderName: user.displayName || user.email?.split('@')[0],
+      text: chatInput,
+      createdAt: serverTimestamp(),
+    });
+    setChatInput('');
+  };
+
+  const toggleMic = () => {
+    setIsAudioMuted(!isAudioMuted);
+    if (meetingRef && user) {
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: !isAudioMuted });
+    }
+  };
+
+  const toggleVideo = () => {
+    setIsVideoOff(!isVideoOff);
+    if (meetingRef && user) {
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: !isVideoOff });
+    }
+  };
+
+  const toggleHand = () => {
+    setHasHandRaised(!hasHandRaised);
+    if (meetingRef && user) {
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { hasRaisedHand: !hasHandRaised });
+    }
+  };
+
   const endMeetingForAll = async () => {
     if (!isHost || !meetingRef || !firestore || !participants) return;
     setIsProcessingAttendance(true);
 
-    const totalSessionSeconds = (Date.now() / 1000) - meetingData.createdAt.seconds;
+    const totalSessionSeconds = currentTime - meetingData.createdAt.seconds;
     const batch = writeBatch(firestore);
 
-    // 1. Mark meeting as finished
     batch.update(meetingRef, {
       status: 'finished',
       endedAt: serverTimestamp(),
     });
 
-    // 2. Process attendance for all participants
     for (const p of participants) {
-      const currentDuration = (p.totalDuration || 0) + (p.activeSegmentStart ? (Date.now() / 1000 - p.activeSegmentStart.seconds) : 0);
-      const participationRatio = currentDuration / totalSessionSeconds;
+      const currentDuration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+      const cappedDuration = Math.min(currentDuration, totalSessionSeconds);
+      const participationRatio = cappedDuration / totalSessionSeconds;
 
       if (participationRatio >= ATTENDANCE_THRESHOLD && meetingData.seriesId) {
-        // Participant earned credit for this session
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
         const seriesSnap = await getDoc(seriesUserRef);
         
@@ -173,23 +261,11 @@ export default function RoomPage() {
     setShowSummary(true);
   };
 
-  // Participant joining logic
-  useEffect(() => {
-    if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'scheduled') return;
-    const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
-    setDoc(pRef, {
-      id: user.uid,
-      name: user.displayName || user.email,
-      joinedAt: serverTimestamp(),
-      activeSegmentStart: serverTimestamp(),
-      totalDuration: 0,
-      role: user.uid === meetingData.hostId ? 'host' : 'participant',
-    }, { merge: true });
-
-    return () => {
-      updateDoc(pRef, { role: 'left', activeSegmentStart: null });
-    };
-  }, [user, meetingId, firestore, meetingData]);
+  const copyInviteLink = () => {
+    const link = `${window.location.origin}/room/${meetingId}`;
+    navigator.clipboard.writeText(link);
+    toast({ title: "Invite link copied!", description: "Share this link with participants." });
+  };
 
   if (showSummary || meetingData?.status === 'finished') {
     const totalExpectedHours = (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0);
@@ -246,78 +322,279 @@ export default function RoomPage() {
   return (
     <AuthGuard>
       <div className="flex h-screen w-full flex-col overflow-hidden bg-background">
-        <header className="flex h-16 items-center justify-between border-b px-6 shrink-0 bg-card">
+        <header className="flex h-16 items-center justify-between border-b px-6 shrink-0 bg-card z-10">
           <div className="flex items-center gap-4">
+            <div className="bg-primary p-2 rounded-lg">
+              <VideoIcon className="h-5 w-5 text-primary-foreground" />
+            </div>
             <div>
-              <h1 className="text-lg font-bold">{meetingData?.name || 'Class Session'}</h1>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Session {meetingData?.sessionIndex} of {meetingData?.totalSessionsInSeries}</p>
+              <h1 className="text-sm font-bold truncate max-w-[200px]">{meetingData?.name || 'Loading Meeting...'}</h1>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[10px] py-0">{meetingId}</Badge>
+                {meetingData?.seriesId && <Badge className="text-[10px] py-0 bg-blue-100 text-blue-700 border-none">Recurring</Badge>}
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="bg-muted px-4 py-1.5 rounded-full border text-sm font-mono flex items-center gap-2">
-              <Timer className="h-4 w-4 text-primary" /> {elapsedTime}
+          
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex bg-muted/50 px-3 py-1.5 rounded-full border text-xs font-mono items-center gap-2">
+              <Timer className="h-3.5 w-3.5 text-primary" /> {elapsedTime}
             </div>
-            {isHost && (
-              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-full">
-                {isProcessingAttendance ? 'Ending...' : 'End Session'}
+            <Separator orientation="vertical" className="h-6 mx-1" />
+            <Button variant="ghost" size="icon" onClick={copyInviteLink} className="rounded-full">
+              <Share2 className="h-4 w-4" />
+            </Button>
+            {isHost ? (
+              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-full h-9 px-4 text-xs font-bold">
+                {isProcessingAttendance ? 'Ending...' : 'End for All'}
               </Button>
+            ) : (
+              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-full h-9 px-4 text-xs font-bold">Leave</Button>
             )}
-            {!isHost && <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-full">Leave</Button>}
           </div>
         </header>
 
-        <main className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-4 p-4 overflow-hidden">
-          <div className="md:col-span-3 bg-muted rounded-2xl relative overflow-hidden flex items-center justify-center border shadow-inner">
-             <div className="text-zinc-400 flex flex-col items-center gap-4">
-                <VideoIcon className="h-16 w-16 opacity-20" />
-                <p className="text-sm font-medium">Camera is Off</p>
-             </div>
-             
-             {/* Local Preview */}
-             <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-900 rounded-xl border-2 border-background shadow-2xl overflow-hidden">
-                <div className="w-full h-full flex items-center justify-center text-zinc-600 text-xs uppercase font-bold tracking-tighter">Preview</div>
-             </div>
+        <main className="flex-1 flex overflow-hidden p-4 gap-4 relative">
+          <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+            <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden flex items-center justify-center border shadow-2xl">
+              <div className="text-zinc-600 flex flex-col items-center gap-4">
+                <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center animate-pulse">
+                  <UserIcon className="h-10 w-10 opacity-20" />
+                </div>
+                <p className="text-sm font-medium tracking-wide">Connecting to video feed...</p>
+              </div>
+              
+              <div className="absolute top-6 left-6 flex items-center gap-2">
+                <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-md border-none px-3 py-1">
+                  {currentUserParticipant?.name} (You)
+                </Badge>
+              </div>
+
+              {/* Local Mini Preview */}
+              <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-800 rounded-2xl border-2 border-zinc-700 shadow-2xl overflow-hidden group">
+                 <div className="w-full h-full flex items-center justify-center">
+                    {isVideoOff ? <VideoOff className="h-6 w-6 text-zinc-600" /> : <VideoIcon className="h-6 w-6 text-zinc-400" />}
+                 </div>
+                 <div className="absolute bottom-2 left-2">
+                    {isAudioMuted && <MicOff className="h-3 w-3 text-red-500" />}
+                 </div>
+              </div>
+
+              {hasHandRaised && (
+                <div className="absolute top-6 right-6 bg-yellow-400 text-yellow-900 p-3 rounded-2xl animate-bounce shadow-lg">
+                  <Hand className="h-6 w-6 fill-current" />
+                </div>
+              )}
+            </div>
+
+            {/* Bottom Controls Bar */}
+            <div className="h-20 bg-card rounded-3xl border shadow-lg flex items-center justify-center px-6 gap-2 sm:gap-4 shrink-0">
+               <Button 
+                 variant={isAudioMuted ? "destructive" : "secondary"} 
+                 size="icon" 
+                 onClick={toggleMic} 
+                 className="rounded-full h-12 w-12"
+               >
+                 {isAudioMuted ? <MicOff /> : <Mic />}
+               </Button>
+               <Button 
+                 variant={isVideoOff ? "destructive" : "secondary"} 
+                 size="icon" 
+                 onClick={toggleVideo} 
+                 className="rounded-full h-12 w-12"
+               >
+                 {isVideoOff ? <VideoOff /> : <VideoIcon />}
+               </Button>
+               <Separator orientation="vertical" className="h-8 mx-2" />
+               <Button 
+                 variant={isScreenSharing ? "default" : "secondary"} 
+                 size="icon" 
+                 onClick={() => setIsScreenSharing(!isScreenSharing)} 
+                 className="rounded-full h-12 w-12"
+               >
+                 {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
+               </Button>
+               <Button 
+                 variant={hasHandRaised ? "default" : "secondary"} 
+                 size="icon" 
+                 onClick={toggleHand} 
+                 className={cn("rounded-full h-12 w-12", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}
+               >
+                 <Hand />
+               </Button>
+               <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="secondary" size="icon" className="rounded-full h-12 w-12">
+                      <Smile />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-2 grid grid-cols-4 gap-2">
+                     {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
+                       <Button key={emoji} variant="ghost" className="h-10 w-10 p-0 text-xl">{emoji}</Button>
+                     ))}
+                  </PopoverContent>
+               </Popover>
+               <Separator orientation="vertical" className="h-8 mx-2" />
+               <Dialog>
+                 <DialogTrigger asChild>
+                    <Button variant="secondary" size="icon" className="rounded-full h-12 w-12">
+                      <BarChart3 />
+                    </Button>
+                 </DialogTrigger>
+                 <DialogContent className="max-w-3xl">
+                    <DialogHeader>
+                      <DialogTitle>Session Participation Monitor</DialogTitle>
+                      <DialogDescription>Track student engagement and cumulative attendance progress.</DialogDescription>
+                    </DialogHeader>
+                    <div className="py-4">
+                       <Table>
+                          <TableHeader>
+                             <TableRow>
+                                <TableCell>Student</TableCell>
+                                <TableCell>Role</TableCell>
+                                <TableCell>Join Time</TableCell>
+                                <TableCell className="text-right">Active Time</TableCell>
+                                <TableCell className="text-right">Status</TableCell>
+                             </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                             {participants?.filter(p => p.role !== 'left').map(p => {
+                               const duration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+                               const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
+                               const isLate = meetingData?.createdAt && p.joinedAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                               
+                               return (
+                                 <TableRow key={p.id}>
+                                    <TableCell className="font-medium flex items-center gap-2">
+                                       {p.name} {p.id === user?.uid && "(You)"}
+                                       {isLate && <Badge variant="destructive" className="text-[8px] h-4 py-0">Late</Badge>}
+                                    </TableCell>
+                                    <TableCell className="capitalize">{p.role}</TableCell>
+                                    <TableCell className="text-muted-foreground">{format(joinDate, 'p')}</TableCell>
+                                    <TableCell className="text-right font-mono">{formatDuration(duration)}</TableCell>
+                                    <TableCell className="text-right">
+                                       <Badge variant={duration / (currentTime - meetingData?.createdAt?.seconds || 1) >= 0.7 ? "default" : "secondary"}>
+                                          {duration / (currentTime - meetingData?.createdAt?.seconds || 1) >= 0.7 ? 'Present' : 'Low Active'}
+                                       </Badge>
+                                    </TableCell>
+                                 </TableRow>
+                               );
+                             })}
+                          </TableBody>
+                       </Table>
+                    </div>
+                 </DialogContent>
+               </Dialog>
+            </div>
           </div>
 
-          <div className="flex flex-col gap-4 overflow-hidden">
-             <Card className="flex-1 flex flex-col overflow-hidden border shadow-sm">
-                <CardHeader className="py-4 border-b bg-zinc-50/50">
-                   <CardTitle className="text-sm">Participants ({participants?.length || 0})</CardTitle>
-                </CardHeader>
-                <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
-                   {participants?.map(p => (
-                     <div key={p.id} className="flex items-center gap-3">
-                        <Avatar className="h-8 w-8">
-                           <AvatarFallback>{p.name[0]}</AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                           <p className="text-xs font-bold truncate">{p.name}</p>
-                           <p className="text-[10px] text-muted-foreground">{p.role === 'host' ? 'Host' : 'Student'}</p>
-                        </div>
-                     </div>
-                   ))}
-                </CardContent>
-             </Card>
-             
-             <Card className="h-1/3 bg-primary/5 border-primary/10 shadow-sm">
-                <CardHeader className="py-3">
-                   <CardTitle className="text-xs flex items-center gap-2"><TrendingUp className="h-3 w-3" /> Cumulative Progress</CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0 space-y-2">
-                   <div className="flex justify-between text-[10px] uppercase font-bold text-muted-foreground">
-                      <span>Total Earned</span>
-                      <span>{myCumulativeStats?.attendedHours || 0}h</span>
+          {/* Right Sidebar */}
+          <Card className="w-80 flex flex-col overflow-hidden border shadow-lg shrink-0 rounded-3xl">
+             <Tabs defaultValue="participants" className="flex-1 flex flex-col overflow-hidden">
+                <div className="px-4 pt-4 border-b">
+                   <TabsList className="w-full h-12 grid grid-cols-2 rounded-2xl">
+                      <TabsTrigger value="participants" className="rounded-xl flex items-center gap-2">
+                        <Users className="h-4 w-4" /> Participants
+                      </TabsTrigger>
+                      <TabsTrigger value="chat" className="rounded-xl flex items-center gap-2">
+                        <MessageSquare className="h-4 w-4" /> Chat
+                      </TabsTrigger>
+                   </TabsList>
+                </div>
+
+                <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
+                   <ScrollArea className="flex-1 p-4">
+                      <div className="space-y-4">
+                        {participants?.map(p => (
+                          <div key={p.id} className="flex items-center gap-3 group">
+                             <div className="relative">
+                               <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
+                                  <AvatarFallback className="bg-primary/5 text-primary font-bold text-xs">{p.name[0]}</AvatarFallback>
+                               </Avatar>
+                               {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-1 border border-background shadow-sm animate-bounce"><Hand className="h-2 w-2" /></div>}
+                             </div>
+                             <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold truncate flex items-center gap-1.5">
+                                   {p.name}
+                                   {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500" />}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground flex items-center gap-2">
+                                   {p.role === 'left' ? <Badge variant="outline" className="text-[8px] h-3 px-1 py-0">Left</Badge> : (
+                                     <>
+                                       {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
+                                       {p.isVideoOff ? <VideoOff className="h-3 w-3 text-zinc-400" /> : <VideoIcon className="h-3 w-3 text-primary" />}
+                                     </>
+                                   )}
+                                </p>
+                             </div>
+                             {isHost && p.id !== user?.uid && (
+                               <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
+                                 <MoreVertical className="h-4 w-4" />
+                               </Button>
+                             )}
+                          </div>
+                        ))}
+                      </div>
+                   </ScrollArea>
+                   
+                   <Separator />
+                   <div className="p-4 bg-zinc-50/50">
+                      <div className="space-y-3">
+                         <div className="flex justify-between text-[10px] uppercase font-bold text-muted-foreground tracking-widest">
+                            <span>Series Progress</span>
+                            <span>{myCumulativeStats?.attendedHours || 0}h Earned</span>
+                         </div>
+                         <div className="h-2 w-full bg-zinc-200 rounded-full overflow-hidden shadow-inner">
+                            <div 
+                              className="h-full bg-primary transition-all duration-1000" 
+                              style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / ((meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
+                            />
+                         </div>
+                         <p className="text-[10px] text-center text-muted-foreground leading-relaxed">
+                            Need 70% participation in <b>Session {meetingData?.sessionIndex}</b> to earn {meetingData?.fixedDurationHours}h.
+                         </p>
+                      </div>
                    </div>
-                   <div className="h-2 w-full bg-zinc-200 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-primary transition-all" 
-                        style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / ((meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
-                      />
+                </TabsContent>
+
+                <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
+                   <ScrollArea className="flex-1 p-4">
+                      <div className="space-y-4">
+                         {chatMessages?.map((msg) => (
+                           <div key={msg.id} className={cn("flex flex-col gap-1", msg.senderId === user?.uid ? "items-end" : "items-start")}>
+                              <p className="text-[10px] font-bold text-muted-foreground px-1">{msg.senderName}</p>
+                              <div className={cn(
+                                "max-w-[90%] px-3 py-2 rounded-2xl text-xs",
+                                msg.senderId === user?.uid ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-muted rounded-tl-none"
+                              )}>
+                                 {msg.text}
+                              </div>
+                           </div>
+                         ))}
+                      </div>
+                   </ScrollArea>
+                   <div className="p-4 border-t bg-card space-y-2">
+                      <div className="relative">
+                        <Input 
+                          placeholder="Type a message..." 
+                          value={chatInput} 
+                          onChange={(e) => setChatInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                          className="pr-10 rounded-xl h-12"
+                        />
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          onClick={handleSendMessage} 
+                          className="absolute right-1 top-1 h-10 w-10 text-primary hover:bg-transparent"
+                        >
+                          <Send className="h-4 w-4" />
+                        </Button>
+                      </div>
                    </div>
-                   <p className="text-[10px] text-center text-muted-foreground">Keep participation above 70% per session to earn hours.</p>
-                </CardContent>
-             </Card>
-          </div>
+                </TabsContent>
+             </Tabs>
+          </Card>
         </main>
       </div>
     </AuthGuard>
