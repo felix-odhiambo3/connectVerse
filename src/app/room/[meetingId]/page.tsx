@@ -16,7 +16,6 @@ import {
   deleteDoc,
   getDoc,
   setDoc,
-  updateDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -26,7 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile } from 'lucide-react';
@@ -260,7 +259,6 @@ function RoomPage() {
           setFloatingReactions(prev => [...prev, { id, emoji: p.lastReaction!, senderName: p.name, left }]);
           playedReactionsRef.current[p.id] = p.lastReactionAt.seconds;
           
-          // Remove after animation (4s duration matching tailwind.config.ts)
           setTimeout(() => {
             setFloatingReactions(prev => prev.filter(r => r.id !== id));
           }, 4000);
@@ -890,8 +888,8 @@ function RoomPage() {
           ))}
         </div>
 
-        <div className="flex flex-1 flex-col">
-          <header className="flex h-16 items-center justify-between border-b bg-background px-6">
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <header className="flex h-16 items-center justify-between border-b bg-background px-6 shrink-0">
             <div className="flex items-center gap-4">
                 <h1 className="text-xl font-semibold">{meetingData?.name || 'Meeting Room'}</h1>
                 {meetingData?.isRecording && (
@@ -912,11 +910,12 @@ function RoomPage() {
                 </Button>
             </div>
           </header>
-          <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
-            <div className="md:col-span-2 bg-muted rounded-lg flex flex-col items-center justify-center p-4 gap-4">
-              <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center overflow-hidden">
-                 <video ref={remoteVideoRef} className="w-full h-full object-contain rounded-md" autoPlay playsInline />
-                 <div className="absolute bottom-4 right-4 w-1/4 max-w-[200px] aspect-video rounded-md border-2 border-background overflow-hidden shadow-lg bg-zinc-900">
+          <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 min-h-0">
+            <div className="md:col-span-2 bg-muted rounded-lg flex flex-col p-4 gap-4 min-h-0">
+              <div className="flex-1 w-full relative bg-black rounded-md flex items-center justify-center overflow-hidden min-h-0">
+                 <video ref={remoteVideoRef} className="w-full h-full object-contain" autoPlay playsInline />
+                 {/* Local Video Preview */}
+                 <div className="absolute bottom-4 right-4 w-1/4 max-w-[200px] aspect-video rounded-md border-2 border-background overflow-hidden shadow-lg bg-zinc-900 z-10">
                     <video ref={localVideoRef} className={cn("w-full h-full object-cover", (isVideoOff && !isScreenSharing) && "hidden")} autoPlay muted playsInline />
                     {(isVideoOff && !isScreenSharing) && (
                         <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-800 text-zinc-400 gap-2">
@@ -930,13 +929,13 @@ function RoomPage() {
                     )}
                  </div>
                  {!remoteStream && isCurrentUserInCall && activeParticipants && activeParticipants.length > 1 && (
-                    <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                         <p className="text-white">Connecting...</p>
                     </div>
                  )}
               </div>
                {!hasCameraPermission && (
-                  <Alert variant="destructive">
+                  <Alert variant="destructive" className="shrink-0">
                     <AlertTitle>Camera Access Required</AlertTitle>
                     <AlertDescription>
                       Please allow camera access. Video feeds cannot be established.
@@ -944,14 +943,15 @@ function RoomPage() {
                   </Alert>
                 )}
                  {activeParticipants && activeParticipants.length < 2 && !isLoading && (
-                    <Alert>
+                    <Alert className="shrink-0">
                         <AlertTitle>Waiting for others</AlertTitle>
                         <AlertDescription>
                         You are the only one here. The call will start when someone else joins.
                         </AlertDescription>
                     </Alert>
                 )}
-                <div className="flex items-center justify-center gap-2 flex-wrap">
+                {/* Control Bar */}
+                <div className="flex items-center justify-center gap-2 flex-wrap shrink-0">
                     <Button 
                         onClick={toggleAudio} 
                         variant={(isAudioMuted || !!currentUserParticipant?.isMuted) ? "secondary" : "outline"} 
@@ -1090,30 +1090,31 @@ function RoomPage() {
                     )}
                   </div>
             </div>
-            <div className="flex flex-col gap-4">
+            {/* Sidebar with Participants and Chat */}
+            <div className="flex flex-col gap-4 min-h-0">
               {isHost && waitingList && waitingList.length > 0 && (
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Waiting Room ({waitingList.length})</CardTitle>
+                <Card className="shrink-0">
+                    <CardHeader className="py-3">
+                        <CardTitle className="text-lg">Waiting Room ({waitingList.length})</CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-2">
+                    <CardContent className="space-y-2 py-0 pb-3 max-h-[150px] overflow-y-auto">
                         {waitingList.map((p) => (
-                            <div key={p.id} className="flex items-center justify-between">
-                                <span>{p.name}</span>
-                                <Button size="sm" onClick={() => admitParticipant(p.id)}>Admit</Button>
+                            <div key={p.id} className="flex items-center justify-between text-sm">
+                                <span className="truncate mr-2">{p.name}</span>
+                                <Button size="sm" className="h-7 px-2" onClick={() => admitParticipant(p.id)}>Admit</Button>
                             </div>
                         ))}
                     </CardContent>
                 </Card>
               )}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Participants ({activeParticipants?.length || 0})</CardTitle>
+              <Card className="flex flex-col max-h-[40%] shrink-0">
+                <CardHeader className="py-3">
+                  <CardTitle className="text-lg">Participants ({activeParticipants?.length || 0})</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="flex-1 space-y-4 overflow-y-auto pt-0">
                   {activeParticipants?.map((p) => (
-                    <div key={p.id} className="flex items-center gap-4">
-                      <Avatar className="relative">
+                    <div key={p.id} className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8 relative">
                         <AvatarImage src={`https://avatar.vercel.sh/${p.id}.png`} />
                         <AvatarFallback>{p.name?.[0].toUpperCase()}</AvatarFallback>
                         <div className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5 border">
@@ -1123,60 +1124,62 @@ function RoomPage() {
                            />
                         </div>
                       </Avatar>
-                      <div className="flex-1 flex items-center gap-2">
-                        <p className="font-medium truncate max-w-[120px]">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
+                      <div className="flex-1 flex items-center gap-2 min-w-0">
+                        <p className="font-medium text-sm truncate">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
                         {isReactionRecent(p.lastReactionAt) && (
-                            <span className="text-xl animate-bounce">{p.lastReaction}</span>
+                            <span className="text-lg animate-bounce">{p.lastReaction}</span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1 shrink-0">
                         {p.hasRaisedHand && <Hand className="text-yellow-500 h-4 w-4" />}
                         {isHost && p.hasRaisedHand && (
-                            <Button size="sm" variant="ghost" onClick={() => lowerHand(p.id)}>Lower Hand</Button>
+                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => lowerHand(p.id)}>Lower</Button>
                         )}
                         {p.isMuted && <MicOff className="h-4 w-4 text-muted-foreground" />}
                         {isHost && p.id !== user?.uid && (
-                            <>
-                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => toggleParticipantMute(p.id, !!p.isMuted)}>
-                                    {p.isMuted ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+                            <div className="flex items-center">
+                                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => toggleParticipantMute(p.id, !!p.isMuted)}>
+                                    {p.isMuted ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
                                     <span className="sr-only">Mute/Unmute</span>
                                 </Button>
-                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => removeParticipant(p.id)}>
-                                    <XCircle className="h-4 w-4" />
+                                <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => removeParticipant(p.id)}>
+                                    <XCircle className="h-3 w-3" />
                                     <span className="sr-only">Remove</span>
                                 </Button>
-                            </>
+                            </div>
                         )}
                       </div>
                     </div>
                   ))}
                 </CardContent>
               </Card>
-              <Card className="flex flex-col flex-1">
-                <CardHeader>
-                  <CardTitle>Chat</CardTitle>
+              <Card className="flex flex-col flex-1 min-h-0">
+                <CardHeader className="py-3">
+                  <CardTitle className="text-lg">Chat</CardTitle>
                 </CardHeader>
-                <CardContent className="flex-1 space-y-4 overflow-hidden">
-                    <ScrollArea className="h-full pr-4">
-                        <div className="space-y-4">
+                <CardContent className="flex-1 overflow-hidden pt-0">
+                    <ScrollArea className="h-full">
+                        <div className="space-y-4 pr-4">
                         {chatMessages?.map((msg, index) => (
-                            <div key={index} className="flex gap-2 text-sm">
-                                <span className="font-bold">{msg.senderId === user?.uid ? "You" : msg.senderName}:</span>
-                                <span>{msg.text}</span>
-                                <span className="text-xs text-muted-foreground ml-auto">
-                                    {msg.createdAt ? format(new Date(msg.createdAt.seconds * 1000), 'p') : ''}
-                                </span>
+                            <div key={index} className="flex flex-col gap-1 text-sm">
+                                <div className="flex items-center justify-between">
+                                    <span className="font-bold text-xs">{msg.senderId === user?.uid ? "You" : msg.senderName}</span>
+                                    <span className="text-[10px] text-muted-foreground">
+                                        {msg.createdAt ? format(new Date(msg.createdAt.seconds * 1000), 'p') : ''}
+                                    </span>
+                                </div>
+                                <span className="bg-secondary/30 rounded-lg p-2 break-words">{msg.text}</span>
                             </div>
                         ))}
                         <div ref={messagesEndRef} />
                         </div>
                     </ScrollArea>
                 </CardContent>
-                <CardFooter>
+                <CardFooter className="p-3 shrink-0">
                     <div className="flex w-full items-center gap-2">
                         <Textarea
-                            placeholder="Type a message..."
-                            className="flex-1"
+                            placeholder="Message..."
+                            className="flex-1 min-h-[40px] max-h-[80px] text-sm py-2 resize-none"
                             value={chatInput}
                             onChange={(e) => setChatInput(e.target.value)}
                             onKeyDown={(e) => {
@@ -1186,7 +1189,7 @@ function RoomPage() {
                                 }
                             }}
                         />
-                        <Button onClick={handleSendMessage} size="icon">
+                        <Button onClick={handleSendMessage} size="icon" className="h-10 w-10 shrink-0">
                             <Send className="h-4 w-4" />
                         </Button>
                     </div>
