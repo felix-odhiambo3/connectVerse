@@ -18,48 +18,45 @@ function Calendar({
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
-      className={cn("p-4", className)}
+      className={cn("p-4 bg-white rounded-xl shadow-sm border", className)}
       classNames={{
         months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
         month: "space-y-4",
-        caption: "flex justify-center pt-1 relative items-center mb-4",
-        caption_label: "text-sm font-semibold",
-        nav: "space-x-1 flex items-center",
+        caption: "flex justify-between pt-1 relative items-center px-2 mb-2",
+        caption_label: "text-sm font-semibold text-zinc-900",
+        nav: "flex items-center gap-1",
         nav_button: cn(
-          buttonVariants({ variant: "outline" }),
-          "h-8 w-8 bg-transparent p-0 opacity-60 hover:opacity-100 transition-opacity"
+          buttonVariants({ variant: "ghost" }),
+          "h-8 w-8 bg-transparent p-0 opacity-70 hover:opacity-100 hover:bg-zinc-100 rounded-full transition-all"
         ),
-        nav_button_previous: "absolute left-1",
-        nav_button_next: "absolute right-1",
+        nav_button_previous: "",
+        nav_button_next: "",
         table: "w-full border-collapse space-y-1",
-        head_row: "flex justify-between",
-        head_cell:
-          "text-muted-foreground rounded-md w-9 font-medium text-[0.8rem] text-center",
-        row: "flex w-full mt-2 justify-between",
-        cell: "h-9 w-9 text-center text-sm p-0 relative focus-within:relative focus-within:z-20",
+        head_row: "flex justify-between mb-2",
+        head_cell: "text-zinc-400 rounded-md w-9 font-medium text-[0.75rem] uppercase tracking-wider text-center",
+        row: "flex w-full mt-1 justify-between",
+        cell: cn(
+          "relative p-0 text-center text-sm focus-within:relative focus-within:z-20 [&:has([aria-selected])]:bg-accent/50 first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md"
+        ),
         day: cn(
           buttonVariants({ variant: "ghost" }),
-          "h-9 w-9 p-0 font-normal aria-selected:opacity-100 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors"
+          "h-9 w-9 p-0 font-normal aria-selected:opacity-100 rounded-full hover:bg-zinc-100 hover:text-zinc-900 transition-colors cursor-pointer"
         ),
+        day_range_start: "day-range-start",
         day_range_end: "day-range-end",
         day_selected:
-          "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground font-bold shadow-sm",
-        day_today: "bg-accent text-accent-foreground font-semibold",
+          "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground font-bold shadow-md",
+        day_today: "bg-zinc-100 text-zinc-900 font-bold",
         day_outside:
-          "day-outside text-muted-foreground opacity-40 aria-selected:bg-accent/50 aria-selected:text-muted-foreground aria-selected:opacity-30",
-        day_disabled: "text-muted-foreground opacity-20 pointer-events-none",
-        day_range_middle:
-          "aria-selected:bg-accent aria-selected:text-accent-foreground",
+          "day-outside text-zinc-300 opacity-50 aria-selected:bg-accent/50 aria-selected:text-zinc-300 aria-selected:opacity-30",
+        day_disabled: "text-zinc-200 opacity-50 pointer-events-none cursor-not-allowed",
+        day_range_middle: "aria-selected:bg-accent aria-selected:text-accent-foreground",
         day_hidden: "invisible",
         ...classNames,
       }}
       components={{
-        IconLeft: ({ ...props }) => (
-          <ChevronLeft className="h-4 w-4" />
-        ),
-        IconRight: ({ ...props }) => (
-          <ChevronRight className="h-4 w-4" />
-        ),
+        IconLeft: ({ ...props }) => <ChevronLeft className="h-4 w-4" />,
+        IconRight: ({ ...props }) => <ChevronRight className="h-4 w-4" />,
       }}
       {...props}
     />
