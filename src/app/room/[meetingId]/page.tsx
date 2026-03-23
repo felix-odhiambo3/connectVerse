@@ -36,6 +36,65 @@ import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
 
+/**
+ * AudioVisualizer component that renders moving bars based on a MediaStream.
+ */
+function AudioVisualizer({ stream, isMuted }: { stream: MediaStream | null; isMuted: boolean }) {
+  const [frequencies, setFrequencies] = useState<number[]>(new Array(4).fill(0));
+  const animationRef = useRef<number>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    if (!stream || isMuted || stream.getAudioTracks().length === 0) {
+      setFrequencies(new Array(4).fill(0));
+      return;
+    }
+
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioContextRef.current = audioContext;
+    const analyser = audioContext.createAnalyser();
+    analyserRef.current = analyser;
+    analyser.fftSize = 32;
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyser);
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    
+    const update = () => {
+      if (!analyserRef.current) return;
+      analyserRef.current.getByteFrequencyData(dataArray);
+      // Take a few samples from the frequency data
+      const newFrequencies = [
+        dataArray[1],
+        dataArray[3],
+        dataArray[5],
+        dataArray[7],
+      ].map(v => (v / 255) * 100);
+      setFrequencies(newFrequencies);
+      animationRef.current = requestAnimationFrame(update);
+    };
+
+    update();
+
+    return () => {
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (audioContextRef.current) audioContextRef.current.close();
+    };
+  }, [stream, isMuted]);
+
+  return (
+    <div className="flex items-end gap-0.5 h-4 w-6">
+      {frequencies.map((f, i) => (
+        <div
+          key={i}
+          className="w-1 bg-primary rounded-full transition-all duration-75 ease-out"
+          style={{ height: `${Math.max(2, f)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
 
 // Firestore collections
 const MEETINGS_COLLECTION = 'meetings';
@@ -975,9 +1034,16 @@ function RoomPage() {
                 <CardContent className="space-y-4">
                   {activeParticipants?.map((p) => (
                     <div key={p.id} className="flex items-center gap-4">
-                      <Avatar>
+                      <Avatar className="relative">
                         <AvatarImage src={`https://avatar.vercel.sh/${p.id}.png`} />
                         <AvatarFallback>{p.name?.[0].toUpperCase()}</AvatarFallback>
+                        {/* Audio activity indicator in participant list */}
+                        <div className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5 border">
+                           <AudioVisualizer 
+                             stream={p.id === user?.uid ? localStream : (activeParticipants.findIndex(ap => ap.id === p.id) === 1 ? remoteStream : null)} 
+                             isMuted={!!p.isMuted || (p.id === user?.uid && isAudioMuted)} 
+                           />
+                        </div>
                       </Avatar>
                       <div className="flex-1">
                         <p className="font-medium">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
