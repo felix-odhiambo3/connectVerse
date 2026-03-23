@@ -29,7 +29,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -197,6 +197,7 @@ function RoomPage() {
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [isStatsDialogOpen, setIsStatsDialogOpen] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -215,6 +216,7 @@ function RoomPage() {
   const { data: meetingData } = useDoc<{ 
     hostId: string; 
     createdAt: { seconds: number; }; 
+    endedAt?: { seconds: number; };
     status: string;
     isLocked?: boolean;
     isRecording?: boolean;
@@ -405,10 +407,7 @@ function RoomPage() {
   
   useEffect(() => {
       if (meetingData?.status === 'finished') {
-          toast({
-              title: "Meeting Ended",
-              description: "The host has ended the meeting for all participants.",
-          });
+          setShowSummary(true);
           
           if (isHost) {
             const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
@@ -418,9 +417,8 @@ function RoomPage() {
                 return batch.commit();
             });
           }
-          router.push('/dashboard');
       }
-  }, [meetingData?.status, router, toast, firestore, meetingId, isHost]);
+  }, [meetingData?.status, firestore, meetingId, isHost]);
 
   useEffect(() => {
     if (meetingData?.status === 'scheduled') return;
@@ -526,7 +524,7 @@ function RoomPage() {
     useEffect(() => {
         if (!user || areParticipantsLoading || meetingData?.status === 'scheduled' || !participants) return;
 
-        if (hasSeenSelfInList) {
+        if (hasSeenSelfInList && !showSummary) {
             const isCurrentlyInList = participants.some(p => p.id === user.uid);
             if (!isCurrentlyInList) {
                 toast({
@@ -536,7 +534,7 @@ function RoomPage() {
                 router.push('/dashboard');
             }
         }
-    }, [participants, user, router, toast, hasSeenSelfInList, areParticipantsLoading, meetingData?.status]);
+    }, [participants, user, router, toast, hasSeenSelfInList, areParticipantsLoading, meetingData?.status, showSummary]);
 
     useEffect(() => {
         if (!meetingData || !participants || !user || !meetingRef) return;
@@ -544,7 +542,7 @@ function RoomPage() {
         const hostIsPresent = participants.some(p => p.id === meetingData.hostId);
         const activeParticipantsList = participants?.filter(p => p.role === 'host' || p.role === 'participant');
 
-        if (!hostIsPresent && activeParticipantsList.length > 0) {
+        if (!hostIsPresent && activeParticipantsList.length > 0 && meetingData.status !== 'finished') {
             const newHost = activeParticipantsList[0];
             if (newHost.id === user.uid) {
                 updateDocumentNonBlocking(meetingRef, { hostId: newHost.id });
@@ -584,7 +582,7 @@ function RoomPage() {
     };
 
 
-    if (!localStream || !user || !activeParticipantsInEffect || activeParticipantsInEffect.length < 2 || isUserInWaitingRoom) {
+    if (!localStream || !user || !activeParticipantsInEffect || activeParticipantsInEffect.length < 2 || isUserInWaitingRoom || showSummary) {
       if (peerConnectionRef.current) {
         cleanupPeerConnection();
         if (activeParticipantsInEffect && activeParticipantsInEffect.length > 0 && activeParticipantsInEffect[0].id === user.uid) {
@@ -719,7 +717,7 @@ function RoomPage() {
        }
     }
 
-  }, [localStream, meetingId, firestore, user, activeParticipantIds, isUserInWaitingRoom, participants, isScreenSharing, screenStream]);
+  }, [localStream, meetingId, firestore, user, activeParticipantIds, isUserInWaitingRoom, participants, isScreenSharing, screenStream, showSummary]);
   
     useEffect(() => {
         if (localStream) {
@@ -823,7 +821,10 @@ function RoomPage() {
 
   const endMeetingForAll = () => {
     if (isHost && meetingRef) {
-      updateDocumentNonBlocking(meetingRef, { status: 'finished' });
+      updateDocumentNonBlocking(meetingRef, { 
+        status: 'finished',
+        endedAt: serverTimestamp()
+      });
     }
   };
   
@@ -957,6 +958,87 @@ function RoomPage() {
             </Card>
         </div>
       </AuthGuard>
+    );
+  }
+
+  // Attendance Summary View
+  if (showSummary && meetingData?.status === 'finished') {
+    const totalMeetingSeconds = meetingData.endedAt 
+        ? meetingData.endedAt.seconds - meetingData.createdAt.seconds 
+        : Math.floor(Date.now() / 1000) - meetingData.createdAt.seconds;
+
+    return (
+        <AuthGuard>
+            <div className="flex h-screen w-full flex-col items-center justify-center bg-zinc-50/50 p-4">
+                <Card className="w-full max-w-2xl shadow-xl">
+                    <CardHeader className="text-center border-b bg-white rounded-t-lg">
+                        <div className="mx-auto bg-primary/10 w-12 h-12 rounded-full flex items-center justify-center mb-4">
+                            <Clock className="h-6 w-6 text-primary" />
+                        </div>
+                        <CardTitle className="text-2xl">Meeting Summary</CardTitle>
+                        <CardDescription>Final attendance report and session statistics.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6">
+                        <div className="grid grid-cols-2 gap-4 mb-8">
+                            <div className="bg-white p-4 rounded-lg border shadow-sm">
+                                <p className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">Total Duration</p>
+                                <p className="text-2xl font-bold font-mono">{formatDuration(totalMeetingSeconds)}</p>
+                            </div>
+                            <div className="bg-white p-4 rounded-lg border shadow-sm">
+                                <p className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">Requirement</p>
+                                <p className="text-2xl font-bold">70% Attendance</p>
+                            </div>
+                        </div>
+
+                        <ScrollArea className="h-[300px] rounded-md border bg-white">
+                            <Table>
+                                <TableHeader className="bg-zinc-50">
+                                    <TableRow>
+                                        <TableHead>Participant</TableHead>
+                                        <TableHead>Total Time</TableHead>
+                                        <TableHead className="text-right">Status</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {participants?.map((p) => {
+                                        const participationSeconds = p.totalDuration || 0;
+                                        const attendancePercentage = totalMeetingSeconds > 0 ? (participationSeconds / totalMeetingSeconds) : 0;
+                                        const isPresent = attendancePercentage >= 0.7;
+
+                                        return (
+                                            <TableRow key={p.id}>
+                                                <TableCell className="font-medium">
+                                                    {p.name} {p.id === user?.uid && "(You)"}
+                                                </TableCell>
+                                                <TableCell className="font-mono text-zinc-600">
+                                                    {formatDuration(participationSeconds)}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                    {isPresent ? (
+                                                        <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-green-200">
+                                                            <Trophy className="h-3 w-3 mr-1" /> Present
+                                                        </Badge>
+                                                    ) : (
+                                                        <Badge variant="secondary" className="bg-zinc-100 text-zinc-600">
+                                                            <Frown className="h-3 w-3 mr-1" /> Absent
+                                                        </Badge>
+                                                    )}
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })}
+                                </TableBody>
+                            </Table>
+                        </ScrollArea>
+                    </CardContent>
+                    <CardFooter className="bg-zinc-50/50 border-t p-6">
+                        <Button className="w-full" onClick={() => router.push('/dashboard')}>
+                            Back to Dashboard
+                        </Button>
+                    </CardFooter>
+                </Card>
+            </div>
+        </AuthGuard>
     );
   }
 
