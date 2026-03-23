@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
 import { addDoc, collection, serverTimestamp, query, where, doc, deleteDoc, updateDoc } from 'firebase/firestore';
@@ -49,6 +49,11 @@ export default function DashboardPage() {
       time: "12:00",
     },
   });
+
+  // Set initial date on mount to avoid hydration mismatch while ensuring UX requirements
+  useEffect(() => {
+    form.setValue('date', new Date());
+  }, [form]);
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user || !firestore) return null;
@@ -147,7 +152,11 @@ export default function DashboardPage() {
         });
         toast({ title: "Meeting scheduled successfully!" });
         setOpenScheduleDialog(false);
-        form.reset();
+        form.reset({
+            name: "",
+            date: new Date(),
+            time: "12:00"
+        });
     } catch (error) {
         console.error("Error scheduling meeting:", error);
         toast({
