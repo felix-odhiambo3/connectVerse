@@ -130,55 +130,86 @@ export default function RoomPage() {
 
   // Initialize Media (Camera/Mic)
   useEffect(() => {
+    let active = true;
+
     const getMediaPermission = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        console.error('MediaDevices.getUserMedia() not supported');
+        return;
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        setHasMediaPermission(true);
-        localStreamRef.current = stream;
+        
+        if (!active) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
 
-        // Apply stream to video elements initially
-        if (mainVideoRef.current && !isScreenSharing) mainVideoRef.current.srcObject = stream;
-        if (miniVideoRef.current) miniVideoRef.current.srcObject = stream;
+        localStreamRef.current = stream;
+        setHasMediaPermission(true);
+
+        // Update video elements
+        if (mainVideoRef.current && !isScreenSharing) {
+          mainVideoRef.current.srcObject = stream;
+        }
+        if (miniVideoRef.current) {
+          miniVideoRef.current.srcObject = stream;
+        }
         
         stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
         stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
-      } catch (error) {
-        console.error('Error accessing media:', error);
-        setHasMediaPermission(false);
-        toast({
-          variant: 'destructive',
-          title: 'Media Access Denied',
-          description: 'Please enable camera and microphone permissions in your browser settings.',
-        });
+      } catch (error: any) {
+        if (active) {
+          console.error('Error accessing media:', error);
+          setHasMediaPermission(false);
+          // Only show toast for actual denials or errors, not aborts
+          if (error.name !== 'AbortError') {
+            toast({
+              variant: 'destructive',
+              title: 'Media Access Error',
+              description: error.message || 'Please enable camera and microphone permissions.',
+            });
+          }
+        }
       }
     };
 
-    if (!localStreamRef.current && hasMediaPermission !== false) {
+    if (!localStreamRef.current && hasMediaPermission === null) {
       getMediaPermission();
     }
 
     return () => {
+      active = false;
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
       }
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
       }
     };
   }, []);
 
-  // Effect to sync video elements with current streams and states
+  // Sync video elements with current streams
   useEffect(() => {
     if (mainVideoRef.current) {
       if (isScreenSharing && screenStreamRef.current) {
-        mainVideoRef.current.srcObject = screenStreamRef.current;
+        if (mainVideoRef.current.srcObject !== screenStreamRef.current) {
+          mainVideoRef.current.srcObject = screenStreamRef.current;
+        }
       } else if (localStreamRef.current) {
-        mainVideoRef.current.srcObject = localStreamRef.current;
+        if (mainVideoRef.current.srcObject !== localStreamRef.current) {
+          mainVideoRef.current.srcObject = localStreamRef.current;
+        }
       }
     }
     
     if (miniVideoRef.current && localStreamRef.current) {
-      miniVideoRef.current.srcObject = localStreamRef.current;
+      if (miniVideoRef.current.srcObject !== localStreamRef.current) {
+        miniVideoRef.current.srcObject = localStreamRef.current;
+      }
     }
 
     if (localStreamRef.current) {
@@ -187,7 +218,7 @@ export default function RoomPage() {
     }
   }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission]);
 
-  // Update current time for live calculations
+  // Update current time
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
     return () => clearInterval(interval);
@@ -207,7 +238,7 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  // Join/Update participant status and track cumulative participation
+  // Join/Update participant
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -226,9 +257,8 @@ export default function RoomPage() {
       if (meetingData.status === 'active' || meetingData.status === 'pending' || meetingData.status === 'scheduled') {
         const participantJoinedAtSeconds = currentUserParticipant?.joinedAt?.seconds || currentTime;
         const currentDuration = (currentUserParticipant?.totalDuration || 0) + 
-          (currentUserParticipant?.activeSegmentStart ? (currentTime - currentUserParticipant.activeSegmentStart.seconds) : 0);
+          (currentUserParticipant?.activeSegmentStart ? (currentTime - (currentUserParticipant.activeSegmentStart.seconds || currentTime)) : 0);
         
-        // Cap duration to the time since the meeting started
         const meetingStartTime = meetingData.createdAt?.seconds || currentTime;
         const maxPossibleDuration = currentTime - meetingStartTime;
         const cappedTotal = Math.max(0, Math.min(currentDuration, maxPossibleDuration));
@@ -594,7 +624,7 @@ export default function RoomPage() {
                           </TableHeader>
                           <TableBody>
                              {participants?.filter(p => p.role !== 'left').map(p => {
-                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
                                const meetingStartTime = meetingData?.createdAt?.seconds || currentTime;
                                const maxPossibleDuration = currentTime - meetingStartTime;
                                const cappedDuration = Math.max(0, Math.min(durationSeconds, maxPossibleDuration));
