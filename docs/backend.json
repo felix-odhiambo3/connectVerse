@@ -101,6 +101,10 @@
           "type": "boolean",
           "description": "Indicates if the meeting is currently being recorded."
         },
+        "screenSharerId": {
+          "type": "string",
+          "description": "UID of the participant currently sharing their screen."
+        },
         "participantPermissions": {
           "type": "object",
           "properties": {

@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -96,6 +97,7 @@ export default function RoomPage() {
   const miniVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const isInitializingMedia = useRef(false);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -130,14 +132,12 @@ export default function RoomPage() {
 
   // Initialize Media (Camera/Mic)
   useEffect(() => {
+    if (isInitializingMedia.current) return;
+    isInitializingMedia.current = true;
+
     let isSubscribed = true;
 
     const getMediaPermission = async () => {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        console.error('MediaDevices.getUserMedia() not supported');
-        return;
-      }
-
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         
@@ -149,10 +149,6 @@ export default function RoomPage() {
         localStreamRef.current = stream;
         setHasMediaPermission(true);
 
-        // Update video elements directly once stream is obtained
-        if (mainVideoRef.current && !isScreenSharing) {
-          mainVideoRef.current.srcObject = stream;
-        }
         if (miniVideoRef.current) {
           miniVideoRef.current.srcObject = stream;
         }
@@ -167,10 +163,12 @@ export default function RoomPage() {
             toast({
               variant: 'destructive',
               title: 'Media Access Error',
-              description: error.message || 'Please enable camera and microphone permissions.',
+              description: 'Please enable camera and microphone permissions.',
             });
           }
         }
+      } finally {
+        isInitializingMedia.current = false;
       }
     };
 
@@ -190,6 +188,26 @@ export default function RoomPage() {
       }
     };
   }, []);
+
+  // Priority Logic for Screen Sharing
+  useEffect(() => {
+    if (!meetingData || !user) return;
+
+    const currentSharer = meetingData.screenSharerId;
+
+    // If I am sharing locally but someone else (like a host) has taken over in Firestore
+    if (isScreenSharing && currentSharer !== user.uid) {
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
+      }
+      setIsScreenSharing(false);
+      toast({
+        title: "Screen Share Ended",
+        description: "Another user is now sharing their screen.",
+      });
+    }
+  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing]);
 
   // Sync video elements with current streams
   useEffect(() => {
@@ -311,15 +329,35 @@ export default function RoomPage() {
         screenStreamRef.current = null;
       }
       setIsScreenSharing(false);
+      if (firestore && meetingId) {
+        updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
+      }
     } else {
+      // Logic for only allowing one sharer at a time with host priority
+      if (meetingData?.screenSharerId && !isHost) {
+        toast({
+          variant: "destructive",
+          title: "Cannot Share Screen",
+          description: "Someone else is already sharing. Only the host can override a shared screen.",
+        });
+        return;
+      }
+
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         screenStreamRef.current = stream;
         setIsScreenSharing(true);
 
+        if (firestore && meetingId && user) {
+          updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
+        }
+
         stream.getVideoTracks()[0].onended = () => {
           setIsScreenSharing(false);
           screenStreamRef.current = null;
+          if (firestore && meetingId) {
+            updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
+          }
         };
       } catch (err) {
         console.error("Error sharing screen:", err);
@@ -350,6 +388,7 @@ export default function RoomPage() {
     batch.update(meetingRef, {
       status: 'finished',
       endedAt: serverTimestamp(),
+      screenSharerId: null
     });
 
     for (const p of participants) {
@@ -511,7 +550,7 @@ export default function RoomPage() {
               
               <div className="absolute top-6 left-6 flex items-center gap-2">
                 <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-md border-none px-3 py-1">
-                  {isScreenSharing ? "Sharing Screen" : `${currentUserParticipant?.name} (You)`}
+                  {meetingData?.screenSharerId ? `Screen: ${participants?.find(p => p.id === meetingData.screenSharerId)?.name}` : `${currentUserParticipant?.name} (You)`}
                 </Badge>
               </div>
 
