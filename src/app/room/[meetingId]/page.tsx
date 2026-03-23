@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -130,7 +129,7 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
-  // Initialize Media (Camera/Mic)
+  // Robust Media Initialization
   useEffect(() => {
     if (isInitializingMedia.current) return;
     isInitializingMedia.current = true;
@@ -189,26 +188,6 @@ export default function RoomPage() {
     };
   }, []);
 
-  // Priority Logic for Screen Sharing
-  useEffect(() => {
-    if (!meetingData || !user) return;
-
-    const currentSharer = meetingData.screenSharerId;
-
-    // If I am sharing locally but someone else (like a host) has taken over in Firestore
-    if (isScreenSharing && currentSharer !== user.uid) {
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(track => track.stop());
-        screenStreamRef.current = null;
-      }
-      setIsScreenSharing(false);
-      toast({
-        title: "Screen Share Ended",
-        description: "Another user is now sharing their screen.",
-      });
-    }
-  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing]);
-
   // Sync video elements with current streams
   useEffect(() => {
     const mainVideo = mainVideoRef.current;
@@ -223,6 +202,8 @@ export default function RoomPage() {
         if (mainVideo.srcObject !== localStreamRef.current) {
           mainVideo.srcObject = localStreamRef.current;
         }
+      } else {
+        mainVideo.srcObject = null;
       }
     }
     
@@ -236,7 +217,26 @@ export default function RoomPage() {
       localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
       localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
     }
-  }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission]);
+  }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission, meetingData?.screenSharerId]);
+
+  // Priority Logic for Screen Sharing
+  useEffect(() => {
+    if (!meetingData || !user) return;
+
+    const currentSharer = meetingData.screenSharerId;
+
+    if (isScreenSharing && currentSharer && currentSharer !== user.uid) {
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
+      }
+      setIsScreenSharing(false);
+      toast({
+        title: "Screen Share Overridden",
+        description: "The host or another user is now sharing their screen.",
+      });
+    }
+  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing]);
 
   // Update current time
   useEffect(() => {
@@ -333,7 +333,6 @@ export default function RoomPage() {
         updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
       }
     } else {
-      // Logic for only allowing one sharer at a time with host priority
       if (meetingData?.screenSharerId && !isHost) {
         toast({
           variant: "destructive",
@@ -592,7 +591,6 @@ export default function RoomPage() {
               )}
             </div>
 
-            {/* Bottom Controls Bar */}
             <div className="h-20 bg-card rounded-3xl border shadow-lg flex items-center justify-center px-6 gap-2 sm:gap-4 shrink-0">
                <Button 
                  variant={isAudioMuted ? "destructive" : "secondary"} 
@@ -700,7 +698,6 @@ export default function RoomPage() {
             </div>
           </div>
 
-          {/* Right Sidebar */}
           <Card className="w-80 flex flex-col overflow-hidden border shadow-lg shrink-0 rounded-3xl">
              <Tabs defaultValue="participants" className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-4 pt-4 border-b">
