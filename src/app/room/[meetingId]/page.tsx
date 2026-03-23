@@ -8,9 +8,6 @@ import {
   collection,
   serverTimestamp,
   addDoc,
-  onSnapshot,
-  getDocs,
-  writeBatch,
   query,
   orderBy,
   getDoc,
@@ -18,22 +15,17 @@ import {
   updateDoc,
   increment,
   arrayUnion,
-  where,
+  writeBatch,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown, AlertCircle, Download, FileText, TrendingUp, BookOpen, MessageSquare, Users, Settings, MoreVertical } from 'lucide-react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, MoreVertical } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -97,7 +89,6 @@ export default function RoomPage() {
   const [chatInput, setChatInput] = useState('');
   const [showSummary, setShowSummary] = useState(false);
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'participants' | 'chat'>('participants');
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
   
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
@@ -147,7 +138,6 @@ export default function RoomPage() {
         if (mainVideoRef.current) mainVideoRef.current.srcObject = stream;
         if (miniVideoRef.current) miniVideoRef.current.srcObject = stream;
         
-        // Sync initial state
         stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
         stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
       } catch (error) {
@@ -170,18 +160,19 @@ export default function RoomPage() {
     };
   }, []);
 
-  // Update tracks when UI state changes
+  // Sync video streams whenever video is toggled or refs change
   useEffect(() => {
     if (localStreamRef.current) {
+      if (mainVideoRef.current && !mainVideoRef.current.srcObject) {
+        mainVideoRef.current.srcObject = localStreamRef.current;
+      }
+      if (miniVideoRef.current && !miniVideoRef.current.srcObject) {
+        miniVideoRef.current.srcObject = localStreamRef.current;
+      }
       localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
-    }
-  }, [isAudioMuted]);
-
-  useEffect(() => {
-    if (localStreamRef.current) {
       localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
     }
-  }, [isVideoOff]);
+  }, [isAudioMuted, isVideoOff, hasCameraPermission]);
 
   // Update current time for live calculations
   useEffect(() => {
@@ -191,14 +182,17 @@ export default function RoomPage() {
 
   // Track session time
   useEffect(() => {
-    if (!meetingData?.createdAt || meetingData.status === 'finished') return;
+    if (!meetingData?.createdAt || meetingData.status === 'finished') {
+        setElapsedTime('00:00:00');
+        return;
+    }
     const interval = setInterval(() => {
       const start = meetingData.createdAt.seconds * 1000;
       const diff = Math.max(0, Date.now() - start);
       setElapsedTime(formatDuration(diff / 1000));
     }, 1000);
     return () => clearInterval(interval);
-  }, [meetingData]);
+  }, [meetingData?.createdAt, meetingData?.status]);
 
   // Join/Update participant status
   useEffect(() => {
@@ -218,7 +212,7 @@ export default function RoomPage() {
     const checkpointInterval = setInterval(() => {
       if (meetingData.status === 'active' || meetingData.status === 'pending' || meetingData.status === 'scheduled') {
         const currentTotal = (currentUserParticipant?.totalDuration || 0) + 
-          (currentUserParticipant?.activeSegmentStart ? (currentTime - currentUserParticipant.activeSegmentStart.seconds) : 0);
+          (currentUserParticipant?.activeSegmentStart ? (currentTime - (currentUserParticipant.activeSegmentStart.seconds || currentTime)) : 0);
         
         const cappedTotal = meetingData.createdAt ? Math.min(currentTotal, currentTime - meetingData.createdAt.seconds) : currentTotal;
 
@@ -247,23 +241,26 @@ export default function RoomPage() {
   };
 
   const toggleMic = () => {
-    setIsAudioMuted(!isAudioMuted);
-    if (meetingRef && user) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: !isAudioMuted });
+    const nextValue = !isAudioMuted;
+    setIsAudioMuted(nextValue);
+    if (firestore && user && meetingId) {
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: nextValue });
     }
   };
 
   const toggleVideo = () => {
-    setIsVideoOff(!isVideoOff);
-    if (meetingRef && user) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: !isVideoOff });
+    const nextValue = !isVideoOff;
+    setIsVideoOff(nextValue);
+    if (firestore && user && meetingId) {
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: nextValue });
     }
   };
 
   const toggleHand = () => {
-    setHasHandRaised(!hasHandRaised);
-    if (meetingRef && user) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { hasRaisedHand: !hasHandRaised });
+    const nextValue = !hasHandRaised;
+    setHasHandRaised(nextValue);
+    if (firestore && user && meetingId) {
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { hasRaisedHand: nextValue });
     }
   };
 
@@ -280,7 +277,7 @@ export default function RoomPage() {
     });
 
     for (const p of participants) {
-      const currentDuration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+      const currentDuration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
       const cappedDuration = Math.min(currentDuration, totalSessionSeconds);
       const participationRatio = totalSessionSeconds > 0 ? cappedDuration / totalSessionSeconds : 0;
 
@@ -419,21 +416,21 @@ export default function RoomPage() {
         <main className="flex-1 flex overflow-hidden p-4 gap-4 relative">
           <div className="flex-1 flex flex-col gap-4 overflow-hidden">
             <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden flex items-center justify-center border shadow-2xl">
-              {isVideoOff ? (
+              <video 
+                ref={mainVideoRef} 
+                className={cn("w-full h-full object-cover rounded-3xl", isVideoOff && "hidden")} 
+                autoPlay 
+                muted 
+                playsInline 
+              />
+              
+              {isVideoOff && (
                 <div className="text-zinc-600 flex flex-col items-center gap-4">
                   <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center animate-pulse">
                     <UserIcon className="h-10 w-10 opacity-20" />
                   </div>
                   <p className="text-sm font-medium tracking-wide">Video is Off</p>
                 </div>
-              ) : (
-                <video 
-                  ref={mainVideoRef} 
-                  className="w-full h-full object-cover rounded-3xl" 
-                  autoPlay 
-                  muted 
-                  playsInline 
-                />
               )}
               
               <div className="absolute top-6 left-6 flex items-center gap-2">
@@ -442,12 +439,8 @@ export default function RoomPage() {
                 </Badge>
               </div>
 
-              {/* Local Mini Preview */}
               <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-800 rounded-2xl border-2 border-zinc-700 shadow-2xl overflow-hidden group">
-                 <div className="w-full h-full flex items-center justify-center">
-                    {!hasCameraPermission && (
-                      <div className="p-2 text-center text-[10px] text-zinc-400">Camera permission required</div>
-                    )}
+                 <div className="w-full h-full flex items-center justify-center relative">
                     <video 
                       ref={miniVideoRef} 
                       className={cn("w-full h-full object-cover", isVideoOff && "hidden")} 
@@ -456,6 +449,9 @@ export default function RoomPage() {
                       playsInline 
                     />
                     {isVideoOff && <VideoOff className="h-6 w-6 text-zinc-600" />}
+                    {!(hasCameraPermission) && (
+                        <div className="p-2 text-center text-[10px] text-zinc-400">Media initialization...</div>
+                    )}
                  </div>
                  <div className="absolute bottom-2 left-2">
                     {isAudioMuted && <MicOff className="h-3 w-3 text-red-500" />}
@@ -471,7 +467,7 @@ export default function RoomPage() {
               {hasCameraPermission === false && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-20 px-6">
                   <Alert variant="destructive" className="max-w-md bg-zinc-900 border-destructive">
-                    <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Camera Access Required</AlertTitle>
+                    <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Media Access Required</AlertTitle>
                     <AlertDescription>
                       Please allow camera and microphone access to participate in the video session. 
                       Check your browser settings and refresh the page.
@@ -553,7 +549,7 @@ export default function RoomPage() {
                           </TableHeader>
                           <TableBody>
                              {participants?.filter(p => p.role !== 'left').map(p => {
-                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
                                const cappedDuration = meetingData?.createdAt ? Math.min(durationSeconds, currentTime - meetingData.createdAt.seconds) : durationSeconds;
                                const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
                                const isLate = meetingData?.createdAt && p.joinedAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
@@ -605,6 +601,8 @@ export default function RoomPage() {
                       <div className="space-y-4">
                         {participants?.map(p => {
                           const isOnline = p.role !== 'left';
+                          const isLate = meetingData?.createdAt && p.joinedAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                          
                           return (
                             <div key={p.id} className={cn("flex items-center gap-3 group", !isOnline && "opacity-50")}>
                                <div className="relative">
@@ -614,11 +612,12 @@ export default function RoomPage() {
                                  {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-1 border border-background shadow-sm animate-bounce"><Hand className="h-2 w-2" /></div>}
                                </div>
                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-bold truncate flex items-center gap-1.5">
-                                     {p.name}
-                                     {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500" />}
-                                  </p>
-                                  <p className="text-[10px] text-muted-foreground flex items-center gap-2">
+                                  <div className="flex items-center gap-1.5 overflow-hidden">
+                                     <p className="text-xs font-bold truncate">{p.name}</p>
+                                     {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
+                                     {isLate && <Badge variant="destructive" className="text-[8px] h-3 px-1 py-0 shrink-0">Late</Badge>}
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
                                      {!isOnline ? <Badge variant="outline" className="text-[8px] h-3 px-1 py-0">Left</Badge> : (
                                        <>
                                          {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
@@ -652,7 +651,7 @@ export default function RoomPage() {
                             />
                          </div>
                          <p className="text-[10px] text-center text-muted-foreground leading-relaxed">
-                            Need 70% participation in <b>Session {meetingData?.sessionIndex}</b> to earn {meetingData?.fixedDurationHours}h.
+                            Need 70% participation in <b>Session {meetingData?.sessionIndex || 1}</b> to earn {meetingData?.fixedDurationHours || 1}h.
                          </p>
                       </div>
                    </div>
