@@ -130,7 +130,7 @@ export default function RoomPage() {
 
   // Initialize Media (Camera/Mic)
   useEffect(() => {
-    let active = true;
+    let isSubscribed = true;
 
     const getMediaPermission = async () => {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -141,7 +141,7 @@ export default function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         
-        if (!active) {
+        if (!isSubscribed) {
           stream.getTracks().forEach(track => track.stop());
           return;
         }
@@ -149,7 +149,7 @@ export default function RoomPage() {
         localStreamRef.current = stream;
         setHasMediaPermission(true);
 
-        // Update video elements
+        // Update video elements directly once stream is obtained
         if (mainVideoRef.current && !isScreenSharing) {
           mainVideoRef.current.srcObject = stream;
         }
@@ -160,11 +160,10 @@ export default function RoomPage() {
         stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
         stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
       } catch (error: any) {
-        if (active) {
+        if (isSubscribed) {
           console.error('Error accessing media:', error);
-          setHasMediaPermission(false);
-          // Only show toast for actual denials or errors, not aborts
           if (error.name !== 'AbortError') {
+            setHasMediaPermission(false);
             toast({
               variant: 'destructive',
               title: 'Media Access Error',
@@ -180,7 +179,7 @@ export default function RoomPage() {
     }
 
     return () => {
-      active = false;
+      isSubscribed = false;
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop());
         localStreamRef.current = null;
@@ -194,21 +193,24 @@ export default function RoomPage() {
 
   // Sync video elements with current streams
   useEffect(() => {
-    if (mainVideoRef.current) {
+    const mainVideo = mainVideoRef.current;
+    const miniVideo = miniVideoRef.current;
+
+    if (mainVideo) {
       if (isScreenSharing && screenStreamRef.current) {
-        if (mainVideoRef.current.srcObject !== screenStreamRef.current) {
-          mainVideoRef.current.srcObject = screenStreamRef.current;
+        if (mainVideo.srcObject !== screenStreamRef.current) {
+          mainVideo.srcObject = screenStreamRef.current;
         }
       } else if (localStreamRef.current) {
-        if (mainVideoRef.current.srcObject !== localStreamRef.current) {
-          mainVideoRef.current.srcObject = localStreamRef.current;
+        if (mainVideo.srcObject !== localStreamRef.current) {
+          mainVideo.srcObject = localStreamRef.current;
         }
       }
     }
     
-    if (miniVideoRef.current && localStreamRef.current) {
-      if (miniVideoRef.current.srcObject !== localStreamRef.current) {
-        miniVideoRef.current.srcObject = localStreamRef.current;
+    if (miniVideo && localStreamRef.current) {
+      if (miniVideo.srcObject !== localStreamRef.current) {
+        miniVideo.srcObject = localStreamRef.current;
       }
     }
 
@@ -255,7 +257,6 @@ export default function RoomPage() {
 
     const checkpointInterval = setInterval(() => {
       if (meetingData.status === 'active' || meetingData.status === 'pending' || meetingData.status === 'scheduled') {
-        const participantJoinedAtSeconds = currentUserParticipant?.joinedAt?.seconds || currentTime;
         const currentDuration = (currentUserParticipant?.totalDuration || 0) + 
           (currentUserParticipant?.activeSegmentStart ? (currentTime - (currentUserParticipant.activeSegmentStart.seconds || currentTime)) : 0);
         
@@ -615,11 +616,11 @@ export default function RoomPage() {
                        <Table>
                           <TableHeader>
                              <TableRow>
-                                <TableCell>Student</TableCell>
-                                <TableCell>Role</TableCell>
-                                <TableCell>Join Time</TableCell>
-                                <TableCell className="text-right">Active Time</TableCell>
-                                <TableCell className="text-right">Status</TableCell>
+                                <TableHead>Student</TableHead>
+                                <TableHead>Role</TableHead>
+                                <TableHead>Join Time</TableHead>
+                                <TableHead className="text-right">Active Time</TableHead>
+                                <TableHead className="text-right">Status</TableHead>
                              </TableRow>
                           </TableHeader>
                           <TableBody>
