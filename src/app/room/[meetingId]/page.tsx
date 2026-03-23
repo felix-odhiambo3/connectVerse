@@ -29,7 +29,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown, AlertCircle } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown, AlertCircle, Download, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -313,6 +313,10 @@ function RoomPage() {
              await copyToClipboard(shareUrl);
         }
     }
+  };
+
+  const handleDownloadPDF = () => {
+    window.print();
   };
 
   // Update current time every second for participation tracking
@@ -971,9 +975,9 @@ function RoomPage() {
     return (
         <AuthGuard>
             <div className="flex h-screen w-full flex-col items-center justify-center bg-zinc-50/50 p-4">
-                <Card className="w-full max-w-2xl shadow-xl">
-                    <CardHeader className="text-center border-b bg-white rounded-t-lg">
-                        <div className="mx-auto bg-primary/10 w-12 h-12 rounded-full flex items-center justify-center mb-4">
+                <Card className="w-full max-w-2xl shadow-xl print-report">
+                    <CardHeader className="text-center border-b bg-white rounded-t-lg print-report-header">
+                        <div className="mx-auto bg-primary/10 w-12 h-12 rounded-full flex items-center justify-center mb-4 no-print">
                             <Clock className="h-6 w-6 text-primary" />
                         </div>
                         <CardTitle className="text-2xl">Attendance Report</CardTitle>
@@ -1036,8 +1040,11 @@ function RoomPage() {
                             </Table>
                         </ScrollArea>
                     </CardContent>
-                    <CardFooter className="bg-zinc-50/50 border-t p-6">
-                        <Button className="w-full" onClick={() => router.push('/dashboard')}>
+                    <CardFooter className="bg-zinc-50/50 border-t p-6 gap-2 no-print">
+                        <Button variant="outline" className="flex-1 h-11" onClick={handleDownloadPDF}>
+                            <Download className="mr-2 h-4 w-4" /> Download PDF
+                        </Button>
+                        <Button className="flex-1 h-11" onClick={() => router.push('/dashboard')}>
                             Back to Dashboard
                         </Button>
                     </CardFooter>
