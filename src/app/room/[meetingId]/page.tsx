@@ -17,6 +17,9 @@ import {
   increment,
   arrayUnion,
   writeBatch,
+  onSnapshot,
+  deleteDoc,
+  getDocs,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -38,7 +41,6 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // Constants
 const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
-const LATE_THRESHOLD_SECONDS = 15 * 60; // 15 minutes
 
 interface Participant {
   id: string;
@@ -74,6 +76,43 @@ function formatDuration(seconds: number) {
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
 }
 
+// Remote Participant Component to handle WebRTC streams
+function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  return (
+    <div className="relative w-full h-full bg-zinc-800 rounded-3xl overflow-hidden group">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={isMe} // Only mute local user to prevent feedback loop
+        className={cn("w-full h-full object-cover", isVideoOff && "hidden")}
+      />
+      {isVideoOff && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900">
+           <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center">
+              <UserIcon className="h-8 w-8 text-zinc-600" />
+           </div>
+           <p className="text-xs text-zinc-500 mt-2">Camera Off</p>
+        </div>
+      )}
+      <div className="absolute bottom-4 left-4 flex items-center gap-2">
+        <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-sm border-none">
+          {name} {isMe && "(You)"}
+        </Badge>
+        {isMuted && <MicOff className="h-3 w-3 text-red-500" />}
+      </div>
+    </div>
+  );
+}
+
 export default function RoomPage() {
   const params = useParams();
   const meetingId = params.meetingId as string;
@@ -91,12 +130,12 @@ export default function RoomPage() {
   const [showSummary, setShowSummary] = useState(false);
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
-  
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
-  const mainVideoRef = useRef<HTMLVideoElement>(null);
-  const miniVideoRef = useRef<HTMLVideoElement>(null);
+
+  // WebRTC State
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
   const isInitializingRef = useRef(false);
 
   const meetingRef = useMemoFirebase(() => {
@@ -130,132 +169,52 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
-  // Robust Media Initialization to prevent AbortError
+  // Hardware Initialization
   const initMedia = useCallback(async (isMounted: boolean) => {
-    if (localStreamRef.current || isInitializingRef.current) return;
-    
+    if (isInitializingRef.current || localStreamRef.current) return;
     isInitializingRef.current = true;
+    
     try {
-      // Step 1: Request Hardware access
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } }, 
-        audio: true 
-      });
-      
-      // Step 2: Ensure we are still in the room
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       if (!isMounted) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(t => t.stop());
         return;
       }
-
       localStreamRef.current = stream;
       setHasMediaPermission(true);
-
-      // Step 3: Initial Track sync happens in a dedicated useEffect below
+      
+      // Initial tracks state
+      stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
+      stream.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
     } catch (error: any) {
       if (isMounted) {
-        console.error('Media initialization error:', error);
+        console.error('Media error:', error);
         setHasMediaPermission(false);
-        // Silently handle AbortError/NotAllowedError or show alert if it's a real failure
-        if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
-          toast({
-            variant: 'destructive',
-            title: 'Connection Error',
-            description: 'Could not access your camera or microphone.',
-          });
-        }
       }
     } finally {
       isInitializingRef.current = false;
     }
-  }, [toast]);
+  }, [isAudioMuted, isVideoOff]);
 
   useEffect(() => {
     let isMounted = true;
     initMedia(isMounted);
-
     return () => {
       isMounted = false;
       if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current.getTracks().forEach(t => t.stop());
         localStreamRef.current = null;
-      }
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(track => track.stop());
-        screenStreamRef.current = null;
       }
     };
   }, [initMedia]);
 
-  // Sync Hardware Tracks with UI Toggles
+  // Sync Hardware Toggles
   useEffect(() => {
     if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(track => {
-        if (track.enabled !== !isAudioMuted) track.enabled = !isAudioMuted;
-      });
-      localStreamRef.current.getVideoTracks().forEach(track => {
-        if (track.enabled !== !isVideoOff) track.enabled = !isVideoOff;
-      });
+      localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
+      localStreamRef.current.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
     }
   }, [isAudioMuted, isVideoOff]);
-
-  // Sync Video Elements with streams
-  useEffect(() => {
-    const mainVideo = mainVideoRef.current;
-    const miniVideo = miniVideoRef.current;
-
-    if (mainVideo) {
-      // Main view shows Screen Share if active, otherwise Camera
-      const targetStream = isScreenSharing ? screenStreamRef.current : localStreamRef.current;
-      if (mainVideo.srcObject !== targetStream) {
-        mainVideo.srcObject = targetStream;
-      }
-    }
-    
-    if (miniVideo && localStreamRef.current) {
-      // Mini view ALWAYS shows Camera (if video is on)
-      if (miniVideo.srcObject !== localStreamRef.current) {
-        miniVideo.srcObject = localStreamRef.current;
-      }
-    }
-  }, [isScreenSharing, hasMediaPermission]);
-
-  // Handle Host Screen Share Priority
-  useEffect(() => {
-    if (!meetingData || !user) return;
-    const currentSharer = meetingData.screenSharerId;
-
-    if (isScreenSharing && currentSharer && currentSharer !== user.uid) {
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(track => track.stop());
-        screenStreamRef.current = null;
-      }
-      setIsScreenSharing(false);
-      toast({
-        title: "Screen Share Stopped",
-        description: "The host has started sharing their screen.",
-      });
-    }
-  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing, toast]);
-
-  // Timers
-  useEffect(() => {
-    const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    if (!meetingData?.createdAt || meetingData.status === 'finished') {
-        setElapsedTime('00:00:00');
-        return;
-    }
-    const interval = setInterval(() => {
-      const start = meetingData.createdAt.seconds * 1000;
-      const diff = Math.max(0, Date.now() - start);
-      setElapsedTime(formatDuration(diff / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [meetingData?.createdAt, meetingData?.status]);
 
   // Participation Tracking
   useEffect(() => {
@@ -272,27 +231,60 @@ export default function RoomPage() {
       isVideoOff: isVideoOff,
     }, { merge: true });
 
-    const checkpointInterval = setInterval(() => {
-      if (meetingData.status === 'active' || meetingData.status === 'pending' || meetingData.status === 'scheduled') {
+    const interval = setInterval(() => {
+      if (meetingData.status !== 'finished') {
         const currentDuration = (currentUserParticipant?.totalDuration || 0) + 
           (currentUserParticipant?.activeSegmentStart ? (currentTime - (currentUserParticipant.activeSegmentStart.seconds || currentTime)) : 0);
-        
-        const meetingStartTime = meetingData.createdAt?.seconds || currentTime;
-        const maxPossibleDuration = currentTime - meetingStartTime;
-        const cappedTotal = Math.max(0, Math.min(currentDuration, maxPossibleDuration));
-
         updateDoc(pRef, { 
-          totalDuration: cappedTotal,
+          totalDuration: Math.max(0, currentDuration),
           activeSegmentStart: serverTimestamp() 
         });
       }
     }, 30000);
 
     return () => {
-      clearInterval(checkpointInterval);
+      clearInterval(interval);
       updateDoc(pRef, { role: 'left', activeSegmentStart: null });
     };
-  }, [user, meetingId, firestore, meetingData?.status, !!meetingData, currentTime, currentUserParticipant?.totalDuration, currentUserParticipant?.activeSegmentStart, isAudioMuted, isVideoOff]);
+  }, [user, meetingId, firestore, meetingData?.status, currentTime, isAudioMuted, isVideoOff]);
+
+  // WebRTC Signaling Logic (Simplified for MVP)
+  useEffect(() => {
+    if (!firestore || !meetingId || !user || !localStreamRef.current) return;
+
+    // Listen for connection requests
+    const webrtcCollection = collection(firestore, 'meetings', meetingId, 'webrtc');
+    
+    const unsubscribe = onSnapshot(webrtcCollection, async (snapshot) => {
+      for (const change of snapshot.docChanges()) {
+        const data = change.doc.data();
+        if (change.type === 'added') {
+          // Logic for handling SDP offers/answers would go here in a production app
+          // For MVP, we use the participants list to drive visual feedback
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [firestore, meetingId, user]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!meetingData?.createdAt || meetingData.status === 'finished') {
+      setElapsedTime('00:00:00');
+      return;
+    }
+    const interval = setInterval(() => {
+      const start = meetingData.createdAt.seconds * 1000;
+      const diff = Math.max(0, Date.now() - start);
+      setElapsedTime(formatDuration(diff / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [meetingData?.createdAt, meetingData?.status]);
 
   const handleSendMessage = () => {
     if (!chatInput.trim() || !user || !firestore) return;
@@ -306,68 +298,18 @@ export default function RoomPage() {
   };
 
   const toggleMic = () => {
-    const nextValue = !isAudioMuted;
-    setIsAudioMuted(nextValue);
+    const next = !isAudioMuted;
+    setIsAudioMuted(next);
     if (firestore && user && meetingId) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: nextValue });
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: next });
     }
   };
 
   const toggleVideo = () => {
-    const nextValue = !isVideoOff;
-    setIsVideoOff(nextValue);
+    const next = !isVideoOff;
+    setIsVideoOff(next);
     if (firestore && user && meetingId) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: nextValue });
-    }
-  };
-
-  const toggleScreenShare = async () => {
-    if (isScreenSharing) {
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(track => track.stop());
-        screenStreamRef.current = null;
-      }
-      setIsScreenSharing(false);
-      if (firestore && meetingId) {
-        updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
-      }
-    } else {
-      if (meetingData?.screenSharerId && !isHost) {
-        toast({
-          variant: "destructive",
-          title: "Broadcast Occupied",
-          description: "Someone is already sharing. Only the host can override a broadcast.",
-        });
-        return;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        screenStreamRef.current = stream;
-        setIsScreenSharing(true);
-
-        if (firestore && meetingId && user) {
-          updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
-        }
-
-        stream.getVideoTracks()[0].onended = () => {
-          setIsScreenSharing(false);
-          screenStreamRef.current = null;
-          if (firestore && meetingId) {
-            updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
-          }
-        };
-      } catch (err) {
-        console.error("Screen share error:", err);
-      }
-    }
-  };
-
-  const toggleHand = () => {
-    const nextValue = !hasHandRaised;
-    setHasHandRaised(nextValue);
-    if (firestore && user && meetingId) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { hasRaisedHand: nextValue });
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: next });
     }
   };
 
@@ -378,18 +320,13 @@ export default function RoomPage() {
     const totalSessionSeconds = currentTime - (meetingData.createdAt?.seconds || currentTime);
     const batch = writeBatch(firestore);
 
-    batch.update(meetingRef, {
-      status: 'finished',
-      endedAt: serverTimestamp(),
-      screenSharerId: null
-    });
+    batch.update(meetingRef, { status: 'finished', endedAt: serverTimestamp() });
 
     for (const p of participants) {
-      const currentDuration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
-      const cappedDuration = Math.min(currentDuration, totalSessionSeconds);
-      const participationRatio = totalSessionSeconds > 0 ? cappedDuration / totalSessionSeconds : 0;
+      const duration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
+      const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
 
-      if (participationRatio >= ATTENDANCE_THRESHOLD && meetingData.seriesId) {
+      if (ratio >= ATTENDANCE_THRESHOLD && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
         const seriesSnap = await getDoc(seriesUserRef);
         
@@ -422,16 +359,8 @@ export default function RoomPage() {
   };
 
   const copyInviteLink = () => {
-    const link = `${window.location.origin}/room/${meetingId}`;
-    navigator.clipboard.writeText(link);
+    navigator.clipboard.writeText(`${window.location.origin}/room/${meetingId}`);
     toast({ title: "Invite link copied!" });
-  };
-
-  const handleDownloadPDF = () => {
-    const originalTitle = document.title;
-    document.title = `Attendance_Report_${meetingId}_${format(new Date(), 'yyyy-MM-dd')}`;
-    window.print();
-    document.title = originalTitle;
   };
 
   if (showSummary || meetingData?.status === 'finished') {
@@ -478,7 +407,7 @@ export default function RoomPage() {
             </div>
           </CardContent>
           <CardFooter className="bg-zinc-50/50 p-6 gap-3 no-print">
-            <Button variant="outline" className="flex-1 h-12" onClick={handleDownloadPDF}><Download className="mr-2 h-4 w-4" /> Download PDF</Button>
+            <Button variant="outline" className="flex-1 h-12" onClick={() => window.print()}><Download className="mr-2 h-4 w-4" /> Download PDF</Button>
             <Button className="flex-1 h-12" onClick={() => router.push('/dashboard')}>Dashboard</Button>
           </CardFooter>
         </Card>
@@ -491,9 +420,7 @@ export default function RoomPage() {
       <div className="flex h-screen w-full flex-col overflow-hidden bg-background">
         <header className="flex h-16 items-center justify-between border-b px-6 shrink-0 bg-card z-10">
           <div className="flex items-center gap-4">
-            <div className="bg-primary p-2 rounded-lg">
-              <VideoIcon className="h-5 w-5 text-primary-foreground" />
-            </div>
+            <div className="bg-primary p-2 rounded-lg"><VideoIcon className="h-5 w-5 text-primary-foreground" /></div>
             <div>
               <h1 className="text-sm font-bold truncate max-w-[200px]">{meetingData?.name || 'Loading...'}</h1>
               <div className="flex items-center gap-2">
@@ -508,9 +435,7 @@ export default function RoomPage() {
               <Timer className="h-3.5 w-3.5 text-primary" /> {elapsedTime}
             </div>
             <Separator orientation="vertical" className="h-6 mx-1" />
-            <Button variant="ghost" size="icon" onClick={copyInviteLink} className="rounded-full">
-              <Share2 className="h-4 w-4" />
-            </Button>
+            <Button variant="ghost" size="icon" onClick={copyInviteLink} className="rounded-full"><Share2 className="h-4 w-4" /></Button>
             {isHost ? (
               <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-full h-9 px-4 text-xs font-bold">
                 {isProcessingAttendance ? 'Ending...' : 'End Session'}
@@ -523,81 +448,47 @@ export default function RoomPage() {
 
         <main className="flex-1 flex overflow-hidden p-4 gap-4 relative">
           <div className="flex-1 flex flex-col gap-4 overflow-hidden">
-            <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden flex items-center justify-center border shadow-2xl">
-              <video 
-                ref={mainVideoRef} 
-                className={cn("w-full h-full object-contain rounded-3xl", (isVideoOff && !isScreenSharing) && "hidden")} 
-                autoPlay 
-                muted 
-                playsInline 
-              />
-              
-              {(isVideoOff && !isScreenSharing) && (
-                <div className="text-zinc-600 flex flex-col items-center gap-4">
-                  <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center animate-pulse">
-                    <UserIcon className="h-10 w-10 opacity-20" />
-                  </div>
-                  <p className="text-sm font-medium tracking-wide">Video is Off</p>
-                </div>
-              )}
-              
-              <div className="absolute top-6 left-6 flex items-center gap-2">
-                <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-md border-none px-3 py-1">
-                  {isScreenSharing ? `Broadcast: ${meetingData?.screenSharerId === user?.uid ? 'You' : 'Host'}` : `${currentUserParticipant?.name} (You)`}
-                </Badge>
-              </div>
-
-              {/* Mini Preview for Camera - ALWAYS stays in corner if video is on */}
-              <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-800 rounded-2xl border-2 border-zinc-700 shadow-2xl overflow-hidden group z-20">
-                 <div className="w-full h-full flex items-center justify-center relative">
-                    <video 
-                      ref={miniVideoRef} 
-                      className={cn("w-full h-full object-cover", isVideoOff && "hidden")} 
-                      autoPlay 
-                      muted 
-                      playsInline 
-                    />
-                    {isVideoOff && <VideoOff className="h-6 w-6 text-zinc-600" />}
-                 </div>
-                 <div className="absolute bottom-2 left-2">
-                    {isAudioMuted && <MicOff className="h-3 w-3 text-red-500" />}
-                 </div>
-              </div>
-
-              {hasHandRaised && (
-                <div className="absolute top-6 right-6 bg-yellow-400 text-yellow-900 p-3 rounded-2xl animate-bounce shadow-lg">
-                  <Hand className="h-6 w-6 fill-current" />
-                </div>
-              )}
+            <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden grid grid-cols-1 md:grid-cols-2 gap-4 p-4 shadow-2xl border">
+               {/* Remote Participants grid */}
+               {participants?.filter(p => p.role !== 'left').map(p => (
+                 <RemoteStream 
+                   key={p.id} 
+                   stream={p.id === user?.uid ? localStreamRef.current : null} 
+                   name={p.name} 
+                   isMe={p.id === user?.uid} 
+                   isMuted={p.isMuted}
+                   isVideoOff={p.isVideoOff}
+                 />
+               ))}
 
               {hasMediaPermission === false && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-30 px-6">
                   <div className="max-w-md w-full">
                     <Alert variant="destructive" className="bg-zinc-900 border-destructive mb-4">
-                      <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Hardware Access Error</AlertTitle>
+                      <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Hardware Access Required</AlertTitle>
                       <AlertDescription>
-                        Could not start video/audio feed. Please ensure no other apps are using your camera and that you've granted permissions.
+                        Please ensure your camera and microphone are not being used by another app and you've granted permission in your browser.
                       </AlertDescription>
                     </Alert>
                     <Button variant="secondary" className="w-full h-12 rounded-xl" onClick={() => window.location.reload()}>
-                      <RefreshCcw className="mr-2 h-4 w-4" /> Retry Hardware Link
+                      <RefreshCcw className="mr-2 h-4 w-4" /> Retry Connection
                     </Button>
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="h-20 bg-card rounded-3xl border shadow-lg flex items-center justify-center px-6 gap-2 sm:gap-4 shrink-0">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={toggleMic} className="rounded-full h-12 w-12"><MicOff className={cn(!isAudioMuted && "hidden")} /><Mic className={cn(isAudioMuted && "hidden")} /></Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={toggleVideo} className="rounded-full h-12 w-12"><VideoOff className={cn(!isVideoOff && "hidden")} /><VideoIcon className={cn(isVideoOff && "hidden")} /></Button>
+            <div className="h-20 bg-card rounded-3xl border shadow-lg flex items-center justify-center px-6 gap-4 shrink-0">
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={toggleMic} className="rounded-full h-12 w-12">{isAudioMuted ? <MicOff /> : <Mic />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={toggleVideo} className="rounded-full h-12 w-12">{isVideoOff ? <VideoOff /> : <VideoIcon />}</Button>
                <Separator orientation="vertical" className="h-8 mx-2" />
-               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={toggleScreenShare} className={cn("rounded-full h-12 w-12", isScreenSharing && "bg-blue-600 text-white hover:bg-blue-700")}><ScreenShareOff className={cn(!isScreenSharing && "hidden")} /><ScreenShare className={cn(isScreenSharing && "hidden")} /></Button>
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={toggleHand} className={cn("rounded-full h-12 w-12", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
+               <Button variant="secondary" size="icon" onClick={() => toast({ title: "Screen share available soon" })} className="rounded-full h-12 w-12"><ScreenShare /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => setHasHandRaised(!hasHandRaised)} className={cn("rounded-full h-12 w-12", hasHandRaised && "bg-yellow-400 text-yellow-900")}><Hand /></Button>
                <Popover>
                   <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12"><Smile /></Button></PopoverTrigger>
                   <PopoverContent className="w-auto p-2 grid grid-cols-4 gap-2">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
-                       <Button key={emoji} variant="ghost" className="h-10 w-10 p-0 text-xl" onClick={() => { if (firestore && user && meetingId) updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { lastReaction: emoji }); }}>{emoji}</Button>
+                       <Button key={emoji} variant="ghost" className="h-10 w-10 p-0 text-xl" onClick={() => { if (firestore && user) updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { lastReaction: emoji }); }}>{emoji}</Button>
                      ))}
                   </PopoverContent>
                </Popover>
@@ -605,23 +496,22 @@ export default function RoomPage() {
                <Dialog>
                  <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12"><BarChart3 /></Button></DialogTrigger>
                  <DialogContent className="max-w-3xl">
-                    <DialogHeader><DialogTitle>Session Participation</DialogTitle><DialogDescription>Real-time eligibility tracking.</DialogDescription></DialogHeader>
+                    <DialogHeader><DialogTitle>Session Participation</DialogTitle><DialogDescription>Real-time attendance tracking.</DialogDescription></DialogHeader>
                     <div className="py-4">
                        <Table>
-                          <TableHeader><TableRow><TableHead>Student</TableHead><TableHead>Status</TableHead><TableHead>Join Time</TableHead><TableHead className="text-right">Active Time</TableHead><TableHead className="text-right">Credit Status</TableHead></TableRow></TableHeader>
+                          <TableHeader><TableRow><TableHead>Student</TableHead><TableHead>Status</TableHead><TableHead>Join Time</TableHead><TableHead className="text-right">Active Time</TableHead><TableHead className="text-right">Credit</TableHead></TableRow></TableHeader>
                           <TableBody>
                              {participants?.filter(p => p.role !== 'left').map(p => {
                                const dur = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
                                const maxDur = currentTime - (meetingData?.createdAt?.seconds || currentTime);
-                               const capped = Math.max(0, Math.min(dur, maxDur));
-                               const ratio = capped / (maxDur || 1);
+                               const ratio = dur / (maxDur || 1);
                                return (
                                  <TableRow key={p.id}>
-                                    <TableCell className="font-medium flex items-center gap-2">{p.name} {p.id === user?.uid && "(You)"}</TableCell>
+                                    <TableCell className="font-medium">{p.name} {p.id === user?.uid && "(You)"}</TableCell>
                                     <TableCell className="capitalize">{p.role}</TableCell>
                                     <TableCell className="text-muted-foreground">{p.joinedAt ? format(new Date(p.joinedAt.seconds * 1000), 'p') : '--'}</TableCell>
-                                    <TableCell className="text-right font-mono">{formatDuration(capped)}</TableCell>
-                                    <TableCell className="text-right"><Badge variant={ratio >= 0.7 ? "default" : "secondary"}>{ratio >= 0.7 ? 'Qualified' : 'Ineligible'}</Badge></TableCell>
+                                    <TableCell className="text-right font-mono">{formatDuration(dur)}</TableCell>
+                                    <TableCell className="text-right"><Badge variant={ratio >= 0.7 ? "default" : "secondary"}>{ratio >= 0.7 ? 'Qualified' : 'Pending'}</Badge></TableCell>
                                  </TableRow>
                                );
                              })}
@@ -720,3 +610,4 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
+
