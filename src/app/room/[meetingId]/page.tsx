@@ -41,6 +41,7 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // Constants
 const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
@@ -88,8 +89,8 @@ export default function RoomPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [isAudioMuted, setIsAudioMuted] = useState(true);
-  const [isVideoOff, setIsVideoOff] = useState(true);
+  const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [hasHandRaised, setHasHandRaised] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
@@ -98,6 +99,11 @@ export default function RoomPage() {
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'participants' | 'chat'>('participants');
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
+  
+  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const mainVideoRef = useRef<HTMLVideoElement>(null);
+  const miniVideoRef = useRef<HTMLVideoElement>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -130,6 +136,53 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
+  // Initialize Camera/Mic
+  useEffect(() => {
+    const getCameraPermission = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        setHasCameraPermission(true);
+        localStreamRef.current = stream;
+
+        if (mainVideoRef.current) mainVideoRef.current.srcObject = stream;
+        if (miniVideoRef.current) miniVideoRef.current.srcObject = stream;
+        
+        // Sync initial state
+        stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
+        stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
+      } catch (error) {
+        console.error('Error accessing camera:', error);
+        setHasCameraPermission(false);
+        toast({
+          variant: 'destructive',
+          title: 'Media Access Denied',
+          description: 'Please enable camera and microphone permissions in your browser settings.',
+        });
+      }
+    };
+
+    getCameraPermission();
+
+    return () => {
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  // Update tracks when UI state changes
+  useEffect(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
+    }
+  }, [isAudioMuted]);
+
+  useEffect(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
+    }
+  }, [isVideoOff]);
+
   // Update current time for live calculations
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
@@ -152,7 +205,6 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     
-    // Use a checkpointing strategy: update total duration when leaving or periodically
     setDoc(pRef, {
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
@@ -164,11 +216,14 @@ export default function RoomPage() {
     }, { merge: true });
 
     const checkpointInterval = setInterval(() => {
-      if (meetingData.status === 'active' || meetingData.status === 'pending') {
+      if (meetingData.status === 'active' || meetingData.status === 'pending' || meetingData.status === 'scheduled') {
         const currentTotal = (currentUserParticipant?.totalDuration || 0) + 
           (currentUserParticipant?.activeSegmentStart ? (currentTime - currentUserParticipant.activeSegmentStart.seconds) : 0);
+        
+        const cappedTotal = meetingData.createdAt ? Math.min(currentTotal, currentTime - meetingData.createdAt.seconds) : currentTotal;
+
         updateDoc(pRef, { 
-          totalDuration: Math.min(currentTotal, currentTime - meetingData.createdAt.seconds),
+          totalDuration: cappedTotal,
           activeSegmentStart: serverTimestamp() 
         });
       }
@@ -216,7 +271,7 @@ export default function RoomPage() {
     if (!isHost || !meetingRef || !firestore || !participants) return;
     setIsProcessingAttendance(true);
 
-    const totalSessionSeconds = currentTime - meetingData.createdAt.seconds;
+    const totalSessionSeconds = currentTime - (meetingData.createdAt?.seconds || currentTime);
     const batch = writeBatch(firestore);
 
     batch.update(meetingRef, {
@@ -227,7 +282,7 @@ export default function RoomPage() {
     for (const p of participants) {
       const currentDuration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
       const cappedDuration = Math.min(currentDuration, totalSessionSeconds);
-      const participationRatio = cappedDuration / totalSessionSeconds;
+      const participationRatio = totalSessionSeconds > 0 ? cappedDuration / totalSessionSeconds : 0;
 
       if (participationRatio >= ATTENDANCE_THRESHOLD && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
@@ -265,6 +320,13 @@ export default function RoomPage() {
     const link = `${window.location.origin}/room/${meetingId}`;
     navigator.clipboard.writeText(link);
     toast({ title: "Invite link copied!", description: "Share this link with participants." });
+  };
+
+  const handleDownloadPDF = () => {
+    const originalTitle = document.title;
+    document.title = `Attendance_Report_${meetingId}_${format(new Date(), 'yyyy-MM-dd')}`;
+    window.print();
+    document.title = originalTitle;
   };
 
   if (showSummary || meetingData?.status === 'finished') {
@@ -311,7 +373,7 @@ export default function RoomPage() {
             </div>
           </CardContent>
           <CardFooter className="bg-zinc-50/50 p-6 gap-3 no-print">
-            <Button variant="outline" className="flex-1 h-12" onClick={() => window.print()}><Download className="mr-2 h-4 w-4" /> Save Report</Button>
+            <Button variant="outline" className="flex-1 h-12" onClick={handleDownloadPDF}><Download className="mr-2 h-4 w-4" /> Download PDF</Button>
             <Button className="flex-1 h-12" onClick={() => router.push('/dashboard')}>Dashboard</Button>
           </CardFooter>
         </Card>
@@ -357,12 +419,22 @@ export default function RoomPage() {
         <main className="flex-1 flex overflow-hidden p-4 gap-4 relative">
           <div className="flex-1 flex flex-col gap-4 overflow-hidden">
             <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden flex items-center justify-center border shadow-2xl">
-              <div className="text-zinc-600 flex flex-col items-center gap-4">
-                <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center animate-pulse">
-                  <UserIcon className="h-10 w-10 opacity-20" />
+              {isVideoOff ? (
+                <div className="text-zinc-600 flex flex-col items-center gap-4">
+                  <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center animate-pulse">
+                    <UserIcon className="h-10 w-10 opacity-20" />
+                  </div>
+                  <p className="text-sm font-medium tracking-wide">Video is Off</p>
                 </div>
-                <p className="text-sm font-medium tracking-wide">Connecting to video feed...</p>
-              </div>
+              ) : (
+                <video 
+                  ref={mainVideoRef} 
+                  className="w-full h-full object-cover rounded-3xl" 
+                  autoPlay 
+                  muted 
+                  playsInline 
+                />
+              )}
               
               <div className="absolute top-6 left-6 flex items-center gap-2">
                 <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-md border-none px-3 py-1">
@@ -373,7 +445,17 @@ export default function RoomPage() {
               {/* Local Mini Preview */}
               <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-800 rounded-2xl border-2 border-zinc-700 shadow-2xl overflow-hidden group">
                  <div className="w-full h-full flex items-center justify-center">
-                    {isVideoOff ? <VideoOff className="h-6 w-6 text-zinc-600" /> : <VideoIcon className="h-6 w-6 text-zinc-400" />}
+                    {!hasCameraPermission && (
+                      <div className="p-2 text-center text-[10px] text-zinc-400">Camera permission required</div>
+                    )}
+                    <video 
+                      ref={miniVideoRef} 
+                      className={cn("w-full h-full object-cover", isVideoOff && "hidden")} 
+                      autoPlay 
+                      muted 
+                      playsInline 
+                    />
+                    {isVideoOff && <VideoOff className="h-6 w-6 text-zinc-600" />}
                  </div>
                  <div className="absolute bottom-2 left-2">
                     {isAudioMuted && <MicOff className="h-3 w-3 text-red-500" />}
@@ -383,6 +465,18 @@ export default function RoomPage() {
               {hasHandRaised && (
                 <div className="absolute top-6 right-6 bg-yellow-400 text-yellow-900 p-3 rounded-2xl animate-bounce shadow-lg">
                   <Hand className="h-6 w-6 fill-current" />
+                </div>
+              )}
+
+              {hasCameraPermission === false && (
+                <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-20 px-6">
+                  <Alert variant="destructive" className="max-w-md bg-zinc-900 border-destructive">
+                    <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Camera Access Required</AlertTitle>
+                    <AlertDescription>
+                      Please allow camera and microphone access to participate in the video session. 
+                      Check your browser settings and refresh the page.
+                    </AlertDescription>
+                  </Alert>
                 </div>
               )}
             </div>
@@ -459,10 +553,14 @@ export default function RoomPage() {
                           </TableHeader>
                           <TableBody>
                              {participants?.filter(p => p.role !== 'left').map(p => {
-                               const duration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+                               const cappedDuration = meetingData?.createdAt ? Math.min(durationSeconds, currentTime - meetingData.createdAt.seconds) : durationSeconds;
                                const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
                                const isLate = meetingData?.createdAt && p.joinedAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                                
+                               const meetingDuration = meetingData?.createdAt ? (currentTime - meetingData.createdAt.seconds) : 1;
+                               const ratio = cappedDuration / (meetingDuration || 1);
+
                                return (
                                  <TableRow key={p.id}>
                                     <TableCell className="font-medium flex items-center gap-2">
@@ -471,10 +569,10 @@ export default function RoomPage() {
                                     </TableCell>
                                     <TableCell className="capitalize">{p.role}</TableCell>
                                     <TableCell className="text-muted-foreground">{format(joinDate, 'p')}</TableCell>
-                                    <TableCell className="text-right font-mono">{formatDuration(duration)}</TableCell>
+                                    <TableCell className="text-right font-mono">{formatDuration(cappedDuration)}</TableCell>
                                     <TableCell className="text-right">
-                                       <Badge variant={duration / (currentTime - meetingData?.createdAt?.seconds || 1) >= 0.7 ? "default" : "secondary"}>
-                                          {duration / (currentTime - meetingData?.createdAt?.seconds || 1) >= 0.7 ? 'Present' : 'Low Active'}
+                                       <Badge variant={ratio >= 0.7 ? "default" : "secondary"}>
+                                          {ratio >= 0.7 ? 'Present' : 'Low Active'}
                                        </Badge>
                                     </TableCell>
                                  </TableRow>
@@ -505,35 +603,38 @@ export default function RoomPage() {
                 <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
                    <ScrollArea className="flex-1 p-4">
                       <div className="space-y-4">
-                        {participants?.map(p => (
-                          <div key={p.id} className="flex items-center gap-3 group">
-                             <div className="relative">
-                               <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
-                                  <AvatarFallback className="bg-primary/5 text-primary font-bold text-xs">{p.name[0]}</AvatarFallback>
-                               </Avatar>
-                               {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-1 border border-background shadow-sm animate-bounce"><Hand className="h-2 w-2" /></div>}
-                             </div>
-                             <div className="flex-1 min-w-0">
-                                <p className="text-xs font-bold truncate flex items-center gap-1.5">
-                                   {p.name}
-                                   {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500" />}
-                                </p>
-                                <p className="text-[10px] text-muted-foreground flex items-center gap-2">
-                                   {p.role === 'left' ? <Badge variant="outline" className="text-[8px] h-3 px-1 py-0">Left</Badge> : (
-                                     <>
-                                       {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
-                                       {p.isVideoOff ? <VideoOff className="h-3 w-3 text-zinc-400" /> : <VideoIcon className="h-3 w-3 text-primary" />}
-                                     </>
-                                   )}
-                                </p>
-                             </div>
-                             {isHost && p.id !== user?.uid && (
-                               <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
-                                 <MoreVertical className="h-4 w-4" />
-                               </Button>
-                             )}
-                          </div>
-                        ))}
+                        {participants?.map(p => {
+                          const isOnline = p.role !== 'left';
+                          return (
+                            <div key={p.id} className={cn("flex items-center gap-3 group", !isOnline && "opacity-50")}>
+                               <div className="relative">
+                                 <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
+                                    <AvatarFallback className="bg-primary/5 text-primary font-bold text-xs">{p.name[0]}</AvatarFallback>
+                                 </Avatar>
+                                 {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-1 border border-background shadow-sm animate-bounce"><Hand className="h-2 w-2" /></div>}
+                               </div>
+                               <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-bold truncate flex items-center gap-1.5">
+                                     {p.name}
+                                     {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500" />}
+                                  </p>
+                                  <p className="text-[10px] text-muted-foreground flex items-center gap-2">
+                                     {!isOnline ? <Badge variant="outline" className="text-[8px] h-3 px-1 py-0">Left</Badge> : (
+                                       <>
+                                         {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
+                                         {p.isVideoOff ? <VideoOff className="h-3 w-3 text-zinc-400" /> : <VideoIcon className="h-3 w-3 text-primary" />}
+                                       </>
+                                     )}
+                                  </p>
+                               </div>
+                               {isHost && p.id !== user?.uid && (
+                                 <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
+                                   <MoreVertical className="h-4 w-4" />
+                                 </Button>
+                               )}
+                            </div>
+                          );
+                        })}
                       </div>
                    </ScrollArea>
                    
@@ -547,7 +648,7 @@ export default function RoomPage() {
                          <div className="h-2 w-full bg-zinc-200 rounded-full overflow-hidden shadow-inner">
                             <div 
                               className="h-full bg-primary transition-all duration-1000" 
-                              style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / ((meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
+                              style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / Math.max(1, (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
                             />
                          </div>
                          <p className="text-[10px] text-center text-muted-foreground leading-relaxed">
