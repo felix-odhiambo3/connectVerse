@@ -95,6 +95,7 @@ export default function RoomPage() {
   const mainVideoRef = useRef<HTMLVideoElement>(null);
   const miniVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -135,7 +136,7 @@ export default function RoomPage() {
         setHasCameraPermission(true);
         localStreamRef.current = stream;
 
-        if (mainVideoRef.current) mainVideoRef.current.srcObject = stream;
+        if (mainVideoRef.current && !isScreenSharing) mainVideoRef.current.srcObject = stream;
         if (miniVideoRef.current) miniVideoRef.current.srcObject = stream;
         
         stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
@@ -151,28 +152,33 @@ export default function RoomPage() {
       }
     };
 
-    getCameraPermission();
+    if (!localStreamRef.current) {
+      getCameraPermission();
+    }
 
     return () => {
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop());
       }
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+      }
     };
-  }, []);
+  }, [isScreenSharing]);
 
   // Sync video streams whenever video is toggled or refs change
   useEffect(() => {
     if (localStreamRef.current) {
-      if (mainVideoRef.current && !mainVideoRef.current.srcObject) {
+      if (mainVideoRef.current && !isScreenSharing) {
         mainVideoRef.current.srcObject = localStreamRef.current;
       }
-      if (miniVideoRef.current && !miniVideoRef.current.srcObject) {
+      if (miniVideoRef.current) {
         miniVideoRef.current.srcObject = localStreamRef.current;
       }
       localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
       localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
     }
-  }, [isAudioMuted, isVideoOff, hasCameraPermission]);
+  }, [isAudioMuted, isVideoOff, hasCameraPermission, isScreenSharing]);
 
   // Update current time for live calculations
   useEffect(() => {
@@ -253,6 +259,46 @@ export default function RoomPage() {
     setIsVideoOff(nextValue);
     if (firestore && user && meetingId) {
       updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: nextValue });
+    }
+  };
+
+  const toggleScreenShare = async () => {
+    if (isScreenSharing) {
+      // Stop screen sharing
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
+      }
+      setIsScreenSharing(false);
+      if (mainVideoRef.current && localStreamRef.current) {
+        mainVideoRef.current.srcObject = localStreamRef.current;
+      }
+    } else {
+      // Start screen sharing
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        screenStreamRef.current = stream;
+        setIsScreenSharing(true);
+        if (mainVideoRef.current) {
+          mainVideoRef.current.srcObject = stream;
+        }
+
+        // Listen for when sharing ends via browser UI
+        stream.getVideoTracks()[0].onended = () => {
+          setIsScreenSharing(false);
+          screenStreamRef.current = null;
+          if (mainVideoRef.current && localStreamRef.current) {
+            mainVideoRef.current.srcObject = localStreamRef.current;
+          }
+        };
+      } catch (err) {
+        console.error("Error sharing screen:", err);
+        toast({
+          variant: 'destructive',
+          title: 'Screen Share Failed',
+          description: 'Could not access screen for sharing.',
+        });
+      }
     }
   };
 
@@ -418,13 +464,13 @@ export default function RoomPage() {
             <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden flex items-center justify-center border shadow-2xl">
               <video 
                 ref={mainVideoRef} 
-                className={cn("w-full h-full object-cover rounded-3xl", isVideoOff && "hidden")} 
+                className={cn("w-full h-full object-contain rounded-3xl", (isVideoOff && !isScreenSharing) && "hidden")} 
                 autoPlay 
                 muted 
                 playsInline 
               />
               
-              {isVideoOff && (
+              {isVideoOff && !isScreenSharing && (
                 <div className="text-zinc-600 flex flex-col items-center gap-4">
                   <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center animate-pulse">
                     <UserIcon className="h-10 w-10 opacity-20" />
@@ -435,7 +481,7 @@ export default function RoomPage() {
               
               <div className="absolute top-6 left-6 flex items-center gap-2">
                 <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-md border-none px-3 py-1">
-                  {currentUserParticipant?.name} (You)
+                  {isScreenSharing ? "Sharing Screen" : `${currentUserParticipant?.name} (You)`}
                 </Badge>
               </div>
 
@@ -499,8 +545,8 @@ export default function RoomPage() {
                <Button 
                  variant={isScreenSharing ? "default" : "secondary"} 
                  size="icon" 
-                 onClick={() => setIsScreenSharing(!isScreenSharing)} 
-                 className="rounded-full h-12 w-12"
+                 onClick={toggleScreenShare} 
+                 className={cn("rounded-full h-12 w-12", isScreenSharing && "bg-blue-600 text-white hover:bg-blue-700")}
                >
                  {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                </Button>
