@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -135,6 +134,13 @@ interface ParticipantPermissions {
     allowStartVideo: boolean;
 }
 
+interface FloatingReaction {
+  id: string;
+  emoji: string;
+  senderName: string;
+  left: number;
+}
+
 const REACTION_EMOJIS = ['❤️', '👍', '🎉', '😮', '😢', '🔥', '👏', '💯'];
 
 function RoomPage() {
@@ -156,6 +162,7 @@ function RoomPage() {
   const [hasSeenSelfInList, setHasSeenSelfInList] = useState(false);
   const [openHostControls, setOpenHostControls] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -164,6 +171,7 @@ function RoomPage() {
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasInitiatedJoin = useRef(false);
+  const playedReactionsRef = useRef<Record<string, number>>({});
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -213,6 +221,12 @@ function RoomPage() {
     [activeParticipants]
   );
 
+  const isReactionRecent = (reactionAt?: { seconds: number }) => {
+    if (!reactionAt) return false;
+    const now = Math.floor(Date.now() / 1000);
+    return now - reactionAt.seconds < 5;
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -222,7 +236,7 @@ function RoomPage() {
     if (!user || !chatInput.trim() || !firestore || !meetingId) return;
 
     const chatCollection = collection(firestore, MEETINGS_COLLECTION, meetingId, CHAT_COLLECTION);
-    await addDoc(chatCollection, {
+    addDoc(chatCollection, {
         text: chatInput.trim(),
         senderId: user.uid,
         senderName: user.displayName || user.email,
@@ -231,6 +245,28 @@ function RoomPage() {
     setChatInput('');
   };
 
+  // Watch for new reactions to trigger floating animation
+  useEffect(() => {
+    if (!participants) return;
+    
+    participants.forEach(p => {
+      if (p.lastReaction && p.lastReactionAt) {
+        const lastPlayed = playedReactionsRef.current[p.id] || 0;
+        if (p.lastReactionAt.seconds > lastPlayed && isReactionRecent(p.lastReactionAt)) {
+          const id = Math.random().toString(36).substr(2, 9);
+          const left = Math.random() * 80 + 10; // 10% to 90% from left
+          
+          setFloatingReactions(prev => [...prev, { id, emoji: p.lastReaction!, senderName: p.name, left }]);
+          playedReactionsRef.current[p.id] = p.lastReactionAt.seconds;
+          
+          // Remove after animation (4s duration matching tailwind.config.ts)
+          setTimeout(() => {
+            setFloatingReactions(prev => prev.filter(r => r.id !== id));
+          }, 4000);
+        }
+      }
+    });
+  }, [participants]);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'scheduled') {
@@ -752,12 +788,6 @@ function RoomPage() {
 
   const isLoading = areParticipantsLoading || !meetingData;
 
-  const isReactionRecent = (reactionAt?: { seconds: number }) => {
-    if (!reactionAt) return false;
-    const now = Math.floor(Date.now() / 1000);
-    return now - reactionAt.seconds < 5;
-  };
-
   if (isLoading && !isUserInWaitingRoom) {
     return (
       <AuthGuard>
@@ -817,7 +847,23 @@ function RoomPage() {
 
   return (
     <AuthGuard>
-      <div className="flex h-screen w-full">
+      <div className="flex h-screen w-full relative overflow-hidden">
+        {/* Floating Reactions Overlay */}
+        <div className="absolute inset-0 pointer-events-none z-50">
+          {floatingReactions.map((reaction) => (
+            <div
+              key={reaction.id}
+              className="absolute bottom-0 flex flex-col items-center animate-float-up"
+              style={{ left: `${reaction.left}%` }}
+            >
+              <span className="text-4xl md:text-6xl">{reaction.emoji}</span>
+              <span className="text-[10px] md:text-xs bg-black/50 text-white px-2 py-0.5 rounded-full mt-1">
+                {reaction.senderName}
+              </span>
+            </div>
+          ))}
+        </div>
+
         <div className="flex flex-1 flex-col">
           <header className="flex h-16 items-center justify-between border-b bg-background px-6">
             <div className="flex items-center gap-4">
