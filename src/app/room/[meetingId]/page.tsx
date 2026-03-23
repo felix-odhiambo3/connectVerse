@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -29,12 +30,13 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 /**
  * AudioVisualizer component that renders moving bars based on a MediaStream.
@@ -64,7 +66,6 @@ function AudioVisualizer({ stream, isMuted }: { stream: MediaStream | null; isMu
     const update = () => {
       if (!analyserRef.current) return;
       analyserRef.current.getByteFrequencyData(dataArray);
-      // Take a few samples from the frequency data
       const newFrequencies = [
         dataArray[1],
         dataArray[3],
@@ -123,6 +124,8 @@ interface Participant {
   role: 'host' | 'participant' | 'waiting';
   hasRaisedHand?: boolean;
   isMuted?: boolean;
+  lastReaction?: string;
+  lastReactionAt?: { seconds: number };
 }
 
 interface ParticipantPermissions {
@@ -131,6 +134,8 @@ interface ParticipantPermissions {
     allowUnmute: boolean;
     allowStartVideo: boolean;
 }
+
+const REACTION_EMOJIS = ['❤️', '👍', '🎉', '😮', '😢', '🔥', '👏', '💯'];
 
 function RoomPage() {
   const params = useParams();
@@ -143,7 +148,6 @@ function RoomPage() {
   const [hasCameraPermission, setHasCameraPermission] = useState(true);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  // Join muted and video off by default
   const [isAudioMuted, setIsAudioMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -151,6 +155,7 @@ function RoomPage() {
   const [chatInput, setChatInput] = useState('');
   const [hasSeenSelfInList, setHasSeenSelfInList] = useState(false);
   const [openHostControls, setOpenHostControls] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -200,11 +205,9 @@ function RoomPage() {
   const isCurrentUserInCall = useMemo(() => {
     if (!user || !activeParticipants) return false;
     const index = activeParticipants.findIndex(p => p.id === user.uid);
-    // Only the first two participants are in the WebRTC call
     return index >= 0 && index <= 1;
   }, [user, activeParticipants]);
 
-  // Create a stable dependency for the main WebRTC effect based on the IDs of active participants.
   const activeParticipantIds = useMemo(
     () => activeParticipants?.map(p => p.id).join(','),
     [activeParticipants]
@@ -229,7 +232,6 @@ function RoomPage() {
   };
 
 
-  // Meeting Timer
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'scheduled') {
         setElapsedTime('00:00:00');
@@ -267,7 +269,6 @@ function RoomPage() {
     candidateQueueRef.current = [];
   };
   
-  // Listen for meeting end
   useEffect(() => {
       if (meetingData?.status === 'finished') {
           toast({
@@ -287,7 +288,6 @@ function RoomPage() {
       }
   }, [meetingData?.status, router, toast, firestore, meetingId, isHost]);
 
-  // Get camera permissions and local stream. Runs only once on mount.
   useEffect(() => {
     if (meetingData?.status === 'scheduled') return;
     let isCancelled = false;
@@ -295,7 +295,6 @@ function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         if (!isCancelled) {
-          // Immediately apply initial muted/off states to the fresh stream
           stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
           stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
           
@@ -306,29 +305,7 @@ function RoomPage() {
         }
       } catch (error: any) {
         if (isCancelled) return;
-
-        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-            setHasCameraPermission(false);
-            toast({
-                variant: 'destructive',
-                title: 'Camera Access Denied',
-                description: 'Please enable camera and microphone permissions in your browser settings.',
-            });
-        } else if (error.name === 'NotReadableError') {
-            setHasCameraPermission(false);
-            toast({
-                variant: 'destructive',
-                title: 'Camera In Use?',
-                description: 'Could not access your camera. It may be in use by another application.',
-            });
-        } else {
-            setHasCameraPermission(false);
-            toast({
-                variant: 'destructive',
-                title: 'Device Error',
-                description: 'An unexpected error occurred while trying to access your camera.',
-            });
-        }
+        setHasCameraPermission(false);
       }
     };
     getCameraPermission();
@@ -338,10 +315,8 @@ function RoomPage() {
       cleanupLocalMedia();
       cleanupPeerConnection();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingData?.status]);
   
-  // Effect to attach streams to video elements
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
@@ -356,7 +331,6 @@ function RoomPage() {
   }, [remoteStream]);
 
 
-  // Join the room and manage participant list
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'scheduled') return;
 
@@ -390,18 +364,15 @@ function RoomPage() {
     setupParticipant();
 }, [user, meetingId, firestore, meetingData]);
 
-    // Track when we actually see ourselves in the participants list
     useEffect(() => {
         if (user && participants?.some(p => p.id === user.uid)) {
             setHasSeenSelfInList(true);
         }
     }, [participants, user]);
 
-    // Effect to handle being removed from the meeting
     useEffect(() => {
         if (!user || areParticipantsLoading || meetingData?.status === 'scheduled' || !participants) return;
 
-        // Only check for removal if we've successfully joined and seen ourselves in the list at least once
         if (hasSeenSelfInList) {
             const isCurrentlyInList = participants.some(p => p.id === user.uid);
             if (!isCurrentlyInList) {
@@ -414,7 +385,6 @@ function RoomPage() {
         }
     }, [participants, user, router, toast, hasSeenSelfInList, areParticipantsLoading, meetingData?.status]);
 
-    // Effect for automatic host crowning
     useEffect(() => {
         if (!meetingData || !participants || !user || !meetingRef) return;
 
@@ -431,7 +401,6 @@ function RoomPage() {
     }, [participants, meetingData, user, firestore, meetingRef, toast]);
 
 
-  // WebRTC Signaling Logic
   useEffect(() => {
     const activeParticipantsInEffect = participants?.filter(p => p.role === 'host' || p.role === 'participant');
 
@@ -596,7 +565,6 @@ function RoomPage() {
 
   }, [localStream, meetingId, firestore, user, activeParticipantIds, isUserInWaitingRoom, participants]);
   
-    // Effect to handle host muting participant and self mute
     useEffect(() => {
         if (localStream) {
             const selfMuted = isAudioMuted;
@@ -607,7 +575,6 @@ function RoomPage() {
         }
     }, [isAudioMuted, currentUserParticipant?.isMuted, localStream]);
 
-    // Effect to handle video track enabled state reactively
     useEffect(() => {
         if (localStream) {
             localStream.getVideoTracks().forEach(track => {
@@ -664,11 +631,6 @@ function RoomPage() {
                 setIsScreenSharing(false);
             };
         } catch (error: any) {
-            if (error.name === 'NotAllowedError') {
-                toast({ title: 'Screen Share Cancelled' });
-            } else {
-                toast({ variant: 'destructive', title: 'Screen Share Failed' });
-            }
             setIsScreenSharing(false);
         }
     }
@@ -703,6 +665,20 @@ function RoomPage() {
       const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
       updateDocumentNonBlocking(participantRef, { hasRaisedHand: !currentUserParticipant.hasRaisedHand });
   };
+
+  const handleSendReaction = (emoji: string) => {
+    if (!user || !firestore || !meetingId) return;
+    if (!isHost && !(meetingData?.participantPermissions?.allowSendReactions ?? true)) {
+        toast({ title: "The host has disabled reactions." });
+        return;
+    }
+    const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
+    updateDocumentNonBlocking(participantRef, { 
+        lastReaction: emoji, 
+        lastReactionAt: serverTimestamp() 
+    });
+    setShowEmojiPicker(false);
+  };
   
   const lowerHand = (participantId: string) => {
       if (!isHost || !firestore || !meetingId) return;
@@ -731,7 +707,6 @@ function RoomPage() {
     const handleShare = async () => {
         const shareUrl = window.location.href;
         const shareText = "Join my ConnectVerse meeting!";
-    
         try {
             if (navigator.share) {
                 await navigator.share({
@@ -740,7 +715,8 @@ function RoomPage() {
                     url: shareUrl,
                 });
             } else {
-                throw new Error('Web Share API not available.');
+                await navigator.clipboard.writeText(shareUrl);
+                toast({ title: 'Link copied to clipboard!' });
             }
         } catch (error: any) {
             if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
@@ -775,6 +751,12 @@ function RoomPage() {
     }
 
   const isLoading = areParticipantsLoading || !meetingData;
+
+  const isReactionRecent = (reactionAt?: { seconds: number }) => {
+    if (!reactionAt) return false;
+    const now = Math.floor(Date.now() / 1000);
+    return now - reactionAt.seconds < 5;
+  };
 
   if (isLoading && !isUserInWaitingRoom) {
     return (
@@ -862,11 +844,8 @@ function RoomPage() {
             <div className="md:col-span-2 bg-muted rounded-lg flex flex-col items-center justify-center p-4 gap-4">
               <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center overflow-hidden">
                  <video ref={remoteVideoRef} className="w-full h-full object-contain rounded-md" autoPlay playsInline />
-                 
-                 {/* Local Video Container */}
                  <div className="absolute bottom-4 right-4 w-1/4 max-w-[200px] aspect-video rounded-md border-2 border-background overflow-hidden shadow-lg bg-zinc-900">
                     <video ref={localVideoRef} className={cn("w-full h-full object-cover", isVideoOff && "hidden")} autoPlay muted playsInline />
-                    {/* Visual feedback for camera off */}
                     {isVideoOff && (
                         <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-800 text-zinc-400 gap-2">
                              <Avatar className="h-10 w-10 border border-zinc-700">
@@ -878,7 +857,6 @@ function RoomPage() {
                         </div>
                     )}
                  </div>
-
                  {!remoteStream && isCurrentUserInCall && activeParticipants && activeParticipants.length > 1 && (
                     <div className="absolute inset-0 flex items-center justify-center">
                         <p className="text-white">Connecting...</p>
@@ -942,6 +920,35 @@ function RoomPage() {
                         <Hand />
                         <span className="sr-only">Raise Hand</span>
                     </Button>
+                    
+                    <Popover open={showEmojiPicker} onOpenChange={setShowEmojiPicker}>
+                        <PopoverTrigger asChild>
+                            <Button 
+                                variant="outline" 
+                                size="icon" 
+                                className="rounded-full h-12 w-12"
+                                disabled={!isHost && !(meetingData?.participantPermissions?.allowSendReactions ?? true)}
+                            >
+                                <Smile />
+                                <span className="sr-only">Reactions</span>
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-2" align="center" side="top">
+                            <div className="flex gap-2">
+                                {REACTION_EMOJIS.map((emoji) => (
+                                    <Button 
+                                        key={emoji} 
+                                        variant="ghost" 
+                                        className="h-10 w-10 text-xl p-0 hover:bg-accent rounded-full"
+                                        onClick={() => handleSendReaction(emoji)}
+                                    >
+                                        {emoji}
+                                    </Button>
+                                ))}
+                            </div>
+                        </PopoverContent>
+                    </Popover>
+
                     {isHost && (
                         <Button onClick={toggleLockMeeting} variant={meetingData?.isLocked ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
                             {meetingData?.isLocked ? <Unlock /> : <Lock />}
@@ -1037,7 +1044,6 @@ function RoomPage() {
                       <Avatar className="relative">
                         <AvatarImage src={`https://avatar.vercel.sh/${p.id}.png`} />
                         <AvatarFallback>{p.name?.[0].toUpperCase()}</AvatarFallback>
-                        {/* Audio activity indicator in participant list */}
                         <div className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5 border">
                            <AudioVisualizer 
                              stream={p.id === user?.uid ? localStream : (activeParticipants.findIndex(ap => ap.id === p.id) === 1 ? remoteStream : null)} 
@@ -1045,8 +1051,11 @@ function RoomPage() {
                            />
                         </div>
                       </Avatar>
-                      <div className="flex-1">
-                        <p className="font-medium">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
+                      <div className="flex-1 flex items-center gap-2">
+                        <p className="font-medium truncate max-w-[120px]">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
+                        {isReactionRecent(p.lastReactionAt) && (
+                            <span className="text-xl animate-bounce">{p.lastReaction}</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5">
                         {p.hasRaisedHand && <Hand className="text-yellow-500 h-4 w-4" />}

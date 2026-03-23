@@ -1,3 +1,4 @@
+
 {
   "entities": {
     "User": {
@@ -144,6 +145,15 @@
         "isMuted": {
           "type": "boolean",
           "description": "Indicates if the participant has been muted by the host."
+        },
+        "lastReaction": {
+          "type": "string",
+          "description": "The last emoji reaction sent by the participant."
+        },
+        "lastReactionAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the last reaction sent."
         }
       },
       "required": [
