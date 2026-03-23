@@ -97,6 +97,7 @@ export default function RoomPage() {
   const miniVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const isInitializingRef = useRef(false);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -129,10 +130,11 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
-  // Media Initialization with mounting safeguard
+  // Media Initialization with mounting safeguard and initialization lock
   const initMedia = useCallback(async (isMounted: boolean) => {
-    if (localStreamRef.current) return;
+    if (localStreamRef.current || isInitializingRef.current) return;
     
+    isInitializingRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { width: { ideal: 1280 }, height: { ideal: 720 } }, 
@@ -154,7 +156,6 @@ export default function RoomPage() {
       if (isMounted) {
         console.error('Media initialization error:', error);
         setHasMediaPermission(false);
-        // Specifically check for AbortError which happens on rapid re-mounts
         if (error.name !== 'AbortError') {
           toast({
             variant: 'destructive',
@@ -163,6 +164,8 @@ export default function RoomPage() {
           });
         }
       }
+    } finally {
+      isInitializingRef.current = false;
     }
   }, [isAudioMuted, isVideoOff, toast]);
 
@@ -723,14 +726,14 @@ export default function RoomPage() {
                                      {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
                                      {isLate && <Badge variant="destructive" className="text-[8px] h-3 px-1 py-0 shrink-0">Late</Badge>}
                                   </div>
-                                  <p className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
+                                  <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
                                      {!isOnline ? <Badge variant="outline" className="text-[8px] h-3 px-1 py-0">Left</Badge> : (
                                        <>
                                          {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
                                          {p.isVideoOff ? <VideoOff className="h-3 w-3 text-zinc-400" /> : <VideoIcon className="h-3 w-3 text-primary" />}
                                        </>
                                      )}
-                                  </p>
+                                  </div>
                                </div>
                                {isHost && p.id !== user?.uid && (
                                  <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
