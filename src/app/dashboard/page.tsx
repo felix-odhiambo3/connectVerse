@@ -223,9 +223,14 @@ export default function DashboardPage() {
         <main className="flex-1 flex flex-col items-center p-4 md:p-12 bg-zinc-50/50">
           <div className="w-full max-w-5xl space-y-12">
             <section>
-              <h2 className="text-3xl font-bold tracking-tight mb-8">Quick Start</h2>
+              <div className="flex items-end justify-between mb-8">
+                <div>
+                  <h2 className="text-3xl font-bold tracking-tight">Quick Start</h2>
+                  <p className="text-muted-foreground mt-1">Start or plan your next meeting in seconds.</p>
+                </div>
+              </div>
               <div className="grid gap-6 md:grid-cols-3">
-                <Card className="flex flex-col shadow-sm border-zinc-200">
+                <Card className="flex flex-col shadow-sm border-zinc-200 transition-all hover:shadow-md">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Plus className="h-5 w-5 text-primary" />
@@ -242,7 +247,7 @@ export default function DashboardPage() {
 
                 <Dialog open={openScheduleDialog} onOpenChange={setOpenScheduleDialog}>
                   <DialogTrigger asChild>
-                      <Card className="flex flex-col cursor-pointer hover:border-primary transition-colors shadow-sm border-zinc-200">
+                      <Card className="flex flex-col cursor-pointer hover:border-primary transition-all hover:shadow-md shadow-sm border-zinc-200">
                           <CardHeader>
                             <CardTitle className="flex items-center gap-2">
                                 <CalendarIcon className="h-5 w-5 text-primary" />
@@ -288,7 +293,7 @@ export default function DashboardPage() {
                                                   </Button>
                                               </FormControl>
                                           </PopoverTrigger>
-                                          <PopoverContent className="w-auto p-0" align="start">
+                                          <PopoverContent className="w-auto p-0" align="start" sideOffset={8}>
                                               <Calendar
                                                   mode="single"
                                                   selected={field.value}
@@ -311,7 +316,7 @@ export default function DashboardPage() {
                               <FormField control={form.control} name="time" render={({ field }) => (
                                   <FormItem>
                                       <FormLabel>Time</FormLabel>
-                                      <FormControl><Input type="time" {...field} /></FormControl>
+                                      <FormControl><Input type="time" className="h-10" {...field} /></FormControl>
                                       <FormMessage />
                                   </FormItem>
                                )} />
@@ -325,7 +330,7 @@ export default function DashboardPage() {
                   </DialogContent>
                 </Dialog>
 
-                <Card className="flex flex-col shadow-sm border-zinc-200">
+                <Card className="flex flex-col shadow-sm border-zinc-200 transition-all hover:shadow-md">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Video className="h-5 w-5 text-primary" />
