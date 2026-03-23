@@ -91,7 +91,7 @@ export default function RoomPage() {
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
   
-  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
   const mainVideoRef = useRef<HTMLVideoElement>(null);
   const miniVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -128,22 +128,23 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
-  // Initialize Camera/Mic
+  // Initialize Media (Camera/Mic)
   useEffect(() => {
-    const getCameraPermission = async () => {
+    const getMediaPermission = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        setHasCameraPermission(true);
+        setHasMediaPermission(true);
         localStreamRef.current = stream;
 
+        // Apply stream to video elements initially
         if (mainVideoRef.current && !isScreenSharing) mainVideoRef.current.srcObject = stream;
         if (miniVideoRef.current) miniVideoRef.current.srcObject = stream;
         
         stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
         stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
       } catch (error) {
-        console.error('Error accessing camera:', error);
-        setHasCameraPermission(false);
+        console.error('Error accessing media:', error);
+        setHasMediaPermission(false);
         toast({
           variant: 'destructive',
           title: 'Media Access Denied',
@@ -152,8 +153,8 @@ export default function RoomPage() {
       }
     };
 
-    if (!localStreamRef.current) {
-      getCameraPermission();
+    if (!localStreamRef.current && hasMediaPermission !== false) {
+      getMediaPermission();
     }
 
     return () => {
@@ -164,21 +165,27 @@ export default function RoomPage() {
         screenStreamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [isScreenSharing]);
+  }, []);
 
-  // Sync video streams whenever video is toggled or refs change
+  // Effect to sync video elements with current streams and states
   useEffect(() => {
-    if (localStreamRef.current) {
-      if (mainVideoRef.current && !isScreenSharing) {
+    if (mainVideoRef.current) {
+      if (isScreenSharing && screenStreamRef.current) {
+        mainVideoRef.current.srcObject = screenStreamRef.current;
+      } else if (localStreamRef.current) {
         mainVideoRef.current.srcObject = localStreamRef.current;
       }
-      if (miniVideoRef.current) {
-        miniVideoRef.current.srcObject = localStreamRef.current;
-      }
+    }
+    
+    if (miniVideoRef.current && localStreamRef.current) {
+      miniVideoRef.current.srcObject = localStreamRef.current;
+    }
+
+    if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
       localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
     }
-  }, [isAudioMuted, isVideoOff, hasCameraPermission, isScreenSharing]);
+  }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission]);
 
   // Update current time for live calculations
   useEffect(() => {
@@ -200,7 +207,7 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  // Join/Update participant status
+  // Join/Update participant status and track cumulative participation
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -217,10 +224,14 @@ export default function RoomPage() {
 
     const checkpointInterval = setInterval(() => {
       if (meetingData.status === 'active' || meetingData.status === 'pending' || meetingData.status === 'scheduled') {
-        const currentTotal = (currentUserParticipant?.totalDuration || 0) + 
-          (currentUserParticipant?.activeSegmentStart ? (currentTime - (currentUserParticipant.activeSegmentStart.seconds || currentTime)) : 0);
+        const participantJoinedAtSeconds = currentUserParticipant?.joinedAt?.seconds || currentTime;
+        const currentDuration = (currentUserParticipant?.totalDuration || 0) + 
+          (currentUserParticipant?.activeSegmentStart ? (currentTime - currentUserParticipant.activeSegmentStart.seconds) : 0);
         
-        const cappedTotal = meetingData.createdAt ? Math.min(currentTotal, currentTime - meetingData.createdAt.seconds) : currentTotal;
+        // Cap duration to the time since the meeting started
+        const meetingStartTime = meetingData.createdAt?.seconds || currentTime;
+        const maxPossibleDuration = currentTime - meetingStartTime;
+        const cappedTotal = Math.max(0, Math.min(currentDuration, maxPossibleDuration));
 
         updateDoc(pRef, { 
           totalDuration: cappedTotal,
@@ -233,7 +244,7 @@ export default function RoomPage() {
       clearInterval(checkpointInterval);
       updateDoc(pRef, { role: 'left', activeSegmentStart: null });
     };
-  }, [user, meetingId, firestore, meetingData?.status]);
+  }, [user, meetingId, firestore, meetingData?.status, !!meetingData]);
 
   const handleSendMessage = () => {
     if (!chatInput.trim() || !user || !firestore) return;
@@ -264,32 +275,20 @@ export default function RoomPage() {
 
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
-      // Stop screen sharing
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
       }
       setIsScreenSharing(false);
-      if (mainVideoRef.current && localStreamRef.current) {
-        mainVideoRef.current.srcObject = localStreamRef.current;
-      }
     } else {
-      // Start screen sharing
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         screenStreamRef.current = stream;
         setIsScreenSharing(true);
-        if (mainVideoRef.current) {
-          mainVideoRef.current.srcObject = stream;
-        }
 
-        // Listen for when sharing ends via browser UI
         stream.getVideoTracks()[0].onended = () => {
           setIsScreenSharing(false);
           screenStreamRef.current = null;
-          if (mainVideoRef.current && localStreamRef.current) {
-            mainVideoRef.current.srcObject = localStreamRef.current;
-          }
         };
       } catch (err) {
         console.error("Error sharing screen:", err);
@@ -495,8 +494,8 @@ export default function RoomPage() {
                       playsInline 
                     />
                     {isVideoOff && <VideoOff className="h-6 w-6 text-zinc-600" />}
-                    {!(hasCameraPermission) && (
-                        <div className="p-2 text-center text-[10px] text-zinc-400">Media initialization...</div>
+                    {hasMediaPermission === null && (
+                        <div className="p-2 text-center text-[10px] text-zinc-400">Requesting access...</div>
                     )}
                  </div>
                  <div className="absolute bottom-2 left-2">
@@ -510,7 +509,7 @@ export default function RoomPage() {
                 </div>
               )}
 
-              {hasCameraPermission === false && (
+              {hasMediaPermission === false && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-20 px-6">
                   <Alert variant="destructive" className="max-w-md bg-zinc-900 border-destructive">
                     <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Media Access Required</AlertTitle>
@@ -595,13 +594,16 @@ export default function RoomPage() {
                           </TableHeader>
                           <TableBody>
                              {participants?.filter(p => p.role !== 'left').map(p => {
-                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
-                               const cappedDuration = meetingData?.createdAt ? Math.min(durationSeconds, currentTime - meetingData.createdAt.seconds) : durationSeconds;
+                               const durationSeconds = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - p.activeSegmentStart.seconds) : 0);
+                               const meetingStartTime = meetingData?.createdAt?.seconds || currentTime;
+                               const maxPossibleDuration = currentTime - meetingStartTime;
+                               const cappedDuration = Math.max(0, Math.min(durationSeconds, maxPossibleDuration));
+                               
                                const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
                                const isLate = meetingData?.createdAt && p.joinedAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                                
-                               const meetingDuration = meetingData?.createdAt ? (currentTime - meetingData.createdAt.seconds) : 1;
-                               const ratio = cappedDuration / (meetingDuration || 1);
+                               const meetingDuration = maxPossibleDuration || 1;
+                               const ratio = cappedDuration / meetingDuration;
 
                                return (
                                  <TableRow key={p.id}>
