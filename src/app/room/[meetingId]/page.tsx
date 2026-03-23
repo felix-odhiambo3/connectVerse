@@ -315,8 +315,21 @@ function RoomPage() {
     }
   };
 
+  /**
+   * Triggers the PDF download by calling the browser's print dialog.
+   * Prints only the content targeted by CSS print media queries.
+   */
   const handleDownloadPDF = () => {
+    const originalTitle = document.title;
+    const reportDate = format(new Date(), 'yyyy-MM-dd');
+    document.title = `Attendance_Report_${meetingData?.name || meetingId}_${reportDate}`;
+    
     window.print();
+    
+    // Restore the original document title after a short delay
+    setTimeout(() => {
+      document.title = originalTitle;
+    }, 1000);
   };
 
   // Update current time every second for participation tracking
