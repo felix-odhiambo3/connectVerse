@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -128,7 +129,7 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
-  // Robust Media Initialization
+  // Media Initialization with mounting safeguard
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (localStreamRef.current) return;
     
@@ -146,19 +147,19 @@ export default function RoomPage() {
       localStreamRef.current = stream;
       setHasMediaPermission(true);
 
-      // Apply initial mute/video states
+      // Apply initial states
       stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
       stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
     } catch (error: any) {
       if (isMounted) {
-        console.error('Error accessing media:', error);
+        console.error('Media initialization error:', error);
         setHasMediaPermission(false);
-        // Do not toast AbortError as it's often a race condition during initialization
+        // Specifically check for AbortError which happens on rapid re-mounts
         if (error.name !== 'AbortError') {
           toast({
             variant: 'destructive',
-            title: 'Media Access Error',
-            description: 'Please enable camera and microphone permissions in your browser.',
+            title: 'Camera Access Error',
+            description: 'Could not access your camera or microphone. Please check permissions.',
           });
         }
       }
@@ -182,22 +183,21 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync video elements with current streams
+  // Sync video elements with streams
   useEffect(() => {
     const mainVideo = mainVideoRef.current;
     const miniVideo = miniVideoRef.current;
 
     if (mainVideo) {
-      const targetStream = (isScreenSharing && screenStreamRef.current) 
-        ? screenStreamRef.current 
-        : localStreamRef.current;
-
+      // Main view shows Screen Share if active, otherwise Camera
+      const targetStream = isScreenSharing ? screenStreamRef.current : localStreamRef.current;
       if (mainVideo.srcObject !== targetStream) {
         mainVideo.srcObject = targetStream;
       }
     }
     
     if (miniVideo && localStreamRef.current) {
+      // Mini view ALWAYS shows Camera (if video is on)
       if (miniVideo.srcObject !== localStreamRef.current) {
         miniVideo.srcObject = localStreamRef.current;
       }
@@ -209,25 +209,26 @@ export default function RoomPage() {
     }
   }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission]);
 
-  // Priority Logic for Screen Sharing
+  // Handle Host Screen Share Priority
   useEffect(() => {
     if (!meetingData || !user) return;
-
     const currentSharer = meetingData.screenSharerId;
 
     if (isScreenSharing && currentSharer && currentSharer !== user.uid) {
+      // Someone else (likely host) took over
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
       }
       setIsScreenSharing(false);
       toast({
-        title: "Screen Share Overridden",
-        description: "The host or another user is now sharing their screen.",
+        title: "Screen Share Stopped",
+        description: "The host or another user has started sharing their screen.",
       });
     }
   }, [meetingData?.screenSharerId, user?.uid, isScreenSharing, toast]);
 
+  // Timers
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
     return () => clearInterval(interval);
@@ -246,6 +247,7 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
+  // Participation Tracking
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -323,8 +325,8 @@ export default function RoomPage() {
       if (meetingData?.screenSharerId && !isHost) {
         toast({
           variant: "destructive",
-          title: "Cannot Share Screen",
-          description: "Someone else is already sharing. Only the host can override a shared screen.",
+          title: "Access Denied",
+          description: "Someone is already sharing. Only the host can override a broadcast.",
         });
         return;
       }
@@ -346,12 +348,7 @@ export default function RoomPage() {
           }
         };
       } catch (err) {
-        console.error("Error sharing screen:", err);
-        toast({
-          variant: 'destructive',
-          title: 'Screen Share Failed',
-          description: 'Could not access screen for sharing.',
-        });
+        console.error("Screen share error:", err);
       }
     }
   };
@@ -417,7 +414,7 @@ export default function RoomPage() {
   const copyInviteLink = () => {
     const link = `${window.location.origin}/room/${meetingId}`;
     navigator.clipboard.writeText(link);
-    toast({ title: "Invite link copied!", description: "Share this link with participants." });
+    toast({ title: "Invite link copied!" });
   };
 
   const handleDownloadPDF = () => {
@@ -488,7 +485,7 @@ export default function RoomPage() {
               <VideoIcon className="h-5 w-5 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-sm font-bold truncate max-w-[200px]">{meetingData?.name || 'Loading Meeting...'}</h1>
+              <h1 className="text-sm font-bold truncate max-w-[200px]">{meetingData?.name || 'Loading...'}</h1>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="text-[10px] py-0">{meetingId}</Badge>
                 {meetingData?.seriesId && <Badge className="text-[10px] py-0 bg-blue-100 text-blue-700 border-none">Recurring</Badge>}
@@ -506,7 +503,7 @@ export default function RoomPage() {
             </Button>
             {isHost ? (
               <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-full h-9 px-4 text-xs font-bold">
-                {isProcessingAttendance ? 'Ending...' : 'End for All'}
+                {isProcessingAttendance ? 'Ending...' : 'End Session'}
               </Button>
             ) : (
               <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-full h-9 px-4 text-xs font-bold">Leave</Button>
@@ -525,7 +522,7 @@ export default function RoomPage() {
                 playsInline 
               />
               
-              {isVideoOff && !isScreenSharing && (
+              {(isVideoOff && !isScreenSharing) && (
                 <div className="text-zinc-600 flex flex-col items-center gap-4">
                   <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center animate-pulse">
                     <UserIcon className="h-10 w-10 opacity-20" />
@@ -536,10 +533,11 @@ export default function RoomPage() {
               
               <div className="absolute top-6 left-6 flex items-center gap-2">
                 <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-md border-none px-3 py-1">
-                  {meetingData?.screenSharerId ? `Screen: ${participants?.find(p => p.id === meetingData.screenSharerId)?.name}` : `${currentUserParticipant?.name} (You)`}
+                  {isScreenSharing ? `Broadcasting: ${currentUserParticipant?.name}` : `${currentUserParticipant?.name} (You)`}
                 </Badge>
               </div>
 
+              {/* Mini Preview for Camera */}
               <div className="absolute bottom-6 right-6 w-48 aspect-video bg-zinc-800 rounded-2xl border-2 border-zinc-700 shadow-2xl overflow-hidden group">
                  <div className="w-full h-full flex items-center justify-center relative">
                     <video 
@@ -550,9 +548,6 @@ export default function RoomPage() {
                       playsInline 
                     />
                     {isVideoOff && <VideoOff className="h-6 w-6 text-zinc-600" />}
-                    {hasMediaPermission === null && (
-                        <div className="p-2 text-center text-[10px] text-zinc-400">Requesting access...</div>
-                    )}
                  </div>
                  <div className="absolute bottom-2 left-2">
                     {isAudioMuted && <MicOff className="h-3 w-3 text-red-500" />}
@@ -569,10 +564,10 @@ export default function RoomPage() {
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-20 px-6">
                   <div className="max-w-md w-full">
                     <Alert variant="destructive" className="bg-zinc-900 border-destructive mb-4">
-                      <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Media Access Required</AlertTitle>
+                      <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Hardware Access Required</AlertTitle>
                       <AlertDescription>
-                        Please allow camera and microphone access to participate in the video session. 
-                        Check your browser settings and refresh the page.
+                        Please allow camera and microphone access to continue. 
+                        Check your browser settings and retry.
                       </AlertDescription>
                     </Alert>
                     <Button variant="secondary" className="w-full h-12 rounded-xl" onClick={() => window.location.reload()}>
@@ -642,18 +637,18 @@ export default function RoomPage() {
                  </DialogTrigger>
                  <DialogContent className="max-w-3xl">
                     <DialogHeader>
-                      <DialogTitle>Session Participation Monitor</DialogTitle>
-                      <DialogDescription>Track student engagement and cumulative attendance progress.</DialogDescription>
+                      <DialogTitle>Participation Monitor</DialogTitle>
+                      <DialogDescription>Track real-time engagement and cumulative progress.</DialogDescription>
                     </DialogHeader>
                     <div className="py-4">
                        <Table>
                           <TableHeader>
                              <TableRow>
                                 <TableHead>Student</TableHead>
-                                <TableHead>Role</TableHead>
+                                <TableHead>Status</TableHead>
                                 <TableHead>Join Time</TableHead>
                                 <TableHead className="text-right">Active Time</TableHead>
-                                <TableHead className="text-right">Status</TableHead>
+                                <TableHead className="text-right">Eligibility</TableHead>
                              </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -680,7 +675,7 @@ export default function RoomPage() {
                                     <TableCell className="text-right font-mono">{formatDuration(cappedDuration)}</TableCell>
                                     <TableCell className="text-right">
                                        <Badge variant={ratio >= 0.7 ? "default" : "secondary"}>
-                                          {ratio >= 0.7 ? 'Present' : 'Low Active'}
+                                          {ratio >= 0.7 ? 'Qualified' : 'Ineligible'}
                                        </Badge>
                                     </TableCell>
                                  </TableRow>
@@ -699,7 +694,7 @@ export default function RoomPage() {
                 <div className="px-4 pt-4 border-b">
                    <TabsList className="w-full h-12 grid grid-cols-2 rounded-2xl">
                       <TabsTrigger value="participants" className="rounded-xl flex items-center gap-2">
-                        <Users className="h-4 w-4" /> Participants
+                        <Users className="h-4 w-4" /> Students
                       </TabsTrigger>
                       <TabsTrigger value="chat" className="rounded-xl flex items-center gap-2">
                         <MessageSquare className="h-4 w-4" /> Chat
@@ -761,8 +756,8 @@ export default function RoomPage() {
                               style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / Math.max(1, (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
                             />
                          </div>
-                         <p className="text-[10px] text-center text-muted-foreground leading-relaxed">
-                            Need 70% participation in <b>Session {meetingData?.sessionIndex || 1}</b> to earn {meetingData?.fixedDurationHours || 1}h.
+                         <p className="text-[10px] text-center text-muted-foreground leading-relaxed px-2">
+                            Need 70% active participation in <b>Session {meetingData?.sessionIndex || 1}</b> to earn credit.
                          </p>
                       </div>
                    </div>
@@ -784,20 +779,20 @@ export default function RoomPage() {
                          ))}
                       </div>
                    </ScrollArea>
-                   <div className="p-4 border-t bg-card space-y-2">
-                      <div className="relative">
+                   <div className="p-4 border-t bg-card">
+                      <div className="relative flex items-center">
                         <Input 
-                          placeholder="Type a message..." 
+                          placeholder="Type message..." 
                           value={chatInput} 
                           onChange={(e) => setChatInput(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                          className="pr-10 rounded-xl h-12"
+                          className="pr-10 rounded-xl h-11"
                         />
                         <Button 
                           size="icon" 
                           variant="ghost" 
                           onClick={handleSendMessage} 
-                          className="absolute right-1 top-1 h-10 w-10 text-primary hover:bg-transparent"
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 text-primary"
                         >
                           <Send className="h-4 w-4" />
                         </Button>
