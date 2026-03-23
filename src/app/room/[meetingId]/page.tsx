@@ -153,6 +153,7 @@ function RoomPage() {
 
   const [hasCameraPermission, setHasCameraPermission] = useState(true);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isAudioMuted, setIsAudioMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(true);
@@ -294,6 +295,10 @@ function RoomPage() {
         localStream.getTracks().forEach(track => track.stop());
         setLocalStream(null);
     }
+    if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+        setScreenStream(null);
+    }
   }
 
   const cleanupPeerConnection = () => {
@@ -354,11 +359,15 @@ function RoomPage() {
   }, [meetingData?.status]);
   
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-      cameraTrackRef.current = localStream.getVideoTracks()[0];
+    if (localVideoRef.current) {
+      if (isScreenSharing && screenStream) {
+        localVideoRef.current.srcObject = screenStream;
+      } else if (localStream) {
+        localVideoRef.current.srcObject = localStream;
+        cameraTrackRef.current = localStream.getVideoTracks()[0];
+      }
     }
-  }, [localStream]);
+  }, [localStream, screenStream, isScreenSharing]);
 
   useEffect(() => {
     if (remoteVideoRef.current) {
@@ -487,7 +496,10 @@ function RoomPage() {
         };
         
         localStream.getTracks().forEach(track => {
-            pc.addTrack(track, localStream);
+            const trackToUse = (track.kind === 'video' && isScreenSharing && screenStream)
+                ? screenStream.getVideoTracks()[0]
+                : track;
+            pc.addTrack(trackToUse, localStream);
         });
     }
 
@@ -599,7 +611,7 @@ function RoomPage() {
        }
     }
 
-  }, [localStream, meetingId, firestore, user, activeParticipantIds, isUserInWaitingRoom, participants]);
+  }, [localStream, meetingId, firestore, user, activeParticipantIds, isUserInWaitingRoom, participants, isScreenSharing, screenStream]);
   
     useEffect(() => {
         if (localStream) {
@@ -640,33 +652,47 @@ function RoomPage() {
         toast({ title: "The host has disabled screen sharing for participants." });
         return;
     }
-    if (!peerConnectionRef.current || !localStream) return;
-
-    const videoSender = peerConnectionRef.current.getSenders().find(sender => sender.track?.kind === 'video');
-    if (!videoSender) return;
 
     if (isScreenSharing) {
-        if (cameraTrackRef.current) {
-            videoSender.replaceTrack(cameraTrackRef.current).catch(console.error);
-            localStream.getVideoTracks()[0].enabled = !isVideoOff;
+        if (screenStream) {
+            screenStream.getTracks().forEach(track => track.stop());
+            setScreenStream(null);
+        }
+        
+        if (peerConnectionRef.current && cameraTrackRef.current) {
+            const videoSender = peerConnectionRef.current.getSenders().find(s => s.track?.kind === 'video');
+            if (videoSender) {
+                await videoSender.replaceTrack(cameraTrackRef.current);
+            }
         }
         setIsScreenSharing(false);
     } else {
         try {
-            const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-            const screenTrack = screenStream.getVideoTracks()[0];
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            const screenTrack = stream.getVideoTracks()[0];
             
-            await videoSender.replaceTrack(screenTrack);
+            setScreenStream(stream);
             setIsScreenSharing(true);
 
-            screenTrack.onended = async () => {
-                if (peerConnectionRef.current?.getSenders().find(s => s.track === screenTrack) && cameraTrackRef.current) {
-                    await videoSender.replaceTrack(cameraTrackRef.current);
-                    localStream.getVideoTracks()[0].enabled = !isVideoOff;
+            if (peerConnectionRef.current) {
+                const videoSender = peerConnectionRef.current.getSenders().find(s => s.track?.kind === 'video');
+                if (videoSender) {
+                    await videoSender.replaceTrack(screenTrack);
                 }
+            }
+
+            screenTrack.onended = () => {
+                if (peerConnectionRef.current && cameraTrackRef.current) {
+                    const videoSender = peerConnectionRef.current.getSenders().find(s => s.track?.kind === 'video');
+                    if (videoSender) {
+                        videoSender.replaceTrack(cameraTrackRef.current).catch(console.error);
+                    }
+                }
+                setScreenStream(null);
                 setIsScreenSharing(false);
             };
         } catch (error: any) {
+            console.error("Screen share error:", error);
             setIsScreenSharing(false);
         }
     }
@@ -891,8 +917,8 @@ function RoomPage() {
               <div className="w-full aspect-video relative bg-black rounded-md flex items-center justify-center overflow-hidden">
                  <video ref={remoteVideoRef} className="w-full h-full object-contain rounded-md" autoPlay playsInline />
                  <div className="absolute bottom-4 right-4 w-1/4 max-w-[200px] aspect-video rounded-md border-2 border-background overflow-hidden shadow-lg bg-zinc-900">
-                    <video ref={localVideoRef} className={cn("w-full h-full object-cover", isVideoOff && "hidden")} autoPlay muted playsInline />
-                    {isVideoOff && (
+                    <video ref={localVideoRef} className={cn("w-full h-full object-cover", (isVideoOff && !isScreenSharing) && "hidden")} autoPlay muted playsInline />
+                    {(isVideoOff && !isScreenSharing) && (
                         <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-800 text-zinc-400 gap-2">
                              <Avatar className="h-10 w-10 border border-zinc-700">
                                 <AvatarFallback className="bg-zinc-700">
