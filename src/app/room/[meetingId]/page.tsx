@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useCollection, useUser, useFirestore, useMemoFirebase, useDoc } from '@/firebase';
 import {
@@ -24,7 +24,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, MoreVertical } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, MoreVertical, RefreshCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -32,8 +32,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/tabs"; // Adjusted from @/components/ui/tabs
+import { Alert, AlertTitle, AlertDescription } from "@/alert"; // Adjusted from @/components/ui/alert
 
 // Constants
 const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
@@ -96,7 +96,6 @@ export default function RoomPage() {
   const miniVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
-  const isInitializingMedia = useRef(false);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -130,53 +129,47 @@ export default function RoomPage() {
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
 
   // Robust Media Initialization
-  useEffect(() => {
-    if (isInitializingMedia.current) return;
-    isInitializingMedia.current = true;
-
-    let isSubscribed = true;
-
-    const getMediaPermission = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        
-        if (!isSubscribed) {
-          stream.getTracks().forEach(track => track.stop());
-          return;
-        }
-
-        localStreamRef.current = stream;
-        setHasMediaPermission(true);
-
-        if (miniVideoRef.current) {
-          miniVideoRef.current.srcObject = stream;
-        }
-        
-        stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
-        stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
-      } catch (error: any) {
-        if (isSubscribed) {
-          console.error('Error accessing media:', error);
-          if (error.name !== 'AbortError') {
-            setHasMediaPermission(false);
-            toast({
-              variant: 'destructive',
-              title: 'Media Access Error',
-              description: 'Please enable camera and microphone permissions.',
-            });
-          }
-        }
-      } finally {
-        isInitializingMedia.current = false;
+  const initMedia = useCallback(async (isMounted: boolean) => {
+    if (localStreamRef.current) return;
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } }, 
+        audio: true 
+      });
+      
+      if (!isMounted) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
       }
-    };
 
-    if (!localStreamRef.current && hasMediaPermission === null) {
-      getMediaPermission();
+      localStreamRef.current = stream;
+      setHasMediaPermission(true);
+
+      // Apply initial mute/video states
+      stream.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
+      stream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
+    } catch (error: any) {
+      if (isMounted) {
+        console.error('Error accessing media:', error);
+        setHasMediaPermission(false);
+        toast({
+          variant: 'destructive',
+          title: 'Media Access Error',
+          description: error.name === 'AbortError' 
+            ? 'The camera request was interrupted. Please refresh or try again.' 
+            : 'Please enable camera and microphone permissions in your browser.',
+        });
+      }
     }
+  }, [isAudioMuted, isVideoOff, toast]);
+
+  useEffect(() => {
+    let isMounted = true;
+    initMedia(isMounted);
 
     return () => {
-      isSubscribed = false;
+      isMounted = false;
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop());
         localStreamRef.current = null;
@@ -186,33 +179,32 @@ export default function RoomPage() {
         screenStreamRef.current = null;
       }
     };
-  }, []);
+  }, [initMedia]);
 
   // Sync video elements with current streams
   useEffect(() => {
     const mainVideo = mainVideoRef.current;
     const miniVideo = miniVideoRef.current;
 
+    // Main view logic: Show screen share if active, otherwise local camera
     if (mainVideo) {
-      if (isScreenSharing && screenStreamRef.current) {
-        if (mainVideo.srcObject !== screenStreamRef.current) {
-          mainVideo.srcObject = screenStreamRef.current;
-        }
-      } else if (localStreamRef.current) {
-        if (mainVideo.srcObject !== localStreamRef.current) {
-          mainVideo.srcObject = localStreamRef.current;
-        }
-      } else {
-        mainVideo.srcObject = null;
+      const targetStream = (isScreenSharing && screenStreamRef.current) 
+        ? screenStreamRef.current 
+        : localStreamRef.current;
+
+      if (mainVideo.srcObject !== targetStream) {
+        mainVideo.srcObject = targetStream;
       }
     }
     
+    // Mini preview always shows local camera
     if (miniVideo && localStreamRef.current) {
       if (miniVideo.srcObject !== localStreamRef.current) {
         miniVideo.srcObject = localStreamRef.current;
       }
     }
 
+    // Update track enablement
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
       localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
@@ -580,13 +572,18 @@ export default function RoomPage() {
 
               {hasMediaPermission === false && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/90 z-20 px-6">
-                  <Alert variant="destructive" className="max-w-md bg-zinc-900 border-destructive">
-                    <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Media Access Required</AlertTitle>
-                    <AlertDescription>
-                      Please allow camera and microphone access to participate in the video session. 
-                      Check your browser settings and refresh the page.
-                    </AlertDescription>
-                  </Alert>
+                  <div className="max-w-md w-full">
+                    <Alert variant="destructive" className="bg-zinc-900 border-destructive mb-4">
+                      <AlertTitle className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /> Media Access Required</AlertTitle>
+                      <AlertDescription>
+                        Please allow camera and microphone access to participate in the video session. 
+                        Check your browser settings and refresh the page.
+                      </AlertDescription>
+                    </Alert>
+                    <Button variant="secondary" className="w-full h-12 rounded-xl" onClick={() => window.location.reload()}>
+                      <RefreshCcw className="mr-2 h-4 w-4" /> Retry Connection
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -633,7 +630,11 @@ export default function RoomPage() {
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-2 grid grid-cols-4 gap-2">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
-                       <Button key={emoji} variant="ghost" className="h-10 w-10 p-0 text-xl">{emoji}</Button>
+                       <Button key={emoji} variant="ghost" className="h-10 w-10 p-0 text-xl" onClick={() => {
+                          if (firestore && user && meetingId) {
+                            updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { lastReaction: emoji });
+                          }
+                       }}>{emoji}</Button>
                      ))}
                   </PopoverContent>
                </Popover>
@@ -668,7 +669,7 @@ export default function RoomPage() {
                                const cappedDuration = Math.max(0, Math.min(durationSeconds, maxPossibleDuration));
                                
                                const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
-                               const isLate = meetingData?.createdAt && p.joinedAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                               const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                                
                                const meetingDuration = maxPossibleDuration || 1;
                                const ratio = cappedDuration / meetingDuration;
@@ -716,7 +717,7 @@ export default function RoomPage() {
                       <div className="space-y-4">
                         {participants?.map(p => {
                           const isOnline = p.role !== 'left';
-                          const isLate = meetingData?.createdAt && p.joinedAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                          const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                           
                           return (
                             <div key={p.id} className={cn("flex items-center gap-3 group", !isOnline && "opacity-50")}>
