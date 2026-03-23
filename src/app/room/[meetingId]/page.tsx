@@ -27,7 +27,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -35,6 +35,7 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 /**
  * AudioVisualizer component that renders moving bars based on a MediaStream.
@@ -142,6 +143,13 @@ interface FloatingReaction {
 
 const REACTION_EMOJIS = ['❤️', '👍', '🎉', '😮', '😢', '🔥', '👏', '💯'];
 
+function formatDuration(seconds: number) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+}
+
 function RoomPage() {
   const params = useParams();
   const meetingId = params.meetingId as string;
@@ -158,12 +166,14 @@ function RoomPage() {
   const [isVideoOff, setIsVideoOff] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
+  const [currentTime, setCurrentTime] = useState(Date.now());
   const [chatInput, setChatInput] = useState('');
   const [hasSeenSelfInList, setHasSeenSelfInList] = useState(false);
   const [openHostControls, setOpenHostControls] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
+  const [isStatsDialogOpen, setIsStatsDialogOpen] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -279,6 +289,14 @@ function RoomPage() {
         }
     }
   };
+
+  // Update current time every second for participation tracking
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Watch for new reactions to trigger floating animation
   useEffect(() => {
@@ -905,16 +923,16 @@ function RoomPage() {
                     <span className="text-[10px] font-mono text-muted-foreground mt-1 uppercase tracking-wider">ID: {meetingId}</span>
                 </div>
                 {meetingData?.isRecording && (
-                    <div className="flex items-center gap-2 text-sm text-red-500">
+                    <div className="flex items-center gap-2 text-sm text-red-500 ml-4">
                         <CircleDot className="h-4 w-4 animate-pulse" />
                         <span>Recording</span>
                     </div>
                 )}
             </div>
             <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Timer className="h-4 w-4" />
-                    <span>{elapsedTime}</span>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full border">
+                    <Timer className="h-4 w-4 text-primary" />
+                    <span className="font-mono font-medium">{elapsedTime}</span>
                 </div>
                 
                 <Dialog open={isShareDialogOpen} onOpenChange={setIsShareDialogOpen}>
@@ -973,6 +991,52 @@ function RoomPage() {
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
+
+                {isHost && (
+                    <Dialog open={isStatsDialogOpen} onOpenChange={setIsStatsDialogOpen}>
+                        <DialogTrigger asChild>
+                            <Button variant="outline" size="icon" title="Session Statistics">
+                                <BarChart3 className="h-4 w-4" />
+                                <span className="sr-only">Session Stats</span>
+                            </Button>
+                        </DialogTrigger>
+                        <DialogContent className="max-w-2xl">
+                            <DialogHeader>
+                                <DialogTitle>Session Participation Monitor</DialogTitle>
+                                <DialogDescription>
+                                    Review engagement and participation time for all students.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="py-4">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Student Name</TableHead>
+                                            <TableHead>Joined At</TableHead>
+                                            <TableHead className="text-right">Total Duration</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {activeParticipants?.map((p) => {
+                                            const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
+                                            const durationSeconds = (currentTime - joinDate.getTime()) / 1000;
+                                            return (
+                                                <TableRow key={p.id}>
+                                                    <TableCell className="font-medium">{p.name} {p.id === user?.uid && "(You)"}</TableCell>
+                                                    <TableCell className="text-muted-foreground">{format(joinDate, 'p')}</TableCell>
+                                                    <TableCell className="text-right font-mono">{formatDuration(durationSeconds)}</TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setIsStatsDialogOpen(false)}>Close</Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+                )}
             </div>
           </header>
           <main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 min-h-0">
@@ -1021,7 +1085,7 @@ function RoomPage() {
                         onClick={toggleAudio} 
                         variant={(isAudioMuted || !!currentUserParticipant?.isMuted) ? "secondary" : "outline"} 
                         size="icon" 
-                        className="rounded-full h-12 w-12" 
+                        className="rounded-full h-12 w-12 shadow-sm" 
                         disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowUnmute ?? true) && (isAudioMuted || !!currentUserParticipant?.isMuted))}
                     >
                       {(isAudioMuted || !!currentUserParticipant?.isMuted) ? <MicOff /> : <Mic />}
@@ -1031,7 +1095,7 @@ function RoomPage() {
                         onClick={toggleVideo} 
                         variant={isVideoOff ? "secondary" : "outline"} 
                         size="icon" 
-                        className="rounded-full h-12 w-12" 
+                        className="rounded-full h-12 w-12 shadow-sm" 
                         disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowStartVideo ?? true) && isVideoOff)}
                     >
                       {isVideoOff ? <VideoOff /> : <VideoIcon />}
@@ -1041,7 +1105,7 @@ function RoomPage() {
                         onClick={toggleScreenShare} 
                         variant={isScreenSharing ? "secondary" : "outline"} 
                         size="icon" 
-                        className="rounded-full h-12 w-12" 
+                        className="rounded-full h-12 w-12 shadow-sm" 
                         disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowShareScreen ?? true))}
                     >
                       {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
@@ -1051,7 +1115,7 @@ function RoomPage() {
                         onClick={toggleRaiseHand} 
                         variant={currentUserParticipant?.hasRaisedHand ? "secondary" : "outline"} 
                         size="icon" 
-                        className="rounded-full h-12 w-12"
+                        className="rounded-full h-12 w-12 shadow-sm"
                         disabled={!isHost && !(meetingData?.participantPermissions?.allowSendReactions ?? true)}
                     >
                         <Hand />
@@ -1063,7 +1127,7 @@ function RoomPage() {
                             <Button 
                                 variant="outline" 
                                 size="icon" 
-                                className="rounded-full h-12 w-12"
+                                className="rounded-full h-12 w-12 shadow-sm"
                                 disabled={!isHost && !(meetingData?.participantPermissions?.allowSendReactions ?? true)}
                             >
                                 <Smile />
@@ -1087,7 +1151,7 @@ function RoomPage() {
                     </Popover>
 
                     {isHost && (
-                        <Button onClick={toggleLockMeeting} variant={meetingData?.isLocked ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
+                        <Button onClick={toggleLockMeeting} variant={meetingData?.isLocked ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12 shadow-sm">
                             {meetingData?.isLocked ? <Unlock /> : <Lock />}
                             <span className="sr-only">Toggle Lock</span>
                         </Button>
@@ -1095,7 +1159,7 @@ function RoomPage() {
                     {isHost && (
                         <Dialog open={openHostControls} onOpenChange={setOpenHostControls}>
                             <DialogTrigger asChild>
-                                <Button variant="outline" size="icon" className="rounded-full h-12 w-12">
+                                <Button variant="outline" size="icon" className="rounded-full h-12 w-12 shadow-sm">
                                     <Shield />
                                     <span className="sr-only">Host Controls</span>
                                 </Button>
@@ -1145,11 +1209,11 @@ function RoomPage() {
                             </DialogContent>
                         </Dialog>
                     )}
-                    <Button onClick={leaveMeeting} variant="destructive" className="rounded-full h-12 px-6">
+                    <Button onClick={leaveMeeting} variant="destructive" className="rounded-full h-12 px-6 shadow-sm">
                       Leave
                     </Button>
                     {isHost && (
-                      <Button onClick={endMeetingForAll} variant="destructive" className="rounded-full h-12 px-6 gap-2">
+                      <Button onClick={endMeetingForAll} variant="destructive" className="rounded-full h-12 px-6 gap-2 shadow-sm">
                         <XCircle className="h-4 w-4" /> End for All
                       </Button>
                     )}
@@ -1172,79 +1236,90 @@ function RoomPage() {
                     </CardContent>
                 </Card>
               )}
-              <Card className="flex flex-col max-h-[40%] shrink-0">
-                <CardHeader className="py-3">
+              <Card className="flex flex-col max-h-[40%] shrink-0 shadow-sm border-zinc-200">
+                <CardHeader className="py-3 border-b bg-zinc-50/50">
                   <CardTitle className="text-lg">Participants ({activeParticipants?.length || 0})</CardTitle>
                 </CardHeader>
-                <CardContent className="flex-1 space-y-4 overflow-y-auto pt-0">
-                  {activeParticipants?.map((p) => (
-                    <div key={p.id} className="flex items-center gap-3">
-                      <Avatar className="h-8 w-8 relative">
-                        <AvatarImage src={`https://avatar.vercel.sh/${p.id}.png`} />
-                        <AvatarFallback>{p.name?.[0].toUpperCase()}</AvatarFallback>
-                        <div className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5 border">
-                           <AudioVisualizer 
-                             stream={p.id === user?.uid ? localStream : (activeParticipants.findIndex(ap => ap.id === p.id) === 1 ? remoteStream : null)} 
-                             isMuted={!!p.isMuted || (p.id === user?.uid && isAudioMuted)} 
-                           />
+                <CardContent className="flex-1 space-y-4 overflow-y-auto pt-4">
+                  {activeParticipants?.map((p) => {
+                    const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
+                    const participationDuration = (currentTime - joinDate.getTime()) / 1000;
+                    
+                    return (
+                      <div key={p.id} className="flex items-center gap-3 group">
+                        <Avatar className="h-8 w-8 relative">
+                          <AvatarImage src={`https://avatar.vercel.sh/${p.id}.png`} />
+                          <AvatarFallback className="bg-primary/5 text-primary text-xs">{p.name?.[0].toUpperCase()}</AvatarFallback>
+                          <div className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5 border">
+                             <AudioVisualizer 
+                               stream={p.id === user?.uid ? localStream : (activeParticipants.findIndex(ap => ap.id === p.id) === 1 ? remoteStream : null)} 
+                               isMuted={!!p.isMuted || (p.id === user?.uid && isAudioMuted)} 
+                             />
+                          </div>
+                        </Avatar>
+                        <div className="flex-1 flex flex-col min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-sm truncate">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
+                            {isReactionRecent(p.lastReactionAt) && (
+                                <span className="text-lg animate-bounce">{p.lastReaction}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono">
+                            <Clock className="h-3 w-3" />
+                            <span>{formatDuration(participationDuration)}</span>
+                          </div>
                         </div>
-                      </Avatar>
-                      <div className="flex-1 flex items-center gap-2 min-w-0">
-                        <p className="font-medium text-sm truncate">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
-                        {isReactionRecent(p.lastReactionAt) && (
-                            <span className="text-lg animate-bounce">{p.lastReaction}</span>
-                        )}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {p.hasRaisedHand && <Hand className="text-yellow-500 h-4 w-4" />}
+                          {isHost && p.hasRaisedHand && (
+                              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => lowerHand(p.id)}>Lower</Button>
+                          )}
+                          {p.isMuted && <MicOff className="h-4 w-4 text-muted-foreground" />}
+                          {isHost && p.id !== user?.uid && (
+                              <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => toggleParticipantMute(p.id, !!p.isMuted)}>
+                                      {p.isMuted ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
+                                      <span className="sr-only">Mute/Unmute</span>
+                                  </Button>
+                                  <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => removeParticipant(p.id)}>
+                                      <XCircle className="h-3 w-3" />
+                                      <span className="sr-only">Remove</span>
+                                  </Button>
+                              </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {p.hasRaisedHand && <Hand className="text-yellow-500 h-4 w-4" />}
-                        {isHost && p.hasRaisedHand && (
-                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => lowerHand(p.id)}>Lower</Button>
-                        )}
-                        {p.isMuted && <MicOff className="h-4 w-4 text-muted-foreground" />}
-                        {isHost && p.id !== user?.uid && (
-                            <div className="flex items-center">
-                                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => toggleParticipantMute(p.id, !!p.isMuted)}>
-                                    {p.isMuted ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
-                                    <span className="sr-only">Mute/Unmute</span>
-                                </Button>
-                                <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => removeParticipant(p.id)}>
-                                    <XCircle className="h-3 w-3" />
-                                    <span className="sr-only">Remove</span>
-                                </Button>
-                            </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </CardContent>
               </Card>
-              <Card className="flex flex-col flex-1 min-h-0">
-                <CardHeader className="py-3">
+              <Card className="flex flex-col flex-1 min-h-0 shadow-sm border-zinc-200">
+                <CardHeader className="py-3 border-b bg-zinc-50/50">
                   <CardTitle className="text-lg">Chat</CardTitle>
                 </CardHeader>
-                <CardContent className="flex-1 overflow-hidden pt-0">
+                <CardContent className="flex-1 overflow-hidden pt-4">
                     <ScrollArea className="h-full">
                         <div className="space-y-4 pr-4">
                         {chatMessages?.map((msg, index) => (
-                            <div key={index} className="flex flex-col gap-1 text-sm">
+                            <div key={index} className="flex flex-col gap-1 text-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <div className="flex items-center justify-between">
                                     <span className="font-bold text-xs">{msg.senderId === user?.uid ? "You" : msg.senderName}</span>
                                     <span className="text-[10px] text-muted-foreground">
                                         {msg.createdAt ? format(new Date(msg.createdAt.seconds * 1000), 'p') : ''}
                                     </span>
                                 </div>
-                                <span className="bg-secondary/30 rounded-lg p-2 break-words">{msg.text}</span>
+                                <span className="bg-secondary/30 rounded-lg p-2.5 break-words text-zinc-800">{msg.text}</span>
                             </div>
                         ))}
                         <div ref={messagesEndRef} />
                         </div>
                     </ScrollArea>
                 </CardContent>
-                <CardFooter className="p-3 shrink-0">
+                <CardFooter className="p-3 shrink-0 border-t bg-zinc-50/30">
                     <div className="flex w-full items-center gap-2">
                         <Textarea
                             placeholder="Message..."
-                            className="flex-1 min-h-[40px] max-h-[80px] text-sm py-2 resize-none"
+                            className="flex-1 min-h-[40px] max-h-[80px] text-sm py-2 resize-none shadow-none border-zinc-200"
                             value={chatInput}
                             onChange={(e) => setChatInput(e.target.value)}
                             onKeyDown={(e) => {
@@ -1254,7 +1329,7 @@ function RoomPage() {
                                 }
                             }}
                         />
-                        <Button onClick={handleSendMessage} size="icon" className="h-10 w-10 shrink-0">
+                        <Button onClick={handleSendMessage} size="icon" className="h-10 w-10 shrink-0 shadow-sm">
                             <Send className="h-4 w-4" />
                         </Button>
                     </div>
