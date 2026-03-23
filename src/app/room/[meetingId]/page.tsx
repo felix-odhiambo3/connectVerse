@@ -52,16 +52,6 @@ const servers = {
     {
       urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
     },
-    // IMPORTANT: For production applications, you MUST configure a TURN server.
-    // A TURN server is necessary to relay traffic when a direct peer-to-peer
-    // connection cannot be established, for example, due to restrictive firewalls.
-    // You can use a managed service like Twilio's Network Traversal Service
-    // or host your own using an open-source solution like coturn.
-    // {
-    //   urls: 'turn:your-turn-server.com:3478',
-    //   username: 'your-username',
-    //   credential: 'your-password',
-    // },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -98,7 +88,7 @@ function RoomPage() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
-  const [wasInMeeting, setWasInMeeting] = useState(false);
+  const [hasSeenSelfInList, setHasSeenSelfInList] = useState(false);
   const [openHostControls, setOpenHostControls] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -107,6 +97,7 @@ function RoomPage() {
   const candidateQueueRef = useRef<RTCIceCandidate[]>([]);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasInitiatedJoin = useRef(false);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -249,34 +240,28 @@ function RoomPage() {
           stream.getTracks().forEach(track => track.stop());
         }
       } catch (error: any) {
-        if (isCancelled) {
-            console.warn('Camera access request cancelled on component unmount.');
-            return;
-        }
+        if (isCancelled) return;
 
         if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-            console.error('Camera access denied by user:', error);
             setHasCameraPermission(false);
             toast({
                 variant: 'destructive',
                 title: 'Camera Access Denied',
-                description: 'Please enable camera and microphone permissions in your browser settings to join the call.',
+                description: 'Please enable camera and microphone permissions in your browser settings.',
             });
         } else if (error.name === 'NotReadableError') {
-            console.error('Could not start video source:', error);
             setHasCameraPermission(false);
             toast({
                 variant: 'destructive',
                 title: 'Camera In Use?',
-                description: 'Could not access your camera. It may be in use by another application or disconnected.',
+                description: 'Could not access your camera. It may be in use by another application.',
             });
         } else {
-            console.error('Error accessing camera/microphone:', error);
             setHasCameraPermission(false);
             toast({
                 variant: 'destructive',
                 title: 'Device Error',
-                description: 'An unexpected error occurred while trying to access your camera or microphone.',
+                description: 'An unexpected error occurred while trying to access your camera.',
             });
         }
       }
@@ -310,6 +295,9 @@ function RoomPage() {
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'scheduled') return;
 
+    if (hasInitiatedJoin.current) return;
+    hasInitiatedJoin.current = true;
+
     const participantRef = doc(firestore, MEETINGS_COLLECTION, meetingId, PARTICIPANTS_COLLECTION, user.uid);
 
     const setupParticipant = async () => {
@@ -330,32 +318,36 @@ function RoomPage() {
                 hasRaisedHand: false,
                 isMuted: false,
             };
-            // Use blocking setDoc here to ensure user is in the list before other effects run
             await setDoc(participantRef, initialData);
         }
     };
 
-    if (!wasInMeeting) {
-        setupParticipant();
-        setWasInMeeting(true); // Mark that initial setup is done
-    }
-}, [user, meetingId, firestore, meetingData, wasInMeeting]);
+    setupParticipant();
+}, [user, meetingId, firestore, meetingData]);
 
+    // Track when we actually see ourselves in the participants list
+    useEffect(() => {
+        if (user && participants?.some(p => p.id === user.uid)) {
+            setHasSeenSelfInList(true);
+        }
+    }, [participants, user]);
 
     // Effect to handle being removed from the meeting
     useEffect(() => {
-        if (!user || areParticipantsLoading || meetingData?.status === 'scheduled') return;
+        if (!user || areParticipantsLoading || meetingData?.status === 'scheduled' || !participants) return;
 
-        const isCurrentlyInList = participants?.some(p => p.id === user.uid) ?? false;
-
-        if (wasInMeeting && !isCurrentlyInList) {
-            toast({
-                title: "You were removed from the meeting.",
-                description: "Redirecting to the dashboard.",
-            });
-            router.push('/dashboard');
+        // Only check for removal if we've successfully joined and seen ourselves in the list at least once
+        if (hasSeenSelfInList) {
+            const isCurrentlyInList = participants.some(p => p.id === user.uid);
+            if (!isCurrentlyInList) {
+                toast({
+                    title: "You were removed from the meeting.",
+                    description: "Redirecting to the dashboard.",
+                });
+                router.push('/dashboard');
+            }
         }
-    }, [participants, user, router, toast, wasInMeeting, areParticipantsLoading, meetingData?.status]);
+    }, [participants, user, router, toast, hasSeenSelfInList, areParticipantsLoading, meetingData?.status]);
 
     // Effect for automatic host crowning
     useEffect(() => {
@@ -367,7 +359,6 @@ function RoomPage() {
         if (!hostIsPresent && activeParticipantsList.length > 0) {
             const newHost = activeParticipantsList[0];
             if (newHost.id === user.uid) {
-                // I am the new host!
                 updateDocumentNonBlocking(meetingRef, { hostId: newHost.id });
                 toast({ title: 'You are now the host!' });
             }
@@ -377,8 +368,6 @@ function RoomPage() {
 
   // WebRTC Signaling Logic
   useEffect(() => {
-    // This logic now depends on `activeParticipantIds` which is a stable string.
-    // We derive the array of participants inside the effect to use it.
     const activeParticipantsInEffect = participants?.filter(p => p.role === 'host' || p.role === 'participant');
 
     const cleanupWebRTCSignaling = async () => {
@@ -397,37 +386,27 @@ function RoomPage() {
         ]);
         
         const batch = writeBatch(firestore);
-  
         callerCandidatesSnapshot.forEach(doc => batch.delete(doc.ref));
         calleeCandidatesSnapshot.forEach(doc => batch.delete(doc.ref));
-        
-        // After candidate subcollections are marked for deletion, delete the main docs
         batch.delete(offerDocRef);
         batch.delete(answerDocRef);
-  
         await batch.commit();
       } catch (error) {
-        // This can fail if documents don't exist, which is fine.
-        console.log("Could not cleanup webrtc signaling docs, this may be harmless:", error);
+        console.log("WebRTC signaling cleanup skipped:", error);
       }
     };
 
 
-    // Condition to terminate the call and cleanup
     if (!localStream || !user || !activeParticipantsInEffect || activeParticipantsInEffect.length < 2 || isUserInWaitingRoom) {
       if (peerConnectionRef.current) {
         cleanupPeerConnection();
-        // The first participant in the list is responsible for cleaning up signaling docs
-        // to prevent race conditions.
         if (activeParticipantsInEffect && activeParticipantsInEffect.length > 0 && activeParticipantsInEffect[0].id === user.uid) {
             cleanupWebRTCSignaling();
         }
       }
-      return; // Stop here if no call should be active
+      return;
     }
 
-    // If we've reached here, it means a call should be active or starting.
-    // Initialize PC if it doesn't exist
     if (!peerConnectionRef.current) {
         const pc = new RTCPeerConnection(servers);
         peerConnectionRef.current = pc;
@@ -443,7 +422,7 @@ function RoomPage() {
     }
 
     const pc = peerConnectionRef.current;
-    if (!firestore || !meetingId) return; // a guard for typescript
+    if (!firestore || !meetingId) return;
     const webrtcRef = collection(firestore, MEETINGS_COLLECTION, meetingId, WEBRTC_COLLECTION);
 
     const isCaller = activeParticipantsInEffect[0].id === user.uid;
@@ -465,7 +444,7 @@ function RoomPage() {
                 await pc.setLocalDescription(offer);
                 await setDoc(offerDescriptionRef, { sdp: offer.sdp, type: offer.type });
               } catch (e) {
-                console.error("Error setting local description for offer:", e);
+                console.error("Offer creation failed:", e);
               }
           });
         }
@@ -475,11 +454,10 @@ function RoomPage() {
                 const answerDescription = new RTCSessionDescription(snapshot.data());
                 try {
                   await pc.setRemoteDescription(answerDescription);
-                  // Process any queued candidates
                   candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
                   candidateQueueRef.current = [];
                 } catch(e) {
-                  console.error("Failed to set remote description for answer:", e);
+                  console.error("Answer application failed:", e);
                 }
             }
         });
@@ -518,7 +496,6 @@ function RoomPage() {
                const offerDescription = new RTCSessionDescription(snapshot.data());
                try {
                    await pc.setRemoteDescription(offerDescription);
-                   // Process any queued candidates
                    candidateQueueRef.current.forEach(candidate => pc.addIceCandidate(candidate));
                    candidateQueueRef.current = [];
 
@@ -528,7 +505,7 @@ function RoomPage() {
                        await setDoc(answerDescriptionRef, { sdp: answer.sdp, type: answer.type });
                    }
                } catch (e) {
-                   console.error("Error in callee offer handling:", e);
+                   console.error("Offer processing failed:", e);
                }
            }
        });
@@ -617,18 +594,10 @@ function RoomPage() {
                 setIsScreenSharing(false);
             };
         } catch (error: any) {
-            console.error("Error starting screen share:", error);
             if (error.name === 'NotAllowedError') {
-                toast({
-                    title: 'Screen Share Cancelled',
-                    description: 'You did not grant permission to share your screen.'
-                });
+                toast({ title: 'Screen Share Cancelled' });
             } else {
-                toast({
-                    variant: 'destructive',
-                    title: 'Screen Share Failed',
-                    description: 'Could not start screen sharing. Please try again.'
-                });
+                toast({ variant: 'destructive', title: 'Screen Share Failed' });
             }
             setIsScreenSharing(false);
         }
@@ -709,12 +678,7 @@ function RoomPage() {
                     await navigator.clipboard.writeText(shareUrl);
                     toast({ title: 'Link copied to clipboard!' });
                 } catch (copyError) {
-                    console.error('Fallback to clipboard failed after unexpected error:', copyError);
-                    toast({ 
-                        variant: 'destructive', 
-                        title: 'Failed to share',
-                        description: 'An unexpected error occurred.'
-                    });
+                    toast({ variant: 'destructive', title: 'Failed to share' });
                 }
             }
         }
@@ -785,7 +749,7 @@ function RoomPage() {
     return (
       <AuthGuard>
         <div className="flex h-screen w-full flex-col items-center justify-center bg-background p-4">
-            <Card className="max-w-sm">
+            <Card className="max-sm">
                 <CardHeader>
                     <CardTitle>Waiting Room</CardTitle>
                     <CardDescription>The meeting is locked by the host. Please wait to be admitted.</CardDescription>
@@ -839,7 +803,7 @@ function RoomPage() {
                   <Alert variant="destructive">
                     <AlertTitle>Camera Access Required</AlertTitle>
                     <AlertDescription>
-                      Please allow camera access to use this feature. Video feeds cannot be established.
+                      Please allow camera access. Video feeds cannot be established.
                     </AlertDescription>
                   </Alert>
                 )}
@@ -847,7 +811,7 @@ function RoomPage() {
                     <Alert>
                         <AlertTitle>Waiting for others</AlertTitle>
                         <AlertDescription>
-                        You are the only one in the meeting. The video call will start once another person joins.
+                        You are the only one here. The call will start when someone else joins.
                         </AlertDescription>
                     </Alert>
                 )}
@@ -860,7 +824,7 @@ function RoomPage() {
                         disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowUnmute ?? true) && (isAudioMuted || !!currentUserParticipant?.isMuted))}
                     >
                       {(isAudioMuted || !!currentUserParticipant?.isMuted) ? <MicOff /> : <Mic />}
-                      <span className="sr-only">{(isAudioMuted || !!currentUserParticipant?.isMuted) ? 'Unmute' : 'Mute'}</span>
+                      <span className="sr-only">Toggle Mic</span>
                     </Button>
                      <Button 
                         onClick={toggleVideo} 
@@ -870,7 +834,7 @@ function RoomPage() {
                         disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowStartVideo ?? true) && isVideoOff)}
                     >
                       {isVideoOff ? <VideoOff /> : <Video />}
-                      <span className="sr-only">{isVideoOff ? 'Turn camera on' : 'Turn camera off'}</span>
+                      <span className="sr-only">Toggle Video</span>
                     </Button>
                     <Button 
                         onClick={toggleScreenShare} 
@@ -880,7 +844,7 @@ function RoomPage() {
                         disabled={!hasCameraPermission || (!isHost && !(meetingData?.participantPermissions?.allowShareScreen ?? true))}
                     >
                       {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
-                      <span className="sr-only">{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
+                      <span className="sr-only">Toggle Screen Share</span>
                     </Button>
                     <Button 
                         onClick={toggleRaiseHand} 
@@ -890,12 +854,12 @@ function RoomPage() {
                         disabled={!isHost && !(meetingData?.participantPermissions?.allowSendReactions ?? true)}
                     >
                         <Hand />
-                        <span className="sr-only">{currentUserParticipant?.hasRaisedHand ? 'Lower Hand' : 'Raise Hand'}</span>
+                        <span className="sr-only">Raise Hand</span>
                     </Button>
                     {isHost && (
                         <Button onClick={toggleLockMeeting} variant={meetingData?.isLocked ? "secondary" : "outline"} size="icon" className="rounded-full h-12 w-12">
                             {meetingData?.isLocked ? <Unlock /> : <Lock />}
-                            <span className="sr-only">{meetingData?.isLocked ? 'Unlock Meeting' : 'Lock Meeting'}</span>
+                            <span className="sr-only">Toggle Lock</span>
                         </Button>
                     )}
                     {isHost && (
@@ -909,38 +873,28 @@ function RoomPage() {
                             <DialogContent>
                                 <DialogHeader>
                                     <DialogTitle>Host Controls</DialogTitle>
-                                    <DialogDescription>Manage what features are enabled and what participants can do.</DialogDescription>
+                                    <DialogDescription>Manage features and participant permissions.</DialogDescription>
                                 </DialogHeader>
                                 <div className="space-y-6 py-2">
                                     <div>
-                                        <h3 className="text-lg font-medium mb-4">Meeting Features</h3>
+                                        <h3 className="text-lg font-medium mb-4">Features</h3>
                                         <div className="space-y-4">
                                             <div className="flex items-center justify-between">
-                                                <Label htmlFor="recording-switch" className="flex flex-col space-y-1">
-                                                    <span>Recording</span>
-                                                    <span className="font-normal leading-snug text-muted-foreground">
-                                                        Enable/disable meeting recording.
-                                                    </span>
-                                                </Label>
+                                                <Label htmlFor="recording-switch">Recording</Label>
                                                 <Switch id="recording-switch" checked={meetingData?.isRecording ?? false} onCheckedChange={(checked) => handleFeatureChange('isRecording', checked)} />
                                             </div>
                                             <div className="flex items-center justify-between">
-                                                <Label htmlFor="gemini-switch" className="flex flex-col space-y-1">
-                                                    <span>Gemini Notes (Beta)</span>
-                                                    <span className="font-normal leading-snug text-muted-foreground">
-                                                        Enable AI-powered meeting notes.
-                                                    </span>
-                                                </Label>
+                                                <Label htmlFor="gemini-switch">Gemini Notes (Beta)</Label>
                                                 <Switch id="gemini-switch" checked={meetingData?.geminiNotesEnabled ?? false} onCheckedChange={(checked) => handleFeatureChange('geminiNotesEnabled', checked)} />
                                             </div>
                                         </div>
                                     </div>
                                     <Separator />
                                     <div>
-                                        <h3 className="text-lg font-medium mb-4">Participant Permissions</h3>
+                                        <h3 className="text-lg font-medium mb-4">Permissions</h3>
                                         <div className="space-y-4">
                                              <div className="flex items-center justify-between">
-                                                <Label htmlFor="share-screen-switch">Share their screen</Label>
+                                                <Label htmlFor="share-screen-switch">Share screen</Label>
                                                 <Switch id="share-screen-switch" checked={meetingData?.participantPermissions?.allowShareScreen ?? true} onCheckedChange={(checked) => handlePermissionChange('allowShareScreen', checked)} />
                                             </div>
                                              <div className="flex items-center justify-between">
@@ -948,11 +902,11 @@ function RoomPage() {
                                                 <Switch id="send-reactions-switch" checked={meetingData?.participantPermissions?.allowSendReactions ?? true} onCheckedChange={(checked) => handlePermissionChange('allowSendReactions', checked)} />
                                             </div>
                                             <div className="flex items-center justify-between">
-                                                <Label htmlFor="unmute-switch">Turn on their microphone</Label>
+                                                <Label htmlFor="unmute-switch">Microphone</Label>
                                                 <Switch id="unmute-switch" checked={meetingData?.participantPermissions?.allowUnmute ?? true} onCheckedChange={(checked) => handlePermissionChange('allowUnmute', checked)} />
                                             </div>
                                             <div className="flex items-center justify-between">
-                                                <Label htmlFor="start-video-switch">Turn on their video</Label>
+                                                <Label htmlFor="start-video-switch">Video</Label>
                                                 <Switch id="start-video-switch" checked={meetingData?.participantPermissions?.allowStartVideo ?? true} onCheckedChange={(checked) => handlePermissionChange('allowStartVideo', checked)} />
                                             </div>
                                         </div>
@@ -1011,11 +965,11 @@ function RoomPage() {
                             <>
                                 <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => toggleParticipantMute(p.id, !!p.isMuted)}>
                                     {p.isMuted ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-                                    <span className="sr-only">{p.isMuted ? 'Request Unmute' : 'Mute Participant'}</span>
+                                    <span className="sr-only">Mute/Unmute</span>
                                 </Button>
                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => removeParticipant(p.id)}>
                                     <XCircle className="h-4 w-4" />
-                                    <span className="sr-only">Remove Participant</span>
+                                    <span className="sr-only">Remove</span>
                                 </Button>
                             </>
                         )}
@@ -1060,7 +1014,6 @@ function RoomPage() {
                         />
                         <Button onClick={handleSendMessage} size="icon">
                             <Send className="h-4 w-4" />
-                            <span className="sr-only">Send</span>
                         </Button>
                     </div>
                 </CardFooter>
