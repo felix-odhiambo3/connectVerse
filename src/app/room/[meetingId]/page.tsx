@@ -32,8 +32,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/tabs"; // Adjusted from @/components/ui/tabs
-import { Alert, AlertTitle, AlertDescription } from "@/alert"; // Adjusted from @/components/ui/alert
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // Constants
 const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
@@ -153,13 +153,14 @@ export default function RoomPage() {
       if (isMounted) {
         console.error('Error accessing media:', error);
         setHasMediaPermission(false);
-        toast({
-          variant: 'destructive',
-          title: 'Media Access Error',
-          description: error.name === 'AbortError' 
-            ? 'The camera request was interrupted. Please refresh or try again.' 
-            : 'Please enable camera and microphone permissions in your browser.',
-        });
+        // Do not toast AbortError as it's often a race condition during initialization
+        if (error.name !== 'AbortError') {
+          toast({
+            variant: 'destructive',
+            title: 'Media Access Error',
+            description: 'Please enable camera and microphone permissions in your browser.',
+          });
+        }
       }
     }
   }, [isAudioMuted, isVideoOff, toast]);
@@ -186,7 +187,6 @@ export default function RoomPage() {
     const mainVideo = mainVideoRef.current;
     const miniVideo = miniVideoRef.current;
 
-    // Main view logic: Show screen share if active, otherwise local camera
     if (mainVideo) {
       const targetStream = (isScreenSharing && screenStreamRef.current) 
         ? screenStreamRef.current 
@@ -197,19 +197,17 @@ export default function RoomPage() {
       }
     }
     
-    // Mini preview always shows local camera
     if (miniVideo && localStreamRef.current) {
       if (miniVideo.srcObject !== localStreamRef.current) {
         miniVideo.srcObject = localStreamRef.current;
       }
     }
 
-    // Update track enablement
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isAudioMuted);
       localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
     }
-  }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission, meetingData?.screenSharerId]);
+  }, [isAudioMuted, isVideoOff, isScreenSharing, hasMediaPermission]);
 
   // Priority Logic for Screen Sharing
   useEffect(() => {
@@ -228,15 +226,13 @@ export default function RoomPage() {
         description: "The host or another user is now sharing their screen.",
       });
     }
-  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing]);
+  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing, toast]);
 
-  // Update current time
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Track session time
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') {
         setElapsedTime('00:00:00');
@@ -250,7 +246,6 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  // Join/Update participant
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -285,7 +280,7 @@ export default function RoomPage() {
       clearInterval(checkpointInterval);
       updateDoc(pRef, { role: 'left', activeSegmentStart: null });
     };
-  }, [user, meetingId, firestore, meetingData?.status, !!meetingData]);
+  }, [user, meetingId, firestore, meetingData?.status, !!meetingData, currentTime, currentUserParticipant?.totalDuration, currentUserParticipant?.activeSegmentStart, isAudioMuted, isVideoOff]);
 
   const handleSendMessage = () => {
     if (!chatInput.trim() || !user || !firestore) return;
