@@ -126,7 +126,7 @@ const servers = {
 interface Participant {
   id: string;
   name: string;
-  joinedAt: { seconds: number };
+  joinedAt: { seconds: number } | null;
   activeSegmentStart?: { seconds: number } | null;
   totalDuration?: number;
   role: 'host' | 'participant' | 'waiting' | 'left';
@@ -216,13 +216,13 @@ function RoomPage() {
 
   const { data: meetingData } = useDoc<{ 
     hostId: string; 
-    createdAt: { seconds: number; }; 
-    endedAt?: { seconds: number; };
+    createdAt: { seconds: number; } | null; 
+    endedAt?: { seconds: number; } | null;
     status: string;
     isLocked?: boolean;
     isRecording?: boolean;
     name?: string;
-    scheduledAt?: { seconds: number };
+    scheduledAt?: { seconds: number } | null;
     geminiNotesEnabled?: boolean;
     participantPermissions?: ParticipantPermissions;
   }>(meetingRef);
@@ -964,9 +964,9 @@ function RoomPage() {
 
   // Attendance Summary View
   if (showSummary && meetingData?.status === 'finished') {
-    const totalMeetingSeconds = meetingData.endedAt 
+    const totalMeetingSeconds = (meetingData.endedAt?.seconds && meetingData.createdAt?.seconds)
         ? meetingData.endedAt.seconds - meetingData.createdAt.seconds 
-        : Math.floor(Date.now() / 1000) - meetingData.createdAt.seconds;
+        : Math.floor(Date.now() / 1000) - (meetingData.createdAt?.seconds || Math.floor(Date.now() / 1000));
 
     return (
         <AuthGuard>
@@ -1005,7 +1005,7 @@ function RoomPage() {
                                         const participationSeconds = p.totalDuration || 0;
                                         const attendancePercentage = totalMeetingSeconds > 0 ? (participationSeconds / totalMeetingSeconds) : 0;
                                         const isPresent = attendancePercentage >= 0.7;
-                                        const isLate = meetingData?.createdAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                                        const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
 
                                         return (
                                             <TableRow key={p.id}>
@@ -1170,7 +1170,7 @@ function RoomPage() {
                                     <TableBody>
                                         {participants?.map((p) => {
                                             const durationSeconds = calculateParticipantDuration(p as Participant, currentTime);
-                                            const isLate = meetingData?.createdAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                                            const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                                             return (
                                                 <TableRow key={p.id}>
                                                     <TableCell className="font-medium flex items-center gap-2">
@@ -1403,7 +1403,7 @@ function RoomPage() {
                 <CardContent className="flex-1 space-y-4 overflow-y-auto pt-4">
                   {activeParticipants?.map((p) => {
                     const participationDuration = calculateParticipantDuration(p as Participant, currentTime);
-                    const isLate = meetingData?.createdAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
+                    const isLate = (meetingData?.createdAt?.seconds && p.joinedAt?.seconds) ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                     
                     return (
                       <div key={p.id} className="flex items-center gap-3 group">
