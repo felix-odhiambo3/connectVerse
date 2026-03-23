@@ -29,7 +29,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, XCircle, Send, Hand, Lock, Unlock, CircleDot, Share2, Shield, User as UserIcon, Smile, Copy, Check, BarChart3, Clock, Trophy, Frown, AlertCircle } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -151,6 +151,7 @@ interface FloatingReaction {
 }
 
 const REACTION_EMOJIS = ['❤️', '👍', '🎉', '😮', '😢', '🔥', '👏', '💯'];
+const LATE_THRESHOLD_SECONDS = 15 * 60; // 15 minutes
 
 function formatDuration(seconds: number) {
   const h = Math.floor(seconds / 3600);
@@ -975,13 +976,13 @@ function RoomPage() {
                         <div className="mx-auto bg-primary/10 w-12 h-12 rounded-full flex items-center justify-center mb-4">
                             <Clock className="h-6 w-6 text-primary" />
                         </div>
-                        <CardTitle className="text-2xl">Meeting Summary</CardTitle>
-                        <CardDescription>Final attendance report and session statistics.</CardDescription>
+                        <CardTitle className="text-2xl">Attendance Report</CardTitle>
+                        <CardDescription>Participation analysis and session stats.</CardDescription>
                     </CardHeader>
                     <CardContent className="p-6">
                         <div className="grid grid-cols-2 gap-4 mb-8">
                             <div className="bg-white p-4 rounded-lg border shadow-sm">
-                                <p className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">Total Duration</p>
+                                <p className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">Total Session</p>
                                 <p className="text-2xl font-bold font-mono">{formatDuration(totalMeetingSeconds)}</p>
                             </div>
                             <div className="bg-white p-4 rounded-lg border shadow-sm">
@@ -1004,11 +1005,15 @@ function RoomPage() {
                                         const participationSeconds = p.totalDuration || 0;
                                         const attendancePercentage = totalMeetingSeconds > 0 ? (participationSeconds / totalMeetingSeconds) : 0;
                                         const isPresent = attendancePercentage >= 0.7;
+                                        const isLate = meetingData?.createdAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
 
                                         return (
                                             <TableRow key={p.id}>
                                                 <TableCell className="font-medium">
-                                                    {p.name} {p.id === user?.uid && "(You)"}
+                                                    <div className="flex flex-col">
+                                                        <span>{p.name} {p.id === user?.uid && "(You)"}</span>
+                                                        {isLate && <span className="text-[10px] text-destructive font-semibold flex items-center gap-1"><AlertCircle className="h-2 w-2" /> Late Arrival</span>}
+                                                    </div>
                                                 </TableCell>
                                                 <TableCell className="font-mono text-zinc-600">
                                                     {formatDuration(participationSeconds)}
@@ -1150,7 +1155,7 @@ function RoomPage() {
                             <DialogHeader>
                                 <DialogTitle>Session Participation Monitor</DialogTitle>
                                 <DialogDescription>
-                                    Review total cumulative participation time for all students.
+                                    Review total cumulative participation time and arrival status.
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="py-4">
@@ -1158,21 +1163,27 @@ function RoomPage() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Student Name</TableHead>
-                                            <TableHead>First Joined</TableHead>
+                                            <TableHead>Arrival Status</TableHead>
                                             <TableHead className="text-right">Cumulative Duration</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
                                         {participants?.map((p) => {
-                                            const joinDate = p.joinedAt ? new Date(p.joinedAt.seconds * 1000) : new Date();
                                             const durationSeconds = calculateParticipantDuration(p as Participant, currentTime);
+                                            const isLate = meetingData?.createdAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                                             return (
                                                 <TableRow key={p.id}>
                                                     <TableCell className="font-medium flex items-center gap-2">
                                                         {p.name} {p.id === user?.uid && "(You)"}
                                                         {p.role === 'left' && <Badge variant="outline" className="text-[10px] py-0">Inactive</Badge>}
                                                     </TableCell>
-                                                    <TableCell className="text-muted-foreground">{format(joinDate, 'p')}</TableCell>
+                                                    <TableCell>
+                                                        {isLate ? (
+                                                            <Badge variant="destructive" className="text-[10px] py-0">Late Entry</Badge>
+                                                        ) : (
+                                                            <Badge variant="outline" className="text-[10px] py-0 text-green-600 border-green-200">On Time</Badge>
+                                                        )}
+                                                    </TableCell>
                                                     <TableCell className="text-right font-mono">{formatDuration(durationSeconds)}</TableCell>
                                                 </TableRow>
                                             );
@@ -1392,6 +1403,7 @@ function RoomPage() {
                 <CardContent className="flex-1 space-y-4 overflow-y-auto pt-4">
                   {activeParticipants?.map((p) => {
                     const participationDuration = calculateParticipantDuration(p as Participant, currentTime);
+                    const isLate = meetingData?.createdAt ? (p.joinedAt.seconds - meetingData.createdAt.seconds) > LATE_THRESHOLD_SECONDS : false;
                     
                     return (
                       <div key={p.id} className="flex items-center gap-3 group">
@@ -1410,6 +1422,9 @@ function RoomPage() {
                             <p className="font-medium text-sm truncate">{p.name} {p.id === meetingData?.hostId && '(Host)'}</p>
                             {isReactionRecent(p.lastReactionAt) && (
                                 <span className="text-lg animate-bounce">{p.lastReaction}</span>
+                            )}
+                            {isLate && (
+                                <Badge variant="destructive" className="h-4 px-1 text-[8px] uppercase tracking-tighter">Late</Badge>
                             )}
                           </div>
                           <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono">
