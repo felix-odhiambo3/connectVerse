@@ -37,8 +37,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-// Participation Tracking Threshold
-const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
+const ATTENDANCE_THRESHOLD = 0.7;
 
 interface Participant {
   id: string;
@@ -84,7 +83,7 @@ function formatDuration(seconds: number) {
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
 }
 
-function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean }) {
+function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean, isFeatured?: boolean }) {
   const videoRef = useCallback((node: HTMLVideoElement | null) => {
     if (node && stream) {
       node.srcObject = stream;
@@ -92,27 +91,27 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: Med
   }, [stream]);
 
   return (
-    <div className="relative w-full h-full bg-zinc-800 rounded-3xl overflow-hidden group border shadow-sm flex items-center justify-center">
+    <div className={cn("relative w-full h-full bg-zinc-800 rounded-3xl overflow-hidden group border shadow-sm flex items-center justify-center transition-all", isFeatured && "border-primary/20 shadow-2xl bg-zinc-900")}>
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted={isMe}
-        className={cn("w-full h-full object-cover transition-opacity", isVideoOff ? "opacity-0" : "opacity-100")}
+        className={cn("w-full h-full object-cover transition-opacity duration-500", isVideoOff ? "opacity-0" : "opacity-100")}
       />
       {isVideoOff && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10">
-           <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center">
-              <UserIcon className="h-8 w-8 text-zinc-600" />
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
+           <div className={cn("rounded-full bg-zinc-800 flex items-center justify-center transition-all shadow-inner border border-white/5", isFeatured ? "w-32 h-32" : "w-16 h-16")}>
+              <UserIcon className={cn("text-zinc-600 transition-all", isFeatured ? "h-16 w-16" : "h-8 w-8")} />
            </div>
-           <p className="text-xs text-zinc-500 mt-2 font-medium">Camera Off</p>
+           <p className={cn("text-zinc-500 mt-4 font-bold tracking-tight", isFeatured ? "text-sm uppercase tracking-widest" : "text-xs")}>Camera Off</p>
         </div>
       )}
       <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
-        <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-sm border-none px-3 py-1">
+        <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-sm border-none px-3 py-1 font-bold">
           {name} {isMe && "(You)"}
         </Badge>
-        {isMuted && <div className="p-1 bg-red-500 rounded-full shadow-lg"><MicOff className="h-3 w-3 text-white" /></div>}
+        {isMuted && <div className="p-1.5 bg-red-500 rounded-full shadow-lg border border-white/10"><MicOff className="h-3.5 w-3.5 text-white" /></div>}
       </div>
     </div>
   );
@@ -136,7 +135,7 @@ export default function RoomPage() {
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [isTogglingVideo, setIsTogglingVideo] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
-  const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
+  const [floatingReaction, setFloatingReaction] = useState<FloatingReaction | null>(null);
   const [isReactionOpen, setIsReactionOpen] = useState(false);
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
   const [permissionErrorName, setPermissionErrorName] = useState<string | null>(null);
@@ -144,7 +143,6 @@ export default function RoomPage() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const isInitializingRef = useRef(false);
-  const seenReactionsRef = useRef<Set<string>>(new Set());
   const lastProcessedRemoteMuteAt = useRef<number>(0);
   const lastProcessedRemoteUnmuteAt = useRef<number>(0);
 
@@ -174,7 +172,18 @@ export default function RoomPage() {
   const isCoHost = currentUserParticipant?.role === 'co-host';
   const hasAdminPrivileges = isHost || isCoHost;
   
-  const activeParticipants = participants?.filter(p => p.role !== 'left' && p.role !== 'waiting') || [];
+  const activeParticipants = useMemo(() => {
+    if (!participants) return [];
+    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
+  }, [participants]);
+
+  const sortedParticipants = useMemo(() => {
+    const rolePriority = { host: 0, 'co-host': 1, participant: 2 };
+    return [...activeParticipants].sort((a, b) => (rolePriority[a.role as keyof typeof rolePriority] || 2) - (rolePriority[b.role as keyof typeof rolePriority] || 2));
+  }, [activeParticipants]);
+
+  const featuredParticipant = sortedParticipants[0];
+
   const waitingParticipants = participants?.filter(p => p.role === 'waiting') || [];
 
   const seriesAttendanceRef = useMemoFirebase(() => {
@@ -184,38 +193,32 @@ export default function RoomPage() {
 
   const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
 
-  // Reaction Monitor
   useEffect(() => {
     if (!participants) return;
     participants.forEach(p => {
       if (p.lastReaction && p.lastReactionAt) {
-        const reactionId = `${p.id}-${p.lastReactionAt.seconds}-${p.lastReactionAt.nanoseconds}`;
-        if (!seenReactionsRef.current.has(reactionId)) {
-          seenReactionsRef.current.add(reactionId);
-          setFloatingReactions([{
+        const reactionId = `${p.id}-${p.lastReactionAt.seconds}`;
+        if (floatingReaction?.id !== reactionId) {
+          setFloatingReaction({
             id: reactionId,
             emoji: p.lastReaction,
             userName: p.name,
             left: Math.random() * 80 + 10,
-          }]);
-          setTimeout(() => setFloatingReactions(prev => prev.filter(r => r.id !== reactionId)), 4000);
+          });
+          const timer = setTimeout(() => setFloatingReaction(null), 4000);
+          return () => clearTimeout(timer);
         }
       }
     });
-  }, [participants]);
+  }, [participants, floatingReaction?.id]);
 
-  // Remote Moderation Monitor (Force Mute / Unmute Request)
   useEffect(() => {
     if (!currentUserParticipant) return;
-
-    // Handle Kicked
     if (currentUserParticipant.role === 'left' && !isHost) {
       toast({ variant: 'destructive', title: 'Removed', description: 'You have been removed from the session.' });
       router.push('/dashboard');
       return;
     }
-
-    // Handle Force Mute
     if (currentUserParticipant.remoteMuteRequestAt) {
       const ts = currentUserParticipant.remoteMuteRequestAt.seconds;
       if (ts > lastProcessedRemoteMuteAt.current) {
@@ -227,8 +230,6 @@ export default function RoomPage() {
         }
       }
     }
-
-    // Handle Unmute Request
     if (currentUserParticipant.remoteUnmuteRequestAt) {
       const ts = currentUserParticipant.remoteUnmuteRequestAt.seconds;
       if (ts > lastProcessedRemoteUnmuteAt.current) {
@@ -244,7 +245,6 @@ export default function RoomPage() {
     }
   }, [currentUserParticipant, isAudioMuted, isHost]);
 
-  // Initialize Media
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
     isInitializingRef.current = true;
@@ -311,13 +311,11 @@ export default function RoomPage() {
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: newState });
   };
 
-  // Presence Sync
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     
     const syncPresence = async () => {
-      // Determine initial role/state
       let initialRole = 'participant';
       if (user.uid === meetingData.hostId) initialRole = 'host';
       else if (meetingData.isLocked && !currentUserParticipant) initialRole = 'waiting';
@@ -345,12 +343,7 @@ export default function RoomPage() {
       }
     }, 30000);
 
-    return () => {
-      clearInterval(interval);
-      if (currentUserParticipant?.role !== 'left') {
-        updateDoc(pRef, { activeSegmentStart: null });
-      }
-    };
+    return () => clearInterval(interval);
   }, [user, meetingId, firestore, meetingData?.status, meetingData?.isLocked, currentTime, isAudioMuted, isVideoOff, hasHandRaised]);
 
   useEffect(() => {
@@ -370,7 +363,6 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  // Host Actions
   const admitParticipant = (pId: string) => {
     if (!hasAdminPrivileges || !firestore) return;
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { role: 'participant', joinedAt: serverTimestamp() });
@@ -538,12 +530,12 @@ export default function RoomPage() {
     <AuthGuard>
       <div className="flex h-screen w-full flex-col overflow-hidden bg-background">
         <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
-          {floatingReactions.map(reaction => (
-            <div key={reaction.id} className="absolute bottom-0 animate-float-up flex flex-col items-center gap-1" style={{ left: `${reaction.left}%` }}>
-              <div className="text-4xl filter drop-shadow-lg">{reaction.emoji}</div>
-              <Badge variant="secondary" className="bg-black/50 text-white border-none text-[10px] py-0 px-2 font-bold whitespace-nowrap">{reaction.userName}</Badge>
+          {floatingReaction && (
+            <div key={floatingReaction.id} className="absolute bottom-0 animate-float-up flex flex-col items-center gap-1" style={{ left: `${floatingReaction.left}%` }}>
+              <div className="text-4xl filter drop-shadow-lg">{floatingReaction.emoji}</div>
+              <Badge variant="secondary" className="bg-black/50 text-white border-none text-[10px] py-0 px-2 font-bold whitespace-nowrap">{floatingReaction.userName}</Badge>
             </div>
-          ))}
+          )}
         </div>
 
         <header className="flex h-16 items-center justify-between border-b px-6 shrink-0 bg-card z-10">
@@ -589,12 +581,21 @@ export default function RoomPage() {
                       )}
                    </div>
                  ) : (
-                   <div className={cn("h-full w-full", activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2 p-4 gap-4" : "flex items-center justify-center")}>
-                      {activeParticipants.map(p => (
-                        <div key={p.id} className={cn("w-full h-full", activeParticipants.length === 1 && "max-w-none")}>
-                          <RemoteStream stream={p.id === user?.uid ? localStreamRef.current : null} name={p.name} isMe={p.id === user?.uid} isMuted={p.isMuted} isVideoOff={p.isVideoOff} />
+                   <div className="h-full w-full flex items-center justify-center p-4">
+                      {featuredParticipant ? (
+                        <div className="w-full h-full max-w-5xl mx-auto">
+                          <RemoteStream 
+                            stream={featuredParticipant.id === user?.uid ? localStreamRef.current : null} 
+                            name={featuredParticipant.name} 
+                            isMe={featuredParticipant.id === user?.uid} 
+                            isMuted={featuredParticipant.isMuted} 
+                            isVideoOff={featuredParticipant.isVideoOff}
+                            isFeatured={true}
+                          />
                         </div>
-                      ))}
+                      ) : (
+                        <div className="text-zinc-500 font-bold uppercase tracking-widest animate-pulse">Waiting for host...</div>
+                      )}
                    </div>
                  )}
                </div>
@@ -782,3 +783,4 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
+
