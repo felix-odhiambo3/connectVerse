@@ -18,7 +18,6 @@ import {
   writeBatch,
   setDoc,
   Timestamp,
-  deleteDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -27,7 +26,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, RefreshCcw, Lock, Unlock, MessageSquare, Users, BookOpen, Download, UserPlus, UserMinus, Star } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, RefreshCcw, Lock, Unlock, MessageSquare, Users, BookOpen, Download, UserMinus, Star } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -36,8 +35,6 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-const ATTENDANCE_THRESHOLD = 0.7;
 
 interface Participant {
   id: string;
@@ -66,7 +63,6 @@ interface ChatMessage {
 interface CumulativeStats {
   attendedHours: number;
   sessionsAttended: number;
-  totalSessionsInSeries?: number;
 }
 
 interface FloatingReaction {
@@ -193,24 +189,30 @@ export default function RoomPage() {
 
   const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
 
+  // Reaction replacement logic: only one at a time across all participants
+  const latestReactionParticipant = useMemo(() => {
+    if (!participants) return null;
+    return [...participants]
+      .filter(p => p.lastReaction && p.lastReactionAt)
+      .sort((a, b) => (b.lastReactionAt?.seconds || 0) - (a.lastReactionAt?.seconds || 0))[0];
+  }, [participants]);
+
   useEffect(() => {
-    if (!participants) return;
-    participants.forEach(p => {
-      if (p.lastReaction && p.lastReactionAt) {
-        const reactionId = `${p.id}-${p.lastReactionAt.seconds}`;
-        if (floatingReaction?.id !== reactionId) {
-          setFloatingReaction({
-            id: reactionId,
-            emoji: p.lastReaction,
-            userName: p.name,
-            left: Math.random() * 80 + 10,
-          });
-          const timer = setTimeout(() => setFloatingReaction(null), 4000);
-          return () => clearTimeout(timer);
-        }
+    if (latestReactionParticipant) {
+      const ts = latestReactionParticipant.lastReactionAt?.seconds || 0;
+      const reactionId = `${latestReactionParticipant.id}-${ts}`;
+      if (floatingReaction?.id !== reactionId) {
+        setFloatingReaction({
+          id: reactionId,
+          emoji: latestReactionParticipant.lastReaction!,
+          userName: latestReactionParticipant.name,
+          left: Math.random() * 80 + 10,
+        });
+        const timer = setTimeout(() => setFloatingReaction(null), 4000);
+        return () => clearTimeout(timer);
       }
-    });
-  }, [participants, floatingReaction?.id]);
+    }
+  }, [latestReactionParticipant, floatingReaction?.id]);
 
   useEffect(() => {
     if (!currentUserParticipant) return;
@@ -226,6 +228,7 @@ export default function RoomPage() {
         if (!isAudioMuted && localStreamRef.current) {
           setIsAudioMuted(true);
           localStreamRef.current.getAudioTracks().forEach(t => t.enabled = false);
+          updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { isMuted: true });
           toast({ title: 'Muted by host', description: 'Your microphone has been disabled.' });
         }
       }
@@ -243,7 +246,7 @@ export default function RoomPage() {
         }
       }
     }
-  }, [currentUserParticipant, isAudioMuted, isHost]);
+  }, [currentUserParticipant, isAudioMuted, isHost, firestore, meetingId, user?.uid]);
 
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
@@ -254,7 +257,8 @@ export default function RoomPage() {
         stream.getTracks().forEach(t => t.stop());
         return;
       }
-      stream.getVideoTracks().forEach(t => t.stop());
+      // PRIVACY BY DEFAULT: Start with tracks disabled
+      stream.getVideoTracks().forEach(t => t.stop()); // Completely stop camera initially
       stream.getAudioTracks().forEach(t => t.enabled = false);
       localStreamRef.current = stream;
       setHasMediaPermission(true);
@@ -344,7 +348,7 @@ export default function RoomPage() {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [user, meetingId, firestore, meetingData?.status, meetingData?.isLocked, currentTime, isAudioMuted, isVideoOff, hasHandRaised]);
+  }, [user, meetingId, firestore, meetingData?.status, meetingData?.isLocked, currentTime, isAudioMuted, isVideoOff, hasHandRaised, meetingData?.hostId]);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
@@ -366,19 +370,16 @@ export default function RoomPage() {
   const admitParticipant = (pId: string) => {
     if (!hasAdminPrivileges || !firestore) return;
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { role: 'participant', joinedAt: serverTimestamp() });
-    toast({ title: 'Participant admitted' });
   };
 
   const removeParticipant = (pId: string) => {
     if (!hasAdminPrivileges || !firestore) return;
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { role: 'left' });
-    toast({ title: 'Participant removed' });
   };
 
   const promoteToCoHost = (pId: string) => {
     if (!isHost || !firestore) return;
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { role: 'co-host' });
-    toast({ title: 'Promoted to Co-host' });
   };
 
   const forceMute = (pId: string) => {
@@ -392,13 +393,11 @@ export default function RoomPage() {
   const requestUnmute = (pId: string) => {
     if (!hasAdminPrivileges || !firestore) return;
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { remoteUnmuteRequestAt: serverTimestamp() });
-    toast({ title: 'Unmute request sent' });
   };
 
   const toggleLock = () => {
     if (!hasAdminPrivileges || !firestore) return;
     updateDoc(meetingRef!, { isLocked: !meetingData?.isLocked });
-    toast({ title: meetingData?.isLocked ? 'Meeting Unlocked' : 'Meeting Locked' });
   };
 
   const stopScreenSharing = () => {
@@ -449,22 +448,19 @@ export default function RoomPage() {
     const totalSessionSeconds = currentTime - (meetingData.createdAt?.seconds || currentTime);
     const batch = writeBatch(firestore);
     batch.update(meetingRef, { status: 'finished', endedAt: serverTimestamp() });
+    
+    // Process attendance (MVP logic)
     for (const p of participants) {
       const duration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
       const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
-      if (ratio >= ATTENDANCE_THRESHOLD && meetingData.seriesId) {
+      if (ratio >= 0.7 && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
-        const seriesSnap = await getDoc(seriesUserRef);
-        if (seriesSnap.exists()) {
-          batch.update(seriesUserRef, {
-            attendedHours: increment(meetingData.fixedDurationHours || 0),
-            sessionsAttended: increment(1),
-            completedSessionIds: arrayUnion(meetingId),
-            lastUpdated: serverTimestamp()
-          });
-        } else {
-          batch.set(seriesUserRef, { userId: p.id, seriesId: meetingData.seriesId, attendedHours: meetingData.fixedDurationHours || 0, sessionsAttended: 1, completedSessionIds: [meetingId], lastUpdated: serverTimestamp() });
-        }
+        batch.set(seriesUserRef, { 
+          userId: p.id, 
+          seriesId: meetingData.seriesId, 
+          attendedHours: increment(meetingData.fixedDurationHours || 0), 
+          sessionsAttended: increment(1) 
+        }, { merge: true });
       }
     }
     await batch.commit();
@@ -783,4 +779,3 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
-
