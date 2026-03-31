@@ -163,7 +163,7 @@ export default function RoomPage() {
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
   const activeParticipants = participants?.filter(p => p.role !== 'left') || [];
 
-  // Initialize Media safely without UI state dependencies to prevent hardware thrashing
+  // Initialize Media safely - decoupled from mute/video states to prevent AbortError
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
     isInitializingRef.current = true;
@@ -176,10 +176,6 @@ export default function RoomPage() {
       }
       localStreamRef.current = stream;
       setHasMediaPermission(true);
-      
-      // Initial hardware sync
-      stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
-      stream.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
     } catch (error: any) {
       if (isMounted) {
         console.error('Media error:', error);
@@ -188,7 +184,7 @@ export default function RoomPage() {
     } finally {
       isInitializingRef.current = false;
     }
-  }, [isAudioMuted, isVideoOff]);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -200,7 +196,7 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync hardware toggles directly on the stream object
+  // Sync hardware toggles directly on the stream object - Independent of init lifecycle
   useEffect(() => {
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
@@ -268,7 +264,7 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  // Watch for Screen Sharer overrides
+  // Watch for Host overrides during screen sharing
   useEffect(() => {
     if (meetingData?.screenSharerId && meetingData.screenSharerId !== user?.uid && isScreenSharing) {
        stopScreenSharing();
@@ -321,18 +317,15 @@ export default function RoomPage() {
   };
 
   const toggleMic = () => {
-    const next = !isAudioMuted;
-    setIsAudioMuted(next);
+    setIsAudioMuted(prev => !prev);
   };
 
   const toggleVideo = () => {
-    const next = !isVideoOff;
-    setIsVideoOff(next);
+    setIsVideoOff(prev => !prev);
   };
 
   const toggleHand = () => {
-    const next = !hasHandRaised;
-    setHasHandRaised(next);
+    setHasHandRaised(prev => !prev);
   };
 
   const endMeetingForAll = async () => {
@@ -497,7 +490,7 @@ export default function RoomPage() {
                  ) : (
                    <div className={cn(
                      "h-full w-full",
-                     activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2 p-4 gap-4" : "flex items-center justify-center p-8"
+                     activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2 p-4 gap-4" : "flex items-center justify-center"
                    )}>
                       {activeParticipants.map(p => (
                         <div key={p.id} className="w-full h-full">
@@ -619,7 +612,7 @@ export default function RoomPage() {
                                      <span className="text-xs font-black truncate text-zinc-800">{p.name}</span>
                                      {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
                                   </div>
-                                  <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5 font-bold">
+                                  <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
                                      {!isOnline ? <Badge variant="outline" className="text-[8px] h-4 px-1.5 py-0 uppercase tracking-widest border-zinc-200">Offline</Badge> : (
                                        <div className="flex items-center gap-3">
                                          {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
