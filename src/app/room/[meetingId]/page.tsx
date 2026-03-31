@@ -15,6 +15,7 @@ import {
   increment,
   arrayUnion,
   writeBatch,
+  setDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -71,9 +72,9 @@ function formatDuration(seconds: number) {
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
 }
 
-// Remote Participant Component
+// Remote Participant Component with robust stream binding
 function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean }) {
-  // Use a callback ref to ensure srcObject is applied whenever the video element is mounted/updated
+  // Callback ref ensures srcObject is applied even if the element re-renders due to parent state changes
   const videoRef = useCallback((node: HTMLVideoElement | null) => {
     if (node && stream) {
       node.srcObject = stream;
@@ -81,27 +82,27 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: Med
   }, [stream]);
 
   return (
-    <div className="relative w-full h-full bg-zinc-800 rounded-3xl overflow-hidden group border shadow-sm">
+    <div className="relative w-full h-full bg-zinc-800 rounded-3xl overflow-hidden group border shadow-sm flex items-center justify-center">
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted={isMe}
-        className={cn("w-full h-full object-cover", isVideoOff && "hidden")}
+        className={cn("w-full h-full object-cover transition-opacity", isVideoOff ? "opacity-0" : "opacity-100")}
       />
       {isVideoOff && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10">
            <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center">
               <UserIcon className="h-8 w-8 text-zinc-600" />
            </div>
            <p className="text-xs text-zinc-500 mt-2 font-medium">Camera Off</p>
         </div>
       )}
-      <div className="absolute bottom-4 left-4 flex items-center gap-2">
+      <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
         <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-sm border-none px-3 py-1">
           {name} {isMe && "(You)"}
         </Badge>
-        {isMuted && <div className="p-1 bg-red-500 rounded-full"><MicOff className="h-3 w-3 text-white" /></div>}
+        {isMuted && <div className="p-1 bg-red-500 rounded-full shadow-lg"><MicOff className="h-3 w-3 text-white" /></div>}
       </div>
     </div>
   );
@@ -162,7 +163,7 @@ export default function RoomPage() {
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
   const activeParticipants = participants?.filter(p => p.role !== 'left') || [];
 
-  // Initialize Media safely
+  // Initialize Media safely without UI state dependencies to prevent hardware thrashing
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
     isInitializingRef.current = true;
@@ -176,7 +177,7 @@ export default function RoomPage() {
       localStreamRef.current = stream;
       setHasMediaPermission(true);
       
-      // Apply initial state
+      // Initial hardware sync
       stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
       stream.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
     } catch (error: any) {
@@ -199,7 +200,7 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync hardware toggles separately
+  // Sync hardware toggles directly on the stream object
   useEffect(() => {
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
@@ -207,39 +208,33 @@ export default function RoomPage() {
     }
   }, [isAudioMuted, isVideoOff]);
 
-  // Participation Tracking
+  // Participation Tracking and Presence
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     
-    updateDoc(pRef, {
-      id: user.uid,
-      name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
-      joinedAt: serverTimestamp(),
-      activeSegmentStart: serverTimestamp(),
-      role: user.uid === meetingData.hostId ? 'host' : 'participant',
-      isMuted: isAudioMuted,
-      isVideoOff: isVideoOff,
-      hasRaisedHand: hasHandRaised,
-    }).catch(() => {
-      // If doc doesn't exist, set it
-      const batch = writeBatch(firestore);
-      batch.set(pRef, {
-        id: user.uid,
-        name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
-        joinedAt: serverTimestamp(),
-        activeSegmentStart: serverTimestamp(),
-        role: user.uid === meetingData.hostId ? 'host' : 'participant',
-        isMuted: isAudioMuted,
-        isVideoOff: isVideoOff,
-        hasRaisedHand: hasHandRaised,
-        totalDuration: 0
-      }, { merge: true });
-      batch.commit();
-    });
+    const syncPresence = async () => {
+      try {
+        await setDoc(pRef, {
+          id: user.uid,
+          name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
+          joinedAt: currentUserParticipant?.joinedAt || serverTimestamp(),
+          activeSegmentStart: serverTimestamp(),
+          role: user.uid === meetingData.hostId ? 'host' : 'participant',
+          isMuted: isAudioMuted,
+          isVideoOff: isVideoOff,
+          hasRaisedHand: hasHandRaised,
+          totalDuration: currentUserParticipant?.totalDuration || 0
+        }, { merge: true });
+      } catch (err) {
+        console.error("Presence sync failed", err);
+      }
+    };
+
+    syncPresence();
 
     const interval = setInterval(() => {
-      if (meetingData.status !== 'finished') {
+      if (meetingData.status !== 'finished' && document.visibilityState === 'visible') {
         const currentDuration = (currentUserParticipant?.totalDuration || 0) + 
           (currentUserParticipant?.activeSegmentStart ? (currentTime - (currentUserParticipant.activeSegmentStart.seconds || currentTime)) : 0);
         updateDoc(pRef, { 
@@ -282,8 +277,10 @@ export default function RoomPage() {
   }, [meetingData?.screenSharerId, user?.uid, isScreenSharing, toast]);
 
   const stopScreenSharing = () => {
-    screenStreamRef.current?.getTracks().forEach(t => t.stop());
-    screenStreamRef.current = null;
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(t => t.stop());
+      screenStreamRef.current = null;
+    }
     setIsScreenSharing(false);
     if (firestore && meetingId) {
       updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
@@ -308,6 +305,7 @@ export default function RoomPage() {
       stream.getVideoTracks()[0].onended = () => stopScreenSharing();
     } catch (err) {
       console.error("Screen share error:", err);
+      toast({ variant: 'destructive', title: 'Screen Share Failed' });
     }
   };
 
@@ -325,25 +323,16 @@ export default function RoomPage() {
   const toggleMic = () => {
     const next = !isAudioMuted;
     setIsAudioMuted(next);
-    if (firestore && user && meetingId) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: next });
-    }
   };
 
   const toggleVideo = () => {
     const next = !isVideoOff;
     setIsVideoOff(next);
-    if (firestore && user && meetingId) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: next });
-    }
   };
 
   const toggleHand = () => {
     const next = !hasHandRaised;
     setHasHandRaised(next);
-    if (firestore && user && meetingId) {
-      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { hasRaisedHand: next });
-    }
   };
 
   const endMeetingForAll = async () => {
@@ -508,7 +497,7 @@ export default function RoomPage() {
                  ) : (
                    <div className={cn(
                      "h-full w-full",
-                     activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2 p-4 gap-4" : "flex items-center justify-center"
+                     activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2 p-4 gap-4" : "flex items-center justify-center p-8"
                    )}>
                       {activeParticipants.map(p => (
                         <div key={p.id} className="w-full h-full">
@@ -521,6 +510,9 @@ export default function RoomPage() {
                           />
                         </div>
                       ))}
+                      {activeParticipants.length === 0 && (
+                        <div className="text-zinc-500 font-medium">Initializing camera...</div>
+                      )}
                    </div>
                  )}
                </div>
@@ -620,7 +612,7 @@ export default function RoomPage() {
                                  <Avatar className="h-10 w-10 border-2 border-white shadow-sm ring-1 ring-zinc-100">
                                     <AvatarFallback className="bg-primary/5 text-primary font-black text-xs">{p.name[0]}</AvatarFallback>
                                  </Avatar>
-                                 {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-1.5 border-2 border-white shadow-lg animate-bounce"><Hand className="h-2.5 w-2.5 text-yellow-900" /></div>}
+                                 {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-1.5 border-2 border-white shadow-lg animate-bounce z-10"><Hand className="h-2.5 w-2.5 text-yellow-900" /></div>}
                                </div>
                                <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 overflow-hidden">
@@ -655,9 +647,9 @@ export default function RoomPage() {
                               style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / Math.max(1, (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
                             />
                          </div>
-                         <p className="text-[10px] text-center text-zinc-500 leading-relaxed font-medium bg-white p-3 rounded-xl border border-zinc-100">
+                         <div className="text-[10px] text-center text-zinc-500 leading-relaxed font-medium bg-white p-3 rounded-xl border border-zinc-100">
                             Maintain 70% participation in <b>Session {meetingData?.sessionIndex || 1}</b> to secure your attendance credit.
-                         </p>
+                         </div>
                       </div>
                    </div>
                 </TabsContent>
