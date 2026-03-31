@@ -37,7 +37,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
-// Constants
+// Participation Tracking Threshold
 const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
 
 interface Participant {
@@ -164,6 +164,7 @@ export default function RoomPage() {
 
   const isHost = user?.uid === meetingData?.hostId;
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
+  const activeParticipants = participants?.filter(p => p.role !== 'left') || [];
 
   // Initialize Media safely
   const initMedia = useCallback(async (isMounted: boolean) => {
@@ -489,16 +490,20 @@ export default function RoomPage() {
                       )}
                    </div>
                  ) : (
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
-                      {participants?.filter(p => p.role !== 'left').map(p => (
-                        <RemoteStream 
-                          key={p.id} 
-                          stream={p.id === user?.uid ? localStreamRef.current : null} 
-                          name={p.name} 
-                          isMe={p.id === user?.uid} 
-                          isMuted={p.isMuted}
-                          isVideoOff={p.isVideoOff}
-                        />
+                   <div className={cn(
+                     "h-full gap-4",
+                     activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2" : "flex items-center justify-center"
+                   )}>
+                      {activeParticipants.map(p => (
+                        <div key={p.id} className="w-full h-full">
+                          <RemoteStream 
+                            stream={p.id === user?.uid ? localStreamRef.current : null} 
+                            name={p.name} 
+                            isMe={p.id === user?.uid} 
+                            isMuted={p.isMuted}
+                            isVideoOff={p.isVideoOff}
+                          />
+                        </div>
                       ))}
                    </div>
                  )}
@@ -556,7 +561,7 @@ export default function RoomPage() {
                        <Table>
                           <TableHeader><TableRow className="border-none hover:bg-transparent"><TableHead className="font-black text-xs uppercase tracking-widest">Student</TableHead><TableHead className="font-black text-xs uppercase tracking-widest">Status</TableHead><TableHead className="font-black text-xs uppercase tracking-widest">Join Time</TableHead><TableHead className="text-right font-black text-xs uppercase tracking-widest">Active Time</TableHead><TableHead className="text-right font-black text-xs uppercase tracking-widest">Credit</TableHead></TableRow></TableHeader>
                           <TableBody>
-                             {participants?.filter(p => p.role !== 'left').map(p => {
+                             {activeParticipants.map(p => {
                                const dur = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
                                const maxDur = currentTime - (meetingData?.createdAt?.seconds || currentTime);
                                const ratio = dur / (maxDur || 1);
