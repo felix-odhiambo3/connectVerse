@@ -16,6 +16,7 @@ import {
   arrayUnion,
   writeBatch,
   setDoc,
+  Timestamp,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -24,7 +25,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, RefreshCcw, Lock } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, RefreshCcw, Lock, MessageSquare, Users, BookOpen, Download } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -33,7 +34,6 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // Participation Tracking Threshold
 const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
@@ -41,14 +41,15 @@ const ATTENDANCE_THRESHOLD = 0.7; // 70% participation required for credit
 interface Participant {
   id: string;
   name: string;
-  joinedAt: { seconds: number } | null;
-  activeSegmentStart?: { seconds: number } | null;
+  joinedAt: Timestamp | null;
+  activeSegmentStart?: Timestamp | null;
   totalDuration?: number;
   role: 'host' | 'participant' | 'waiting' | 'left';
   hasRaisedHand?: boolean;
   isMuted?: boolean;
   isVideoOff?: boolean;
   lastReaction?: string;
+  lastReactionAt?: Timestamp;
 }
 
 interface ChatMessage {
@@ -56,13 +57,20 @@ interface ChatMessage {
   senderId: string;
   senderName: string;
   text: string;
-  createdAt: { seconds: number };
+  createdAt: Timestamp;
 }
 
 interface CumulativeStats {
   attendedHours: number;
   sessionsAttended: number;
   totalSessionsInSeries?: number;
+}
+
+interface FloatingReaction {
+  id: string;
+  emoji: string;
+  userName: string;
+  left: number;
 }
 
 function formatDuration(seconds: number) {
@@ -74,7 +82,7 @@ function formatDuration(seconds: number) {
 
 // Remote Participant Component with robust stream binding
 function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean }) {
-  // Callback ref ensures srcObject is applied even if the element re-renders due to parent state changes
+  // Callback ref ensures srcObject is applied even if the element re-renders due to parent state changes (like mute/unmute)
   const videoRef = useCallback((node: HTMLVideoElement | null) => {
     if (node && stream) {
       node.srcObject = stream;
@@ -125,6 +133,7 @@ export default function RoomPage() {
   const [showSummary, setShowSummary] = useState(false);
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
+  const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   
   // Media status states
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
@@ -133,6 +142,7 @@ export default function RoomPage() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const isInitializingRef = useRef(false);
+  const seenReactionsRef = useRef<Set<string>>(new Set());
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -155,6 +165,10 @@ export default function RoomPage() {
 
   const { data: chatMessages } = useCollection<ChatMessage>(chatRef);
 
+  const isHost = user?.uid === meetingData?.hostId;
+  const currentUserParticipant = participants?.find(p => p.id === user?.uid);
+  const activeParticipants = participants?.filter(p => p.role !== 'left') || [];
+
   const seriesAttendanceRef = useMemoFirebase(() => {
     if (!firestore || !meetingData?.seriesId || !user) return null;
     return doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', user.uid);
@@ -162,11 +176,30 @@ export default function RoomPage() {
 
   const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
 
-  const isHost = user?.uid === meetingData?.hostId;
-  const currentUserParticipant = participants?.find(p => p.id === user?.uid);
-  const activeParticipants = participants?.filter(p => p.role !== 'left') || [];
+  // Reaction Monitor
+  useEffect(() => {
+    if (!participants) return;
+    participants.forEach(p => {
+      if (p.lastReaction && p.lastReactionAt) {
+        const reactionId = `${p.id}-${p.lastReactionAt.seconds}-${p.lastReactionAt.nanoseconds}`;
+        if (!seenReactionsRef.current.has(reactionId)) {
+          seenReactionsRef.current.add(reactionId);
+          const newReaction: FloatingReaction = {
+            id: reactionId,
+            emoji: p.lastReaction,
+            userName: p.name,
+            left: Math.random() * 80 + 10, // Random horizontal position
+          };
+          setFloatingReactions(prev => [...prev, newReaction]);
+          setTimeout(() => {
+            setFloatingReactions(prev => prev.filter(r => r.id !== reactionId));
+          }, 4000);
+        }
+      }
+    });
+  }, [participants]);
 
-  // Initialize Media safely - decoupled from mute/video states to prevent AbortError
+  // Initialize Media safely
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
     isInitializingRef.current = true;
@@ -201,7 +234,7 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync hardware toggles directly on the stream object - Independent of init lifecycle
+  // Sync hardware toggles directly on the stream object
   useEffect(() => {
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
@@ -269,7 +302,7 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  // Watch for Host overrides during screen sharing
+  // Host Screen Share Priority Override
   useEffect(() => {
     if (meetingData?.screenSharerId && meetingData.screenSharerId !== user?.uid && isScreenSharing) {
        stopScreenSharing();
@@ -291,6 +324,7 @@ export default function RoomPage() {
   const startScreenSharing = async () => {
     if (!meetingData || !user || !firestore) return;
     
+    // Only host can override. Normal participants must wait.
     if (meetingData.screenSharerId && meetingData.screenSharerId !== user.uid && !isHost) {
       toast({ variant: 'destructive', title: 'Cannot Share', description: 'Someone is already sharing their screen.' });
       return;
@@ -301,6 +335,7 @@ export default function RoomPage() {
       screenStreamRef.current = stream;
       setIsScreenSharing(true);
 
+      // Notify others via Firestore
       updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
 
       stream.getVideoTracks()[0].onended = () => stopScreenSharing();
@@ -321,16 +356,12 @@ export default function RoomPage() {
     setChatInput('');
   };
 
-  const toggleMic = () => {
-    setIsAudioMuted(prev => !prev);
-  };
-
-  const toggleVideo = () => {
-    setIsVideoOff(prev => !prev);
-  };
-
-  const toggleHand = () => {
-    setHasHandRaised(prev => !prev);
+  const handleReact = (emoji: string) => {
+    if (!firestore || !user || !meetingId) return;
+    updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), {
+      lastReaction: emoji,
+      lastReactionAt: serverTimestamp(),
+    });
   };
 
   const endMeetingForAll = async () => {
@@ -442,6 +473,22 @@ export default function RoomPage() {
   return (
     <AuthGuard>
       <div className="flex h-screen w-full flex-col overflow-hidden bg-background">
+        {/* Floating Reactions Overlay */}
+        <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
+          {floatingReactions.map(reaction => (
+            <div 
+              key={reaction.id} 
+              className="absolute bottom-0 animate-float-up flex flex-col items-center gap-1"
+              style={{ left: `${reaction.left}%` }}
+            >
+              <div className="text-4xl filter drop-shadow-lg">{reaction.emoji}</div>
+              <Badge variant="secondary" className="bg-black/50 text-white border-none text-[10px] py-0 px-2 font-bold whitespace-nowrap">
+                {reaction.userName}
+              </Badge>
+            </div>
+          ))}
+        </div>
+
         <header className="flex h-16 items-center justify-between border-b px-6 shrink-0 bg-card z-10">
           <div className="flex items-center gap-4">
             <div className="bg-primary p-2 rounded-lg"><VideoIcon className="h-5 w-5 text-primary-foreground" /></div>
@@ -524,7 +571,7 @@ export default function RoomPage() {
                     <h2 className="text-white text-xl font-bold mb-2">
                       {permissionErrorName === 'NotAllowedError' ? 'Permission Denied' : 'Hardware Access Required'}
                     </h2>
-                    <p className="text-zinc-400 text-sm mb-8">
+                    <p className="text-zinc-400 text-sm mb-8 leading-relaxed">
                       {permissionErrorName === 'NotAllowedError' 
                         ? "You've blocked camera or microphone access. Please click the camera icon in your browser address bar and choose 'Always allow' to join the session."
                         : "We need access to your camera and microphone. Please ensure they are not in use by another app and you've granted permission."}
@@ -539,8 +586,8 @@ export default function RoomPage() {
 
             {/* Bottom Controls */}
             <div className="h-20 bg-card rounded-3xl border shadow-xl flex items-center justify-center px-6 gap-4 shrink-0">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={toggleMic} className="rounded-full h-12 w-12 shadow-sm transition-all">{isAudioMuted ? <MicOff /> : <Mic />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={toggleVideo} className="rounded-full h-12 w-12 shadow-sm transition-all">{isVideoOff ? <VideoOff /> : <VideoIcon />}</Button>
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={() => setIsAudioMuted(!isAudioMuted)} className="rounded-full h-12 w-12 shadow-sm transition-all">{isAudioMuted ? <MicOff /> : <Mic />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={() => setIsVideoOff(!isVideoOff)} className="rounded-full h-12 w-12 shadow-sm transition-all">{isVideoOff ? <VideoOff /> : <VideoIcon />}</Button>
                <Separator orientation="vertical" className="h-8 mx-2" />
                <Button 
                 variant={isScreenSharing ? "default" : "secondary"} 
@@ -550,12 +597,12 @@ export default function RoomPage() {
                >
                  {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                </Button>
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={toggleHand} className={cn("rounded-full h-12 w-12 shadow-sm transition-all", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => setHasHandRaised(!hasHandRaised)} className={cn("rounded-full h-12 w-12 shadow-sm transition-all", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
                <Popover>
                   <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12 shadow-sm"><Smile /></Button></PopoverTrigger>
                   <PopoverContent className="w-auto p-3 grid grid-cols-4 gap-3 rounded-2xl shadow-2xl border-none bg-white">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
-                       <Button key={emoji} variant="ghost" className="h-12 w-12 p-0 text-2xl hover:bg-zinc-100 transition-colors" onClick={() => { if (firestore && user) updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { lastReaction: emoji }); }}>{emoji}</Button>
+                       <Button key={emoji} variant="ghost" className="h-12 w-12 p-0 text-2xl hover:bg-zinc-100 transition-colors" onClick={() => handleReact(emoji)}>{emoji}</Button>
                      ))}
                   </PopoverContent>
                </Popover>
