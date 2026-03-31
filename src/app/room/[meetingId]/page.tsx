@@ -73,6 +73,7 @@ interface FloatingReaction {
 }
 
 function formatDuration(seconds: number) {
+  if (isNaN(seconds) || seconds < 0) return '00:00:00';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
@@ -189,7 +190,6 @@ export default function RoomPage() {
 
   const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
 
-  // Reaction replacement logic: only one at a time across all participants
   const latestReactionParticipant = useMemo(() => {
     if (!participants) return null;
     return [...participants]
@@ -257,8 +257,7 @@ export default function RoomPage() {
         stream.getTracks().forEach(t => t.stop());
         return;
       }
-      // PRIVACY BY DEFAULT: Start with tracks disabled
-      stream.getVideoTracks().forEach(t => t.stop()); // Completely stop camera initially
+      stream.getVideoTracks().forEach(t => t.stop());
       stream.getAudioTracks().forEach(t => t.enabled = false);
       localStreamRef.current = stream;
       setHasMediaPermission(true);
@@ -339,16 +338,27 @@ export default function RoomPage() {
     };
 
     syncPresence();
+  }, [user, meetingId, firestore, meetingData?.status, meetingData?.isLocked, isAudioMuted, isVideoOff, hasHandRaised, meetingData?.hostId]);
+
+  useEffect(() => {
+    if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
+    const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
+
     const interval = setInterval(() => {
-      if (meetingData.status !== 'finished' && document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting') {
-        const currentDuration = (currentUserParticipant?.totalDuration || 0) + 
-          (currentUserParticipant?.activeSegmentStart ? (currentTime - (currentUserParticipant.activeSegmentStart.seconds || currentTime)) : 0);
-        updateDoc(pRef, { totalDuration: Math.max(0, currentDuration), activeSegmentStart: serverTimestamp() });
+      if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
+        const now = Date.now() / 1000;
+        const lastStart = currentUserParticipant?.activeSegmentStart?.seconds || now;
+        const currentDuration = (currentUserParticipant?.totalDuration || 0) + (now - lastStart);
+        
+        updateDoc(pRef, { 
+          totalDuration: Math.max(0, currentDuration), 
+          activeSegmentStart: serverTimestamp() 
+        });
       }
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [user, meetingId, firestore, meetingData?.status, meetingData?.isLocked, currentTime, isAudioMuted, isVideoOff, hasHandRaised, meetingData?.hostId]);
+  }, [user, meetingId, firestore, meetingData?.status, currentUserParticipant?.role, currentUserParticipant?.totalDuration, currentUserParticipant?.activeSegmentStart]);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
@@ -369,7 +379,7 @@ export default function RoomPage() {
 
   const admitParticipant = (pId: string) => {
     if (!hasAdminPrivileges || !firestore) return;
-    updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { role: 'participant', joinedAt: serverTimestamp() });
+    updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { role: 'participant', joinedAt: serverTimestamp(), activeSegmentStart: serverTimestamp() });
   };
 
   const removeParticipant = (pId: string) => {
@@ -449,9 +459,9 @@ export default function RoomPage() {
     const batch = writeBatch(firestore);
     batch.update(meetingRef, { status: 'finished', endedAt: serverTimestamp() });
     
-    // Process attendance (MVP logic)
     for (const p of participants) {
-      const duration = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
+      const lastStart = p.activeSegmentStart?.seconds || currentTime;
+      const duration = (p.totalDuration || 0) + (currentTime - lastStart);
       const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
       if (ratio >= 0.7 && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
@@ -636,9 +646,10 @@ export default function RoomPage() {
                           <TableHeader><TableRow className="border-none hover:bg-transparent"><TableHead className="font-black text-xs uppercase tracking-widest">Student</TableHead><TableHead className="font-black text-xs uppercase tracking-widest">Status</TableHead><TableHead className="font-black text-xs uppercase tracking-widest">Join Time</TableHead><TableHead className="text-right font-black text-xs uppercase tracking-widest">Active Time</TableHead><TableHead className="text-right font-black text-xs uppercase tracking-widest">Credit</TableHead></TableRow></TableHeader>
                           <TableBody>
                              {activeParticipants.map(p => {
-                               const dur = (p.totalDuration || 0) + (p.activeSegmentStart ? (currentTime - (p.activeSegmentStart.seconds || currentTime)) : 0);
-                               const maxDur = currentTime - (meetingData?.createdAt?.seconds || currentTime);
-                               const ratio = dur / (maxDur || 1);
+                               const lastStart = p.activeSegmentStart?.seconds || currentTime;
+                               const dur = (p.totalDuration || 0) + (currentTime - lastStart);
+                               const meetingElapsed = currentTime - (meetingData?.createdAt?.seconds || currentTime);
+                               const ratio = meetingElapsed > 0 ? dur / meetingElapsed : 0;
                                return (
                                  <TableRow key={p.id} className="border-b border-zinc-50 hover:bg-zinc-50/50">
                                     <TableCell className="font-bold">{p.name} {p.id === user?.uid && <span className="text-primary/60 font-medium ml-1">(You)</span>}</TableCell>
