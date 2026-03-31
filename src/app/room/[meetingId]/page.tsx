@@ -124,8 +124,9 @@ export default function RoomPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [isAudioMuted, setIsAudioMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
+  // Meeting defaults: Audio Muted and Video Off
+  const [isAudioMuted, setIsAudioMuted] = useState(true);
+  const [isVideoOff, setIsVideoOff] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [hasHandRaised, setHasHandRaised] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
@@ -668,7 +669,7 @@ export default function RoomPage() {
                                      <span className="text-xs font-black truncate text-zinc-800">{p.name}</span>
                                      {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
                                   </div>
-                                  <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
+                                  <div className="flex items-center gap-3 mt-0.5">
                                      {!isOnline ? (
                                        <Badge variant="outline" className="text-[8px] h-4 px-1.5 py-0 uppercase tracking-widest border-zinc-200">Offline</Badge>
                                      ) : (
