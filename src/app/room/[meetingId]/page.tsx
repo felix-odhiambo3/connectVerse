@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -188,7 +187,7 @@ export default function RoomPage() {
     } finally {
       isInitializingRef.current = false;
     }
-  }, [toast]); // Removed toggles from deps to prevent re-init loops
+  }, [isAudioMuted, isVideoOff]);
 
   useEffect(() => {
     let isMounted = true;
@@ -221,6 +220,7 @@ export default function RoomPage() {
       role: user.uid === meetingData.hostId ? 'host' : 'participant',
       isMuted: isAudioMuted,
       isVideoOff: isVideoOff,
+      hasRaisedHand: hasHandRaised,
     }).catch(() => {
       // If doc doesn't exist, set it
       const batch = writeBatch(firestore);
@@ -232,6 +232,7 @@ export default function RoomPage() {
         role: user.uid === meetingData.hostId ? 'host' : 'participant',
         isMuted: isAudioMuted,
         isVideoOff: isVideoOff,
+        hasRaisedHand: hasHandRaised,
         totalDuration: 0
       }, { merge: true });
       batch.commit();
@@ -252,7 +253,7 @@ export default function RoomPage() {
       clearInterval(interval);
       updateDoc(pRef, { role: 'left', activeSegmentStart: null });
     };
-  }, [user, meetingId, firestore, meetingData?.status, currentTime, isAudioMuted, isVideoOff]);
+  }, [user, meetingId, firestore, meetingData?.status, currentTime, isAudioMuted, isVideoOff, hasHandRaised]);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
@@ -334,6 +335,14 @@ export default function RoomPage() {
     setIsVideoOff(next);
     if (firestore && user && meetingId) {
       updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isVideoOff: next });
+    }
+  };
+
+  const toggleHand = () => {
+    const next = !hasHandRaised;
+    setHasHandRaised(next);
+    if (firestore && user && meetingId) {
+      updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { hasRaisedHand: next });
     }
   };
 
@@ -477,7 +486,7 @@ export default function RoomPage() {
         <main className="flex-1 flex overflow-hidden p-4 gap-4 relative">
           <div className="flex-1 flex flex-col gap-4 overflow-hidden">
             <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden shadow-2xl border">
-               <div className="w-full h-full p-4">
+               <div className="w-full h-full">
                  {isScreenSharing ? (
                    <div className="w-full h-full relative">
                       <RemoteStream 
@@ -498,8 +507,8 @@ export default function RoomPage() {
                    </div>
                  ) : (
                    <div className={cn(
-                     "h-full gap-4",
-                     activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2" : "flex items-center justify-center"
+                     "h-full w-full",
+                     activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2 p-4 gap-4" : "flex items-center justify-center"
                    )}>
                       {activeParticipants.map(p => (
                         <div key={p.id} className="w-full h-full">
@@ -547,7 +556,7 @@ export default function RoomPage() {
                >
                  {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                </Button>
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => setHasHandRaised(!hasHandRaised)} className={cn("rounded-full h-12 w-12 shadow-sm transition-all", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={toggleHand} className={cn("rounded-full h-12 w-12 shadow-sm transition-all", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
                <Popover>
                   <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12 shadow-sm"><Smile /></Button></PopoverTrigger>
                   <PopoverContent className="w-auto p-3 grid grid-cols-4 gap-3 rounded-2xl shadow-2xl border-none bg-white">
