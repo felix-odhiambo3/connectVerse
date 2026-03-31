@@ -124,7 +124,7 @@ export default function RoomPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  // Meeting defaults: Audio Muted and Video Off
+  // Initial States: Privacy by Default
   const [isAudioMuted, setIsAudioMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -133,6 +133,7 @@ export default function RoomPage() {
   const [chatInput, setChatInput] = useState('');
   const [showSummary, setShowSummary] = useState(false);
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
+  const [isTogglingVideo, setIsTogglingVideo] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [isReactionOpen, setIsReactionOpen] = useState(false);
@@ -208,11 +209,18 @@ export default function RoomPage() {
     isInitializingRef.current = true;
     
     try {
+      // Request initial hardware. Start with tracks disabled/stopped to satisfy privacy requirement.
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       if (!isMounted) {
         stream.getTracks().forEach(t => t.stop());
         return;
       }
+      
+      // Stop video immediately to ensure hardware goes OFF (light off)
+      stream.getVideoTracks().forEach(t => t.stop());
+      // Mute audio track
+      stream.getAudioTracks().forEach(t => t.enabled = false);
+
       localStreamRef.current = stream;
       setHasMediaPermission(true);
       setPermissionErrorName(null);
@@ -237,13 +245,44 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync hardware toggles directly on the stream object (independent of initialization)
-  useEffect(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
-      localStreamRef.current.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
+  // Handle Video Hardware Toggle (Stop/Start tracks)
+  const handleToggleVideo = async () => {
+    if (!localStreamRef.current || isTogglingVideo || !user || !firestore || !meetingId) return;
+    setIsTogglingVideo(true);
+    
+    const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
+    
+    if (!isVideoOff) {
+      // Turning OFF: Stop tracks and remove from stream
+      localStreamRef.current.getVideoTracks().forEach(track => {
+        track.stop();
+        localStreamRef.current?.removeTrack(track);
+      });
+      setIsVideoOff(true);
+      updateDoc(pRef, { isVideoOff: true });
+    } else {
+      // Turning ON: Re-acquire video track
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const newTrack = stream.getVideoTracks()[0];
+        localStreamRef.current.addTrack(newTrack);
+        setIsVideoOff(false);
+        updateDoc(pRef, { isVideoOff: false });
+      } catch (err) {
+        console.error("Failed to start video:", err);
+        toast({ variant: 'destructive', title: 'Camera Error' });
+      }
     }
-  }, [isAudioMuted, isVideoOff]);
+    setIsTogglingVideo(false);
+  };
+
+  const handleToggleAudio = () => {
+    if (!localStreamRef.current || !user || !firestore || !meetingId) return;
+    const newState = !isAudioMuted;
+    setIsAudioMuted(newState);
+    localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !newState);
+    updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: newState });
+  };
 
   // Participation Tracking and Presence
   useEffect(() => {
@@ -353,7 +392,7 @@ export default function RoomPage() {
       lastReaction: emoji,
       lastReactionAt: serverTimestamp(),
     });
-    setIsReactionOpen(false); // Close popover on selection
+    setIsReactionOpen(false); // Close popover immediately
   };
 
   const endMeetingForAll = async () => {
@@ -579,8 +618,8 @@ export default function RoomPage() {
 
             {/* Bottom Controls */}
             <div className="h-20 bg-card rounded-3xl border shadow-xl flex items-center justify-center px-6 gap-4 shrink-0">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={() => setIsAudioMuted(!isAudioMuted)} className="rounded-full h-12 w-12 shadow-sm transition-all">{isAudioMuted ? <MicOff /> : <Mic />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={() => setIsVideoOff(!isVideoOff)} className="rounded-full h-12 w-12 shadow-sm transition-all">{isVideoOff ? <VideoOff /> : <VideoIcon />}</Button>
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className="rounded-full h-12 w-12 shadow-sm transition-all">{isAudioMuted ? <MicOff /> : <Mic />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className="rounded-full h-12 w-12 shadow-sm transition-all">{isVideoOff ? <VideoOff /> : <VideoIcon />}</Button>
                <Separator orientation="vertical" className="h-8 mx-2" />
                <Button 
                 variant={isScreenSharing ? "default" : "secondary"} 
