@@ -17,6 +17,8 @@ import {
   writeBatch,
   setDoc,
   Timestamp,
+  onSnapshot,
+  deleteDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -70,6 +72,13 @@ interface FloatingReaction {
   userName: string;
   left: number;
 }
+
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
 
 function formatDuration(seconds: number) {
   if (isNaN(seconds) || seconds < 0) return '00:00:00';
@@ -135,12 +144,14 @@ export default function RoomPage() {
   const [isReactionOpen, setIsReactionOpen] = useState(false);
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
   const [permissionErrorName, setPermissionErrorName] = useState<string | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const isInitializingRef = useRef(false);
   const lastProcessedRemoteMuteAt = useRef<number>(0);
   const lastProcessedRemoteUnmuteAt = useRef<number>(0);
+  const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId) return null;
@@ -257,7 +268,7 @@ export default function RoomPage() {
         stream.getTracks().forEach(t => t.stop());
         return;
       }
-      stream.getVideoTracks().forEach(t => t.stop());
+      stream.getVideoTracks().forEach(t => t.enabled = false);
       stream.getAudioTracks().forEach(t => t.enabled = false);
       localStreamRef.current = stream;
       setHasMediaPermission(true);
@@ -278,6 +289,7 @@ export default function RoomPage() {
       isMounted = false;
       localStreamRef.current?.getTracks().forEach(t => t.stop());
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
+      pcs.current.forEach(pc => pc.close());
     };
   }, [initMedia]);
 
@@ -285,18 +297,31 @@ export default function RoomPage() {
     if (!localStreamRef.current || isTogglingVideo || !user || !firestore || !meetingId) return;
     setIsTogglingVideo(true);
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
-    if (!isVideoOff) {
+    const newState = !isVideoOff;
+    
+    if (!newState) { // Turning video OFF
       localStreamRef.current.getVideoTracks().forEach(track => {
+        track.enabled = false;
         track.stop();
-        localStreamRef.current?.removeTrack(track);
       });
       setIsVideoOff(true);
       updateDoc(pRef, { isVideoOff: true });
-    } else {
+    } else { // Turning video ON
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newTrack = stream.getVideoTracks()[0];
+        const oldTrack = localStreamRef.current.getVideoTracks()[0];
+        if (oldTrack) {
+          localStreamRef.current.removeTrack(oldTrack);
+        }
         localStreamRef.current.addTrack(newTrack);
+        
+        // Update track in all active peer connections
+        pcs.current.forEach(pc => {
+          const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+          if (sender) sender.replaceTrack(newTrack);
+        });
+
         setIsVideoOff(false);
         updateDoc(pRef, { isVideoOff: false });
       } catch (err) {
@@ -313,6 +338,91 @@ export default function RoomPage() {
     localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !newState);
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: newState });
   };
+
+  // WebRTC Signaling Logic
+  useEffect(() => {
+    if (!user || !firestore || !meetingId || !localStreamRef.current || !activeParticipants.length) return;
+
+    activeParticipants.forEach(async (participant) => {
+      if (participant.id === user.uid || pcs.current.has(participant.id)) return;
+
+      const pc = new RTCPeerConnection(ICE_SERVERS);
+      pcs.current.set(participant.id, pc);
+
+      localStreamRef.current?.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current!));
+
+      pc.ontrack = (event) => {
+        setRemoteStreams(prev => {
+          const next = new Map(prev);
+          next.set(participant.id, event.streams[0]);
+          return next;
+        });
+      };
+
+      const channelId = [user.uid, participant.id].sort().join('_');
+      const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          addDoc(collection(channelRef, 'candidates'), {
+            candidate: event.candidate.toJSON(),
+            from: user.uid,
+          });
+        }
+      };
+
+      // Offerer vs Answerer based on UID comparison
+      if (user.uid < participant.id) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await setDoc(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
+
+        onSnapshot(channelRef, async (snapshot) => {
+          const data = snapshot.data();
+          if (data?.answer && pc.signalingState !== 'stable') {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          }
+        });
+      } else {
+        onSnapshot(channelRef, async (snapshot) => {
+          const data = snapshot.data();
+          if (data?.offer && pc.signalingState !== 'have-remote-offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
+          }
+        });
+      }
+
+      onSnapshot(collection(channelRef, 'candidates'), (snapshot) => {
+        snapshot.docChanges().forEach(async (change) => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            if (data.from !== user.uid) {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+          }
+        });
+      });
+    });
+
+    return () => {
+      // Cleanup for participants who left
+      const activeIds = new Set(activeParticipants.map(p => p.id));
+      pcs.current.forEach((pc, id) => {
+        if (!activeIds.has(id)) {
+          pc.close();
+          pcs.current.delete(id);
+          setRemoteStreams(prev => {
+            const next = new Map(prev);
+            next.delete(id);
+            return next;
+          });
+        }
+      });
+    };
+  }, [user?.uid, firestore, meetingId, activeParticipants, localStreamRef.current]);
 
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
@@ -464,7 +574,6 @@ export default function RoomPage() {
       const duration = (p.totalDuration || 0) + (currentTime - lastStart);
       const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
       
-      // Host is always qualified, or anyone with > 70% attendance
       const isQualified = p.role === 'host' || ratio >= 0.7;
       
       if (isQualified && meetingData.seriesId) {
@@ -498,8 +607,6 @@ export default function RoomPage() {
   if (showSummary || meetingData?.status === 'finished') {
     const totalExpectedHours = (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0);
     const attendedHours = myCumulativeStats?.attendedHours || 0;
-    
-    // Host is always present in the summary report
     const isPresentOverall = isHost || (attendedHours / (totalExpectedHours || 1)) >= 0.7;
 
     return (
@@ -598,7 +705,7 @@ export default function RoomPage() {
                       {featuredParticipant ? (
                         <div className="w-full h-full max-w-5xl mx-auto">
                           <RemoteStream 
-                            stream={featuredParticipant.id === user?.uid ? localStreamRef.current : null} 
+                            stream={featuredParticipant.id === user?.uid ? localStreamRef.current : remoteStreams.get(featuredParticipant.id) || null} 
                             name={featuredParticipant.name} 
                             isMe={featuredParticipant.id === user?.uid} 
                             isMuted={featuredParticipant.isMuted} 
