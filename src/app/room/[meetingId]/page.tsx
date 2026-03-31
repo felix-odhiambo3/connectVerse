@@ -455,7 +455,7 @@ export default function RoomPage() {
   const endMeetingForAll = async () => {
     if (!isHost || !meetingRef || !firestore || !participants) return;
     setIsProcessingAttendance(true);
-    const totalSessionSeconds = currentTime - (meetingData.createdAt?.seconds || currentTime);
+    const totalSessionSeconds = Math.max(1, currentTime - (meetingData.createdAt?.seconds || currentTime));
     const batch = writeBatch(firestore);
     batch.update(meetingRef, { status: 'finished', endedAt: serverTimestamp() });
     
@@ -463,7 +463,11 @@ export default function RoomPage() {
       const lastStart = p.activeSegmentStart?.seconds || currentTime;
       const duration = (p.totalDuration || 0) + (currentTime - lastStart);
       const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
-      if (ratio >= 0.7 && meetingData.seriesId) {
+      
+      // Host is always qualified, or anyone with > 70% attendance
+      const isQualified = p.role === 'host' || ratio >= 0.7;
+      
+      if (isQualified && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
         batch.set(seriesUserRef, { 
           userId: p.id, 
@@ -494,7 +498,10 @@ export default function RoomPage() {
   if (showSummary || meetingData?.status === 'finished') {
     const totalExpectedHours = (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0);
     const attendedHours = myCumulativeStats?.attendedHours || 0;
-    const isPresentOverall = (attendedHours / (totalExpectedHours || 1)) >= 0.7;
+    
+    // Host is always present in the summary report
+    const isPresentOverall = isHost || (attendedHours / (totalExpectedHours || 1)) >= 0.7;
+
     return (
       <div className="flex h-screen items-center justify-center bg-zinc-50 p-6">
         <Card className="w-full max-w-2xl shadow-xl rounded-3xl overflow-hidden border-none bg-white">
@@ -648,15 +655,16 @@ export default function RoomPage() {
                              {activeParticipants.map(p => {
                                const lastStart = p.activeSegmentStart?.seconds || currentTime;
                                const dur = (p.totalDuration || 0) + (currentTime - lastStart);
-                               const meetingElapsed = currentTime - (meetingData?.createdAt?.seconds || currentTime);
+                               const meetingElapsed = Math.max(1, currentTime - (meetingData?.createdAt?.seconds || currentTime));
                                const ratio = meetingElapsed > 0 ? dur / meetingElapsed : 0;
+                               const isQualified = p.role === 'host' || ratio >= 0.7;
                                return (
                                  <TableRow key={p.id} className="border-b border-zinc-50 hover:bg-zinc-50/50">
                                     <TableCell className="font-bold">{p.name} {p.id === user?.uid && <span className="text-primary/60 font-medium ml-1">(You)</span>}</TableCell>
                                     <TableCell><Badge variant="outline" className="capitalize font-bold border-zinc-200">{p.role}</Badge></TableCell>
                                     <TableCell className="text-muted-foreground font-medium">{p.joinedAt ? format(new Date(p.joinedAt.seconds * 1000), 'p') : '--'}</TableCell>
                                     <TableCell className="text-right font-mono font-bold text-zinc-600">{formatDuration(dur)}</TableCell>
-                                    <TableCell className="text-right"><Badge className={cn("font-black", ratio >= 0.7 ? "bg-green-100 text-green-700 border-none" : "bg-zinc-100 text-zinc-400 border-none")}>{ratio >= 0.7 ? 'Qualified' : 'Pending'}</Badge></TableCell>
+                                    <TableCell className="text-right"><Badge className={cn("font-black", isQualified ? "bg-green-100 text-green-700 border-none" : "bg-zinc-100 text-zinc-400 border-none")}>{isQualified ? 'Qualified' : 'Pending'}</Badge></TableCell>
                                  </TableRow>
                                );
                              })}
@@ -714,7 +722,7 @@ export default function RoomPage() {
                                  </div>
                                  <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-1.5">
-                                       <span className="text-xs font-black truncate text-zinc-800">{p.name}</span>
+                                       <div className="text-xs font-black truncate text-zinc-800">{p.name}</div>
                                        {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500" />}
                                        {p.role === 'co-host' && <Star className="h-3 w-3 text-yellow-500" />}
                                     </div>
@@ -790,4 +798,3 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
-
