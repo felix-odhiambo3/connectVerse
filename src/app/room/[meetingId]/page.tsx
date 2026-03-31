@@ -92,6 +92,8 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
   const videoRef = useCallback((node: HTMLVideoElement | null) => {
     if (node && stream) {
       node.srcObject = stream;
+      // Explicit play call for Firefox and Safari compatibility
+      node.play().catch(e => console.warn("Auto-play blocked or failed", e));
     }
   }, [stream]);
 
@@ -102,7 +104,7 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
         autoPlay
         playsInline
         muted={isMe}
-        className={cn("w-full h-full object-cover transition-opacity duration-500", isVideoOff ? "opacity-0" : "opacity-100")}
+        className={cn("w-full h-full object-cover transition-opacity duration-500", (isVideoOff && !stream?.getVideoTracks()[0]?.enabled) ? "opacity-0" : "opacity-100")}
       />
       {isVideoOff && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
@@ -262,24 +264,51 @@ export default function RoomPage() {
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
     isInitializingRef.current = true;
+    
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      if (!isMounted) {
-        stream.getTracks().forEach(t => t.stop());
-        return;
+      // First attempt: Both
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (error: any) {
+      // Second attempt: Audio only (most common fallback)
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (error2: any) {
+        // Third attempt: Video only
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        } catch (error3: any) {
+          if (isMounted) {
+            setHasMediaPermission(false);
+            setPermissionErrorName(error.name || error3.name);
+          }
+          isInitializingRef.current = false;
+          return;
+        }
       }
-      stream.getVideoTracks().forEach(t => t.enabled = false);
-      stream.getAudioTracks().forEach(t => t.enabled = false);
+    }
+
+    if (!isMounted && stream) {
+      stream.getTracks().forEach(t => t.stop());
+      isInitializingRef.current = false;
+      return;
+    }
+
+    if (stream) {
+      // Per user request: Default to muted and no video
+      stream.getAudioTracks().forEach(track => {
+        track.enabled = false;
+      });
+      stream.getVideoTracks().forEach(track => {
+        track.enabled = false;
+        track.stop(); // Stop hardware immediately for default join
+      });
+
       localStreamRef.current = stream;
       setHasMediaPermission(true);
-    } catch (error: any) {
-      if (isMounted) {
-        setHasMediaPermission(false);
-        setPermissionErrorName(error.name);
-      }
-    } finally {
-      isInitializingRef.current = false;
     }
+    
+    isInitializingRef.current = false;
   }, []);
 
   useEffect(() => {
@@ -310,10 +339,13 @@ export default function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newTrack = stream.getVideoTracks()[0];
-        const oldTrack = localStreamRef.current.getVideoTracks()[0];
-        if (oldTrack) {
-          localStreamRef.current.removeTrack(oldTrack);
-        }
+        const oldTracks = localStreamRef.current.getVideoTracks();
+        
+        oldTracks.forEach(t => {
+          localStreamRef.current?.removeTrack(t);
+          t.stop();
+        });
+        
         localStreamRef.current.addTrack(newTrack);
         
         // Update track in all active peer connections
@@ -325,7 +357,7 @@ export default function RoomPage() {
         setIsVideoOff(false);
         updateDoc(pRef, { isVideoOff: false });
       } catch (err) {
-        toast({ variant: 'destructive', title: 'Camera Error' });
+        toast({ variant: 'destructive', title: 'Camera Error', description: 'Could not access camera hardware.' });
       }
     }
     setIsTogglingVideo(false);
@@ -371,7 +403,6 @@ export default function RoomPage() {
         }
       };
 
-      // Offerer vs Answerer based on UID comparison
       if (user.uid < participant.id) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -408,7 +439,6 @@ export default function RoomPage() {
     });
 
     return () => {
-      // Cleanup for participants who left
       const activeIds = new Set(activeParticipants.map(p => p.id));
       pcs.current.forEach((pc, id) => {
         if (!activeIds.has(id)) {
@@ -538,7 +568,7 @@ export default function RoomPage() {
       updateDoc(meetingRef!, { screenSharerId: user.uid });
       stream.getVideoTracks()[0].onended = () => stopScreenSharing();
     } catch (err) {
-      toast({ variant: 'destructive', title: 'Screen Share Failed' });
+      toast({ variant: 'destructive', title: 'Screen Share Failed', description: 'Permission for screen sharing was denied.' });
     }
   };
 
@@ -797,9 +827,9 @@ export default function RoomPage() {
                       <div className="space-y-6">
                         {waitingParticipants.length > 0 && hasAdminPrivileges && (
                           <div className="space-y-3">
-                             <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-400 px-2 flex items-center gap-2">
+                             <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400 px-2 flex items-center gap-2">
                                <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" /> Waiting Room
-                             </h3>
+                             </div>
                              {waitingParticipants.map(p => (
                                <div key={p.id} className="bg-zinc-50 p-3 rounded-2xl border border-zinc-100 space-y-3">
                                   <div className="flex items-center gap-2">
