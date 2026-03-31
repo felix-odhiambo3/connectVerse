@@ -14,7 +14,6 @@ import {
   getDoc,
   updateDoc,
   increment,
-  arrayUnion,
   writeBatch,
   setDoc,
   Timestamp,
@@ -101,7 +100,7 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
            <div className={cn("rounded-full bg-zinc-800 flex items-center justify-center transition-all shadow-inner border border-white/5", isFeatured ? "w-32 h-32" : "w-16 h-16")}>
               <UserIcon className={cn("text-zinc-600 transition-all", isFeatured ? "h-16 w-16" : "h-8 w-8")} />
            </div>
-           <p className={cn("text-zinc-500 mt-4 font-bold tracking-tight", isFeatured ? "text-sm uppercase tracking-widest" : "text-xs")}>Camera Off</p>
+           <div className={cn("text-zinc-500 mt-4 font-bold tracking-tight", isFeatured ? "text-sm uppercase tracking-widest" : "text-xs")}>Camera Off</div>
         </div>
       )}
       <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
@@ -192,9 +191,10 @@ export default function RoomPage() {
 
   const latestReactionParticipant = useMemo(() => {
     if (!participants) return null;
-    return [...participants]
+    const sorted = [...participants]
       .filter(p => p.lastReaction && p.lastReactionAt)
-      .sort((a, b) => (b.lastReactionAt?.seconds || 0) - (a.lastReactionAt?.seconds || 0))[0];
+      .sort((a, b) => (b.lastReactionAt?.seconds || 0) - (a.lastReactionAt?.seconds || 0));
+    return sorted[0];
   }, [participants]);
 
   useEffect(() => {
@@ -507,15 +507,15 @@ export default function RoomPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               <div className="bg-zinc-50 p-8 rounded-3xl border text-center shadow-sm">
                 <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-3">Total Hours</p>
-                <p className="text-4xl font-black">{attendedHours}<span className="text-zinc-400 text-xl">/{totalExpectedHours}</span></p>
+                <div className="text-4xl font-black">{attendedHours}<span className="text-zinc-400 text-xl">/{totalExpectedHours}</span></div>
               </div>
               <div className="bg-zinc-50 p-8 rounded-3xl border text-center shadow-sm">
                 <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-3">Completion</p>
-                <p className="text-4xl font-black">{((attendedHours / (totalExpectedHours || 1)) * 100).toFixed(0)}%</p>
+                <div className="text-4xl font-black">{((attendedHours / (totalExpectedHours || 1)) * 100).toFixed(0)}%</div>
               </div>
               <div className="bg-zinc-50 p-8 rounded-3xl border text-center shadow-sm">
                 <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-3">Sessions</p>
-                <p className="text-4xl font-black">{myCumulativeStats?.sessionsAttended || 0}<span className="text-zinc-400 text-xl">/{meetingData?.totalSessionsInSeries || 1}</span></p>
+                <div className="text-4xl font-black">{myCumulativeStats?.sessionsAttended || 0}<span className="text-zinc-400 text-xl">/{meetingData?.totalSessionsInSeries || 1}</span></div>
               </div>
             </div>
             <div className={cn("p-10 rounded-3xl flex flex-col items-center gap-6 text-center border-4", isPresentOverall ? "bg-green-50/50 border-green-100 text-green-900" : "bg-red-50/50 border-red-100 text-red-900")}>
@@ -752,8 +752,8 @@ export default function RoomPage() {
                    <div className="p-5 bg-zinc-50/80 border-t">
                       <div className="space-y-4">
                          <div className="flex justify-between text-[10px] uppercase font-black text-zinc-400 tracking-widest px-1">
-                            <span>Series Progress</span>
-                            <span className="text-primary">{myCumulativeStats?.attendedHours || 0}h Earned</span>
+                            <div>Series Progress</div>
+                            <div className="text-primary">{myCumulativeStats?.attendedHours || 0}h Earned</div>
                          </div>
                          <div className="h-2.5 w-full bg-zinc-200 rounded-full overflow-hidden shadow-inner">
                             <div 
@@ -770,7 +770,7 @@ export default function RoomPage() {
                       <div className="space-y-6">
                          {chatMessages?.map((msg) => (
                            <div key={msg.id} className={cn("flex flex-col gap-1.5", msg.senderId === user?.uid ? "items-end" : "items-start")}>
-                              <p className="text-[10px] font-black text-zinc-400 px-1 uppercase tracking-wider">{msg.senderName}</p>
+                              <div className="text-[10px] font-black text-zinc-400 px-1 uppercase tracking-wider">{msg.senderName}</div>
                               <div className={cn("max-w-[85%] px-4 py-3 rounded-2xl text-xs font-medium shadow-sm", msg.senderId === user?.uid ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-white border rounded-tl-none")}>{msg.text}</div>
                            </div>
                          ))}
@@ -790,3 +790,4 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
+
