@@ -24,7 +24,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, RefreshCcw } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, RefreshCcw, Lock } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -125,7 +125,10 @@ export default function RoomPage() {
   const [showSummary, setShowSummary] = useState(false);
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
+  
+  // Media status states
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
+  const [permissionErrorName, setPermissionErrorName] = useState<string | null>(null);
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -176,10 +179,12 @@ export default function RoomPage() {
       }
       localStreamRef.current = stream;
       setHasMediaPermission(true);
+      setPermissionErrorName(null);
     } catch (error: any) {
       if (isMounted) {
         console.error('Media error:', error);
         setHasMediaPermission(false);
+        setPermissionErrorName(error.name);
       }
     } finally {
       isInitializingRef.current = false;
@@ -503,8 +508,8 @@ export default function RoomPage() {
                           />
                         </div>
                       ))}
-                      {activeParticipants.length === 0 && (
-                        <div className="text-zinc-500 font-medium">Initializing camera...</div>
+                      {activeParticipants.length === 0 && hasMediaPermission === null && (
+                        <div className="text-zinc-500 font-medium">Requesting hardware access...</div>
                       )}
                    </div>
                  )}
@@ -514,11 +519,15 @@ export default function RoomPage() {
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/95 z-30 px-6">
                   <div className="max-w-md w-full text-center">
                     <div className="bg-destructive/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                      <AlertCircle className="h-10 w-10 text-destructive" />
+                      {permissionErrorName === 'NotAllowedError' ? <Lock className="h-10 w-10 text-destructive" /> : <AlertCircle className="h-10 w-10 text-destructive" />}
                     </div>
-                    <h2 className="text-white text-xl font-bold mb-2">Hardware Access Required</h2>
+                    <h2 className="text-white text-xl font-bold mb-2">
+                      {permissionErrorName === 'NotAllowedError' ? 'Permission Denied' : 'Hardware Access Required'}
+                    </h2>
                     <p className="text-zinc-400 text-sm mb-8">
-                      We need access to your camera and microphone. Please ensure they are not in use by another app and you've granted permission.
+                      {permissionErrorName === 'NotAllowedError' 
+                        ? "You've blocked camera or microphone access. Please click the camera icon in your browser address bar and choose 'Always allow' to join the session."
+                        : "We need access to your camera and microphone. Please ensure they are not in use by another app and you've granted permission."}
                     </p>
                     <Button variant="secondary" className="w-full h-14 rounded-2xl font-bold shadow-lg" onClick={() => window.location.reload()}>
                       <RefreshCcw className="mr-2 h-5 w-5" /> Retry Connection
@@ -613,7 +622,9 @@ export default function RoomPage() {
                                      {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
                                   </div>
                                   <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
-                                     {!isOnline ? <Badge variant="outline" className="text-[8px] h-4 px-1.5 py-0 uppercase tracking-widest border-zinc-200">Offline</Badge> : (
+                                     {!isOnline ? (
+                                       <Badge variant="outline" className="text-[8px] h-4 px-1.5 py-0 uppercase tracking-widest border-zinc-200">Offline</Badge>
+                                     ) : (
                                        <div className="flex items-center gap-3">
                                          {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
                                          {p.isVideoOff ? <VideoOff className="h-3 w-3 text-zinc-300" /> : <VideoIcon className="h-3 w-3 text-primary" />}
