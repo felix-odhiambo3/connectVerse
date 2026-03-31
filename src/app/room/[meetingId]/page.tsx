@@ -80,7 +80,7 @@ function formatDuration(seconds: number) {
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
 }
 
-// Remote Participant Component with robust stream binding
+// Remote Participant Component with robust stream binding via Callback Ref
 function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean }) {
   // Callback ref ensures srcObject is applied even if the element re-renders due to parent state changes (like mute/unmute)
   const videoRef = useCallback((node: HTMLVideoElement | null) => {
@@ -135,6 +135,7 @@ export default function RoomPage() {
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
+  const [isReactionOpen, setIsReactionOpen] = useState(false);
   
   // Media status states
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
@@ -177,7 +178,7 @@ export default function RoomPage() {
 
   const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
 
-  // Reaction Monitor
+  // Reaction Monitor: Only one reaction visible at a time
   useEffect(() => {
     if (!participants) return;
     participants.forEach(p => {
@@ -189,9 +190,10 @@ export default function RoomPage() {
             id: reactionId,
             emoji: p.lastReaction,
             userName: p.name,
-            left: Math.random() * 80 + 10, // Random horizontal position
+            left: Math.random() * 80 + 10,
           };
-          setFloatingReactions(prev => [...prev, newReaction]);
+          // Replace existing floating reactions so only one floats at a time
+          setFloatingReactions([newReaction]);
           setTimeout(() => {
             setFloatingReactions(prev => prev.filter(r => r.id !== reactionId));
           }, 4000);
@@ -200,7 +202,7 @@ export default function RoomPage() {
     });
   }, [participants]);
 
-  // Initialize Media safely
+  // Initialize Media safely with a strict lock to prevent AbortError
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
     isInitializingRef.current = true;
@@ -235,7 +237,7 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync hardware toggles directly on the stream object
+  // Sync hardware toggles directly on the stream object (independent of initialization)
   useEffect(() => {
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
@@ -303,14 +305,6 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  // Host Screen Share Priority Override
-  useEffect(() => {
-    if (meetingData?.screenSharerId && meetingData.screenSharerId !== user?.uid && isScreenSharing) {
-       stopScreenSharing();
-       toast({ title: "Screen Sharing Stopped", description: "The host has started sharing." });
-    }
-  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing, toast]);
-
   const stopScreenSharing = () => {
     if (screenStreamRef.current) {
       screenStreamRef.current.getTracks().forEach(t => t.stop());
@@ -325,7 +319,6 @@ export default function RoomPage() {
   const startScreenSharing = async () => {
     if (!meetingData || !user || !firestore) return;
     
-    // Only host can override. Normal participants must wait.
     if (meetingData.screenSharerId && meetingData.screenSharerId !== user.uid && !isHost) {
       toast({ variant: 'destructive', title: 'Cannot Share', description: 'Someone is already sharing their screen.' });
       return;
@@ -335,10 +328,7 @@ export default function RoomPage() {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       screenStreamRef.current = stream;
       setIsScreenSharing(true);
-
-      // Notify others via Firestore
       updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
-
       stream.getVideoTracks()[0].onended = () => stopScreenSharing();
     } catch (err) {
       console.error("Screen share error:", err);
@@ -363,6 +353,7 @@ export default function RoomPage() {
       lastReaction: emoji,
       lastReactionAt: serverTimestamp(),
     });
+    setIsReactionOpen(false); // Close popover on selection
   };
 
   const endMeetingForAll = async () => {
@@ -529,6 +520,7 @@ export default function RoomPage() {
                         name="Your Screen" 
                         isMe={true} 
                       />
+                      {/* Mini Preview for Camera during Screen Share */}
                       {!isVideoOff && (
                         <div className="absolute bottom-6 right-6 w-48 aspect-video rounded-2xl overflow-hidden border-2 border-white shadow-2xl z-20">
                           <RemoteStream 
@@ -546,7 +538,7 @@ export default function RoomPage() {
                      activeParticipants.length > 1 ? "grid grid-cols-1 md:grid-cols-2 p-4 gap-4" : "flex items-center justify-center"
                    )}>
                       {activeParticipants.map(p => (
-                        <div key={p.id} className="w-full h-full">
+                        <div key={p.id} className={cn("w-full h-full", activeParticipants.length === 1 && "max-w-none")}>
                           <RemoteStream 
                             stream={p.id === user?.uid ? localStreamRef.current : null} 
                             name={p.name} 
@@ -599,7 +591,7 @@ export default function RoomPage() {
                  {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                </Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => setHasHandRaised(!hasHandRaised)} className={cn("rounded-full h-12 w-12 shadow-sm transition-all", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
-               <Popover>
+               <Popover open={isReactionOpen} onOpenChange={setIsReactionOpen}>
                   <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12 shadow-sm"><Smile /></Button></PopoverTrigger>
                   <PopoverContent className="w-auto p-3 grid grid-cols-4 gap-3 rounded-2xl shadow-2xl border-none bg-white">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
