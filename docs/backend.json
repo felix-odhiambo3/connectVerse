@@ -87,7 +87,7 @@
         },
         "sessionIndex": {
           "type": "integer",
-          "description": "The index of this session in a series (e.g., Session 1 of 10)."
+          "description": "The index of this session in a series."
         },
         "totalSessionsInSeries": {
           "type": "integer",
@@ -95,7 +95,7 @@
         },
         "isLocked": {
           "type": "boolean",
-          "description": "Indicates if the meeting is locked."
+          "description": "Indicates if the meeting is in 'Restricted' mode (Waiting Room enabled)."
         },
         "isRecording": {
           "type": "boolean",
@@ -120,6 +120,21 @@
         "createdAt",
         "status"
       ]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "Represents a user in a meeting room.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["host", "co-host", "participant", "waiting", "left"] },
+        "isMuted": { "type": "boolean" },
+        "isVideoOff": { "type": "boolean" },
+        "hasRaisedHand": { "type": "boolean" },
+        "remoteMuteRequestAt": { "type": "string", "format": "date-time" },
+        "remoteUnmuteRequestAt": { "type": "string", "format": "date-time" }
+      }
     },
     "SeriesAttendance": {
       "title": "SeriesAttendance",
@@ -161,6 +176,14 @@
           "entityName": "Meeting",
           "schema": { "$ref": "#/backend/entities/Meeting" },
           "description": "Meeting session document."
+        }
+      },
+      {
+        "path": "/meetings/{meetingId}/participants/{participantId}",
+        "definition": {
+          "entityName": "Participant",
+          "schema": { "$ref": "#/backend/entities/Participant" },
+          "description": "Sub-collection of participants in a specific meeting."
         }
       },
       {
