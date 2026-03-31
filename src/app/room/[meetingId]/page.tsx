@@ -12,12 +12,10 @@ import {
   query,
   orderBy,
   getDoc,
-  setDoc,
   updateDoc,
   increment,
   arrayUnion,
   writeBatch,
-  onSnapshot,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -26,7 +24,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, MoreVertical, RefreshCcw } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, Download, BookOpen, MessageSquare, Users, RefreshCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -76,11 +74,10 @@ function formatDuration(seconds: number) {
 
 // Remote Participant Component
 function RemoteStream({ stream, name, isMuted, isVideoOff, isMe }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+  // Use a callback ref to ensure srcObject is applied whenever the video element is mounted/updated
+  const videoRef = useCallback((node: HTMLVideoElement | null) => {
+    if (node && stream) {
+      node.srcObject = stream;
     }
   }, [stream]);
 
@@ -180,20 +177,18 @@ export default function RoomPage() {
       localStreamRef.current = stream;
       setHasMediaPermission(true);
       
+      // Apply initial state
       stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
       stream.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
     } catch (error: any) {
       if (isMounted) {
         console.error('Media error:', error);
         setHasMediaPermission(false);
-        if (error.name === 'AbortError') {
-           toast({ variant: 'destructive', title: 'Hardware Busy', description: 'Camera is being used by another application.' });
-        }
       }
     } finally {
       isInitializingRef.current = false;
     }
-  }, [isAudioMuted, isVideoOff, toast]);
+  }, [toast]); // Removed toggles from deps to prevent re-init loops
 
   useEffect(() => {
     let isMounted = true;
@@ -205,10 +200,12 @@ export default function RoomPage() {
     };
   }, [initMedia]);
 
-  // Sync hardware toggles
+  // Sync hardware toggles separately
   useEffect(() => {
-    localStreamRef.current?.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
-    localStreamRef.current?.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
+      localStreamRef.current.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
+    }
   }, [isAudioMuted, isVideoOff]);
 
   // Participation Tracking
@@ -216,7 +213,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     
-    setDoc(pRef, {
+    updateDoc(pRef, {
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
       joinedAt: serverTimestamp(),
@@ -224,7 +221,21 @@ export default function RoomPage() {
       role: user.uid === meetingData.hostId ? 'host' : 'participant',
       isMuted: isAudioMuted,
       isVideoOff: isVideoOff,
-    }, { merge: true });
+    }).catch(() => {
+      // If doc doesn't exist, set it
+      const batch = writeBatch(firestore);
+      batch.set(pRef, {
+        id: user.uid,
+        name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
+        joinedAt: serverTimestamp(),
+        activeSegmentStart: serverTimestamp(),
+        role: user.uid === meetingData.hostId ? 'host' : 'participant',
+        isMuted: isAudioMuted,
+        isVideoOff: isVideoOff,
+        totalDuration: 0
+      }, { merge: true });
+      batch.commit();
+    });
 
     const interval = setInterval(() => {
       if (meetingData.status !== 'finished') {
@@ -264,11 +275,10 @@ export default function RoomPage() {
   // Watch for Screen Sharer overrides
   useEffect(() => {
     if (meetingData?.screenSharerId && meetingData.screenSharerId !== user?.uid && isScreenSharing) {
-       // Someone else (likely host) took priority
        stopScreenSharing();
        toast({ title: "Screen Sharing Stopped", description: "The host has started sharing." });
     }
-  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing]);
+  }, [meetingData?.screenSharerId, user?.uid, isScreenSharing, toast]);
 
   const stopScreenSharing = () => {
     screenStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -282,7 +292,6 @@ export default function RoomPage() {
   const startScreenSharing = async () => {
     if (!meetingData || !user || !firestore) return;
     
-    // Check if someone else is sharing
     if (meetingData.screenSharerId && meetingData.screenSharerId !== user.uid && !isHost) {
       toast({ variant: 'destructive', title: 'Cannot Share', description: 'Someone is already sharing their screen.' });
       return;
@@ -468,7 +477,6 @@ export default function RoomPage() {
         <main className="flex-1 flex overflow-hidden p-4 gap-4 relative">
           <div className="flex-1 flex flex-col gap-4 overflow-hidden">
             <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden shadow-2xl border">
-               {/* Main Video Area */}
                <div className="w-full h-full p-4">
                  {isScreenSharing ? (
                    <div className="w-full h-full relative">
@@ -477,7 +485,6 @@ export default function RoomPage() {
                         name="Your Screen" 
                         isMe={true} 
                       />
-                      {/* Floating Camera Preview when Sharing */}
                       {!isVideoOff && (
                         <div className="absolute bottom-6 right-6 w-48 aspect-video rounded-2xl overflow-hidden border-2 border-white shadow-2xl z-20">
                           <RemoteStream 
@@ -608,7 +615,7 @@ export default function RoomPage() {
                                </div>
                                <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 overflow-hidden">
-                                     <p className="text-xs font-black truncate text-zinc-800">{p.name}</p>
+                                     <span className="text-xs font-black truncate text-zinc-800">{p.name}</span>
                                      {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500 shrink-0" />}
                                   </div>
                                   <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5 font-bold">
