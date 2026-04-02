@@ -61,7 +61,7 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // Ultra Frugal Limit: Only fetch the 5 most recent meetings to preserve quota
+    // ULTRA FRUGAL: Limit to 5 most recent to preserve quota
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
@@ -101,6 +101,7 @@ export default function DashboardPage() {
     try {
       const batch = writeBatch(firestore);
       const seriesId = Math.random().toString(36).substr(2, 9);
+      // Frugal limit: 10 sessions max
       const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 10) : 1;
       const duration = parseFloat(fixedDurationHours);
 

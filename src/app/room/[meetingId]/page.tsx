@@ -164,13 +164,15 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), orderBy('joinedAt', 'asc'), limit(50));
+    // FRUGAL: Limit participants to avoid O(N^2) read complexity
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(50));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
+    // ULTRA FRUGAL: Limit chat to 10 most recent to preserve quota
     return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
   }, [firestore, meetingId, user]);
 
@@ -386,7 +388,7 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
-      // Buffered ICE gathering to save quota
+      // FRUGAL: Aggressive candidate buffering to reduce signaling writes
       const iceBuffer: RTCIceCandidateInit[] = [];
       let iceTimeout: any = null;
 
@@ -394,11 +396,12 @@ export default function RoomPage() {
         if (event.candidate && pc.signalingState !== 'closed') {
           iceBuffer.push(event.candidate.toJSON());
           if (iceTimeout) clearTimeout(iceTimeout);
+          // 1.5s delay to batch all initial candidates
           iceTimeout = setTimeout(() => {
             updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
               .catch(() => setDoc(channelRef, { candidates: iceBuffer.map(c => ({ candidate: c, from: user.uid })) }, { merge: true }));
             iceBuffer.length = 0;
-          }, 500);
+          }, 1500);
         }
       };
 
@@ -462,6 +465,7 @@ export default function RoomPage() {
       else if (meetingData.isLocked && !currentUserParticipant) initialRole = 'waiting';
       else if (currentUserParticipant?.role) initialRole = currentUserParticipant.role;
 
+      // Only write if state actually changed to save quota
       const shouldWrite = !currentUserParticipant || 
         currentUserParticipant.role !== initialRole || 
         currentUserParticipant.isMuted !== isAudioMuted || 
@@ -500,7 +504,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // Ultra-frugal heartbeat: 15 minutes
+    // ULTRA FRUGAL: 15-minute credit heartbeat to strictly preserve quota
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -510,7 +514,11 @@ export default function RoomPage() {
         durationRef.current = currentDuration;
         segmentStartRef.current = now;
 
-        updateDoc(pRef, { totalDuration: Math.max(0, currentDuration), activeSegmentStart: serverTimestamp() });
+        // Use updateDoc to target only duration fields
+        updateDoc(pRef, { 
+          totalDuration: Math.max(0, currentDuration), 
+          activeSegmentStart: serverTimestamp() 
+        });
       }
     }, 900000); 
     return () => clearInterval(interval);
