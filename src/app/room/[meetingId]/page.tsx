@@ -92,7 +92,6 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
   const videoRef = useCallback((node: HTMLVideoElement | null) => {
     if (node && stream) {
       node.srcObject = stream;
-      // Explicit play call for Firefox and Safari compatibility
       node.play().catch(e => console.warn("Auto-play blocked or failed", e));
     }
   }, [stream]);
@@ -156,23 +155,23 @@ export default function RoomPage() {
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
 
   const meetingRef = useMemoFirebase(() => {
-    if (!firestore || !meetingId) return null;
+    if (!firestore || !meetingId || !user) return null;
     return doc(firestore, 'meetings', meetingId);
-  }, [firestore, meetingId]);
+  }, [firestore, meetingId, user]);
 
   const { data: meetingData } = useDoc<any>(meetingRef);
 
   const participantsRef = useMemoFirebase(() => {
-    if (!firestore || !meetingId) return null;
+    if (!firestore || !meetingId || !user) return null;
     return query(collection(firestore, 'meetings', meetingId, 'participants'), orderBy('joinedAt', 'asc'));
-  }, [firestore, meetingId]);
+  }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
-    if (!firestore || !meetingId) return null;
+    if (!firestore || !meetingId || !user) return null;
     return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'asc'));
-  }, [firestore, meetingId]);
+  }, [firestore, meetingId, user]);
 
   const { data: chatMessages } = useCollection<ChatMessage>(chatRef);
 
@@ -267,14 +266,11 @@ export default function RoomPage() {
     
     let stream: MediaStream | null = null;
     try {
-      // First attempt: Both
       stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     } catch (error: any) {
-      // Second attempt: Audio only (most common fallback)
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (error2: any) {
-        // Third attempt: Video only
         try {
           stream = await navigator.mediaDevices.getUserMedia({ video: true });
         } catch (error3: any) {
@@ -295,15 +291,8 @@ export default function RoomPage() {
     }
 
     if (stream) {
-      // Per user request: Default to muted and no video
-      stream.getAudioTracks().forEach(track => {
-        track.enabled = false;
-      });
-      stream.getVideoTracks().forEach(track => {
-        track.enabled = false;
-        track.stop(); // Stop hardware immediately for default join
-      });
-
+      stream.getAudioTracks().forEach(track => { track.enabled = false; });
+      stream.getVideoTracks().forEach(track => { track.enabled = false; track.stop(); });
       localStreamRef.current = stream;
       setHasMediaPermission(true);
     }
@@ -328,32 +317,24 @@ export default function RoomPage() {
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     const newState = !isVideoOff;
     
-    if (!newState) { // Turning video OFF
+    if (!newState) {
       localStreamRef.current.getVideoTracks().forEach(track => {
         track.enabled = false;
         track.stop();
       });
       setIsVideoOff(true);
       updateDoc(pRef, { isVideoOff: true });
-    } else { // Turning video ON
+    } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newTrack = stream.getVideoTracks()[0];
         const oldTracks = localStreamRef.current.getVideoTracks();
-        
-        oldTracks.forEach(t => {
-          localStreamRef.current?.removeTrack(t);
-          t.stop();
-        });
-        
+        oldTracks.forEach(t => { localStreamRef.current?.removeTrack(t); t.stop(); });
         localStreamRef.current.addTrack(newTrack);
-        
-        // Update track in all active peer connections
         pcs.current.forEach(pc => {
           const sender = pc.getSenders().find(s => s.track?.kind === 'video');
           if (sender) sender.replaceTrack(newTrack);
         });
-
         setIsVideoOff(false);
         updateDoc(pRef, { isVideoOff: false });
       } catch (err) {
@@ -371,7 +352,6 @@ export default function RoomPage() {
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: newState });
   };
 
-  // WebRTC Signaling Logic
   useEffect(() => {
     if (!user || !firestore || !meetingId || !localStreamRef.current || !activeParticipants.length) return;
 
@@ -489,14 +469,9 @@ export default function RoomPage() {
         const now = Date.now() / 1000;
         const lastStart = currentUserParticipant?.activeSegmentStart?.seconds || now;
         const currentDuration = (currentUserParticipant?.totalDuration || 0) + (now - lastStart);
-        
-        updateDoc(pRef, { 
-          totalDuration: Math.max(0, currentDuration), 
-          activeSegmentStart: serverTimestamp() 
-        });
+        updateDoc(pRef, { totalDuration: Math.max(0, currentDuration), activeSegmentStart: serverTimestamp() });
       }
     }, 30000);
-
     return () => clearInterval(interval);
   }, [user, meetingId, firestore, meetingData?.status, currentUserParticipant?.role, currentUserParticipant?.totalDuration, currentUserParticipant?.activeSegmentStart]);
 
@@ -534,10 +509,7 @@ export default function RoomPage() {
 
   const forceMute = (pId: string) => {
     if (!hasAdminPrivileges || !firestore) return;
-    updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { 
-      remoteMuteRequestAt: serverTimestamp(),
-      isMuted: true 
-    });
+    updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { remoteMuteRequestAt: serverTimestamp(), isMuted: true });
   };
 
   const requestUnmute = (pId: string) => {
@@ -603,17 +575,10 @@ export default function RoomPage() {
       const lastStart = p.activeSegmentStart?.seconds || currentTime;
       const duration = (p.totalDuration || 0) + (currentTime - lastStart);
       const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
-      
       const isQualified = p.role === 'host' || ratio >= 0.7;
-      
       if (isQualified && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
-        batch.set(seriesUserRef, { 
-          userId: p.id, 
-          seriesId: meetingData.seriesId, 
-          attendedHours: increment(meetingData.fixedDurationHours || 0), 
-          sessionsAttended: increment(1) 
-        }, { merge: true });
+        batch.set(seriesUserRef, { userId: p.id, seriesId: meetingData.seriesId, attendedHours: increment(meetingData.fixedDurationHours || 0), sessionsAttended: increment(1) }, { merge: true });
       }
     }
     await batch.commit();
@@ -624,9 +589,7 @@ export default function RoomPage() {
   if (currentUserParticipant?.role === 'waiting') {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-zinc-50 p-6 text-center">
-        <div className="bg-primary/10 w-24 h-24 rounded-full flex items-center justify-center mb-6 animate-pulse">
-           <Lock className="h-10 w-10 text-primary" />
-        </div>
+        <div className="bg-primary/10 w-24 h-24 rounded-full flex items-center justify-center mb-6 animate-pulse"><Lock className="h-10 w-10 text-primary" /></div>
         <h1 className="text-3xl font-black mb-2">Meeting Restricted</h1>
         <p className="text-zinc-500 max-w-sm">The host has been notified. Please wait until you are admitted to the session.</p>
         <Button variant="ghost" className="mt-8 text-zinc-400 font-bold" onClick={() => router.push('/dashboard')}>Leave Waiting Room</Button>
