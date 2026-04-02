@@ -315,16 +315,9 @@ export default function RoomPage() {
     if (!localStreamRef.current || isTogglingVideo || !user || !firestore || !meetingId) return;
     setIsTogglingVideo(true);
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
-    const newState = !isVideoOff;
     
-    if (!newState) {
-      localStreamRef.current.getVideoTracks().forEach(track => {
-        track.enabled = false;
-        track.stop();
-      });
-      setIsVideoOff(true);
-      updateDoc(pRef, { isVideoOff: true });
-    } else {
+    if (isVideoOff) {
+      // Logic to turn video ON
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newTrack = stream.getVideoTracks()[0];
@@ -340,6 +333,14 @@ export default function RoomPage() {
       } catch (err) {
         toast({ variant: 'destructive', title: 'Camera Error', description: 'Could not access camera hardware.' });
       }
+    } else {
+      // Logic to turn video OFF
+      localStreamRef.current.getVideoTracks().forEach(track => {
+        track.enabled = false;
+        track.stop();
+      });
+      setIsVideoOff(true);
+      updateDoc(pRef, { isVideoOff: true });
     }
     setIsTogglingVideo(false);
   };
