@@ -35,7 +35,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/tabs";
 
 interface Participant {
   id: string;
@@ -164,6 +164,7 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
+    // Frugal Limit: Cap participants at 50 for signaling sanity
     return query(collection(firestore, 'meetings', meetingId, 'participants'), orderBy('joinedAt', 'asc'), limit(50));
   }, [firestore, meetingId, user]);
 
@@ -171,7 +172,8 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(15));
+    // Frugal Limit: Only listen to the 10 most recent messages to preserve quota
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -187,7 +189,8 @@ export default function RoomPage() {
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
   }, [participants]);
 
-  const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).join(','), [activeParticipants]);
+  // Stable IDs for Mesh WebRTC effect trigger
+  const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
 
   const sortedParticipants = useMemo(() => {
     const rolePriority = { host: 0, 'co-host': 1, participant: 2 };
@@ -341,10 +344,11 @@ export default function RoomPage() {
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: newState });
   };
 
+  // QUOTA SPARING: Mesh WebRTC with Atomic Candidate Updates
   useEffect(() => {
-    if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipants.length) return;
+    if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
-    const currentIds = activeParticipants.map(p => p.id).filter(id => id !== user.uid);
+    const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
     pcs.current.forEach((pc, id) => {
@@ -386,7 +390,7 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
-      // Frugal Signaling: Use arrayUnion to reduce individual candidate doc writes
+      // QUOTA SPARING: Use atomic array updates to reduce writes for candidates
       pc.onicecandidate = (event) => {
         if (event.candidate && pc.signalingState !== 'closed') {
           updateDoc(channelRef, { candidates: arrayUnion({ candidate: event.candidate.toJSON(), from: user.uid }) })
@@ -492,7 +496,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // Extreme Heartbeat Throttling: 5 minutes to preserve quota
+    // QUOTA SPARING: Extreme heartbeat throttling (10 minutes)
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -504,7 +508,7 @@ export default function RoomPage() {
 
         updateDoc(pRef, { totalDuration: Math.max(0, currentDuration) });
       }
-    }, 300000); 
+    }, 600000); 
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 

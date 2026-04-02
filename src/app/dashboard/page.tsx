@@ -60,14 +60,12 @@ export default function DashboardPage() {
   });
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
-    // Frugal check: Ensure user is fully loaded
     if (!user?.uid || !firestore) return null;
-    
-    // Removing orderBy to avoid composite index requirements for MVP security stability
+    // Frugal Limit: Only fetch the 10 most recent meetings to preserve quota
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      limit(20)
+      limit(10)
     );
   }, [user?.uid, firestore]);
 
@@ -75,7 +73,6 @@ export default function DashboardPage() {
 
   const upcomingMeetings = useMemo(() => {
     if (!allUserMeetings) return [];
-    // Handle sorting and filtering in memory to ensure quota-friendly performance
     return allUserMeetings
       .filter(meeting => meeting.status === 'scheduled')
       .sort((a, b) => {
