@@ -61,12 +61,12 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user || !firestore) return null;
-    // Added limit and orderBy to save quota
+    // Frugal query: limit to 10 to save quota
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
       orderBy('createdAt', 'desc'),
-      limit(20)
+      limit(10)
     );
   }, [user, firestore]);
 
@@ -97,8 +97,8 @@ export default function DashboardPage() {
 
     try {
       const batch = writeBatch(firestore);
-      const seriesId = isRecurring ? Math.random().toString(36).substr(2, 9) : null;
-      const count = isRecurring ? parseInt(occurrences || "1", 10) : 1;
+      const seriesId = Math.random().toString(36).substr(2, 9);
+      const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 10) : 1;
       const duration = parseFloat(fixedDurationHours);
 
       for (let i = 0; i < count; i++) {
@@ -152,7 +152,7 @@ export default function DashboardPage() {
         status: 'pending',
         isLocked: false,
         isRecording: false,
-        fixedDurationHours: 1, // Default for instant meetings
+        fixedDurationHours: 1, 
         participantPermissions: {
           allowShareScreen: true,
           allowSendReactions: true,
@@ -255,7 +255,7 @@ export default function DashboardPage() {
                         <div className="p-4 bg-zinc-50 rounded-lg border space-y-4">
                           <FormField control={form.control} name="isRecurring" render={({ field }) => (
                             <FormItem className="flex items-center justify-between">
-                              <div className="space-y-0.5"><FormLabel>Recurring Meeting</FormLabel><FormDescription>Create multiple sessions at once.</FormDescription></div>
+                              <div className="space-y-0.5"><FormLabel>Recurring Meeting</FormLabel><FormDescription>Create up to 10 sessions at once.</FormDescription></div>
                               <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
                             </FormItem>
                           )} />
@@ -265,7 +265,7 @@ export default function DashboardPage() {
                                 <FormItem><FormLabel>Pattern</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select interval" /></SelectTrigger></FormControl><SelectContent><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem></SelectContent></Select></FormItem>
                               )} />
                               <FormField control={form.control} name="occurrences" render={({ field }) => (
-                                <FormItem><FormLabel>Total Sessions</FormLabel><FormControl><Input type="number" min="2" max="20" {...field} /></FormControl></FormItem>
+                                <FormItem><FormLabel>Total Sessions</FormLabel><FormControl><Input type="number" min="2" max="10" {...field} /></FormControl></FormItem>
                               )} />
                             </div>
                           )}

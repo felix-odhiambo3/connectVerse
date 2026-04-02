@@ -17,6 +17,7 @@ import {
   setDoc,
   Timestamp,
   onSnapshot,
+  limit,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -92,7 +93,7 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(e => console.warn("Auto-play blocked or failed", e));
+      videoRef.current.play().catch(e => console.warn("Auto-play blocked", e));
     }
   }, [stream]);
 
@@ -164,17 +165,19 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), orderBy('joinedAt', 'asc'));
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), orderBy('joinedAt', 'asc'), limit(50));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'asc'));
+    // Limit chat messages to save quota
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(30));
   }, [firestore, meetingId, user]);
 
-  const { data: chatMessages } = useCollection<ChatMessage>(chatRef);
+  const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
+  const chatMessages = useMemo(() => rawChatMessages ? [...rawChatMessages].reverse() : [], [rawChatMessages]);
 
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
   const isHost = user?.uid === meetingData?.hostId;
@@ -186,7 +189,6 @@ export default function RoomPage() {
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
   }, [participants]);
 
-  // Memoize stable participant IDs string to prevent WebRTC effect loops on minor updates (heartbeats)
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).join(','), [activeParticipants]);
 
   const sortedParticipants = useMemo(() => {
@@ -212,35 +214,31 @@ export default function RoomPage() {
 
   const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
 
-  const latestReactionParticipant = useMemo(() => {
-    if (!participants) return null;
-    const sorted = [...participants]
-      .filter(p => p.lastReaction && p.lastReactionAt)
-      .sort((a, b) => (b.lastReactionAt?.seconds || 0) - (a.lastReactionAt?.seconds || 0));
-    return sorted[0];
-  }, [participants]);
-
   useEffect(() => {
-    if (latestReactionParticipant) {
-      const ts = latestReactionParticipant.lastReactionAt?.seconds || 0;
-      const reactionId = `${latestReactionParticipant.id}-${ts}`;
-      if (floatingReaction?.id !== reactionId) {
-        setFloatingReaction({
-          id: reactionId,
-          emoji: latestReactionParticipant.lastReaction!,
-          userName: latestReactionParticipant.name,
-          left: Math.random() * 80 + 10,
-        });
-        const timer = setTimeout(() => setFloatingReaction(null), 4000);
-        return () => clearTimeout(timer);
+    if (participants) {
+      const sorted = [...participants]
+        .filter(p => p.lastReaction && p.lastReactionAt)
+        .sort((a, b) => (b.lastReactionAt?.seconds || 0) - (a.lastReactionAt?.seconds || 0));
+      const latest = sorted[0];
+      if (latest) {
+        const ts = latest.lastReactionAt?.seconds || 0;
+        const reactionId = `${latest.id}-${ts}`;
+        if (floatingReaction?.id !== reactionId) {
+          setFloatingReaction({
+            id: reactionId,
+            emoji: latest.lastReaction!,
+            userName: latest.name,
+            left: Math.random() * 80 + 10,
+          });
+          setTimeout(() => setFloatingReaction(null), 4000);
+        }
       }
     }
-  }, [latestReactionParticipant, floatingReaction?.id]);
+  }, [participants, floatingReaction?.id]);
 
   useEffect(() => {
     if (!currentUserParticipant) return;
     if (currentUserParticipant.role === 'left' && !isHost) {
-      toast({ variant: 'destructive', title: 'Removed', description: 'You have been removed from the session.' });
       router.push('/dashboard');
       return;
     }
@@ -252,20 +250,7 @@ export default function RoomPage() {
           setIsAudioMuted(true);
           localStreamRef.current.getAudioTracks().forEach(t => t.enabled = false);
           updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { isMuted: true });
-          toast({ title: 'Muted by host', description: 'Your microphone has been disabled.' });
-        }
-      }
-    }
-    if (currentUserParticipant.remoteUnmuteRequestAt) {
-      const ts = currentUserParticipant.remoteUnmuteRequestAt.seconds;
-      if (ts > lastProcessedRemoteUnmuteAt.current) {
-        lastProcessedRemoteUnmuteAt.current = ts;
-        if (isAudioMuted) {
-          toast({ 
-            title: 'Unmute Request', 
-            description: 'The host has requested that you unmute your microphone.',
-            action: <Button size="sm" className="bg-zinc-900 text-white hover:bg-black font-bold" onClick={handleToggleAudio}>Unmute Now</Button>
-          });
+          toast({ title: 'Muted by host' });
         }
       }
     }
@@ -287,7 +272,7 @@ export default function RoomPage() {
         } catch (error3: any) {
           if (isMounted) {
             setHasMediaPermission(false);
-            setPermissionErrorName(error.name || error3.name);
+            setPermissionErrorName(error.name);
           }
           isInitializingRef.current = false;
           return;
@@ -332,8 +317,7 @@ export default function RoomPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newTrack = stream.getVideoTracks()[0];
-        const oldTracks = localStreamRef.current.getVideoTracks();
-        oldTracks.forEach(t => { localStreamRef.current?.removeTrack(t); t.stop(); });
+        localStreamRef.current.getVideoTracks().forEach(t => { localStreamRef.current?.removeTrack(t); t.stop(); });
         localStreamRef.current.addTrack(newTrack);
         
         pcs.current.forEach(pc => {
@@ -344,13 +328,10 @@ export default function RoomPage() {
         setIsVideoOff(false);
         updateDoc(pRef, { isVideoOff: false });
       } catch (err) {
-        toast({ variant: 'destructive', title: 'Camera Error!', description: 'Could not access camera hardware.' });
+        toast({ variant: 'destructive', title: 'Camera Error' });
       }
     } else {
-      localStreamRef.current.getVideoTracks().forEach(track => {
-        track.enabled = false;
-        track.stop();
-      });
+      localStreamRef.current.getVideoTracks().forEach(track => { track.enabled = false; track.stop(); });
       setIsVideoOff(true);
       updateDoc(pRef, { isVideoOff: true });
     }
@@ -414,10 +395,7 @@ export default function RoomPage() {
 
       pc.onicecandidate = (event) => {
         if (event.candidate && pc.signalingState !== 'closed') {
-          addDoc(collection(channelRef, 'candidates'), {
-            candidate: event.candidate.toJSON(),
-            from: user.uid,
-          });
+          addDoc(collection(channelRef, 'candidates'), { candidate: event.candidate.toJSON(), from: user.uid });
         }
       };
 
@@ -434,13 +412,11 @@ export default function RoomPage() {
             if (data?.answer && pc.signalingState === 'have-local-offer') {
               try {
                 await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-              } catch (e) { console.warn("SetRemoteDescription failed", e); }
+              } catch (e) { console.warn("SDP Error", e); }
             }
           });
           signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
-        } catch (err) {
-          console.warn("Failed to create offer", err);
-        }
+        } catch (err) { console.warn("Offer Error", err); }
       } else {
         const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
           if (pc.signalingState === 'closed') return;
@@ -453,9 +429,7 @@ export default function RoomPage() {
                 await pc.setLocalDescription(answer);
                 await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
               }
-            } catch (err) {
-              console.warn("Signaling handling error", err);
-            }
+            } catch (err) { console.warn("Handshake Error", err); }
           }
         });
         signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
@@ -467,11 +441,7 @@ export default function RoomPage() {
           if (change.type === 'added') {
             const data = change.doc.data();
             if (data.from !== user.uid && pc.signalingState !== 'closed' && pc.remoteDescription) {
-              try {
-                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-              } catch (e) {
-                console.warn("Failed to add ice candidate", e);
-              }
+              try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (e) {}
             }
           }
         });
@@ -490,7 +460,6 @@ export default function RoomPage() {
       else if (meetingData.isLocked && !currentUserParticipant) initialRole = 'waiting';
       else if (currentUserParticipant?.role) initialRole = currentUserParticipant.role;
 
-      // Only write if there's an actual change in state to save quota
       const shouldWrite = !currentUserParticipant || 
         currentUserParticipant.role !== initialRole || 
         currentUserParticipant.isMuted !== isAudioMuted || 
@@ -529,7 +498,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // Optimized heartbeat to 2 minutes to stay within Firestore free tier quotas
+    // Frugal heartbeat: 3 minutes to preserve quota
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -541,7 +510,7 @@ export default function RoomPage() {
 
         updateDoc(pRef, { totalDuration: Math.max(0, currentDuration) });
       }
-    }, 120000); 
+    }, 180000); 
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
@@ -593,14 +562,12 @@ export default function RoomPage() {
       screenStreamRef.current = null;
     }
     setIsScreenSharing(false);
-    
     const cameraTrack = localStreamRef.current?.getVideoTracks().find(t => t.readyState === 'live');
     pcs.current.forEach(pc => {
       if (pc.signalingState === 'closed') return;
       const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
       if (videoSender) videoSender.replaceTrack(cameraTrack || null);
     });
-
     updateDoc(meetingRef!, { screenSharerId: null });
   };
 
@@ -609,20 +576,17 @@ export default function RoomPage() {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       const screenTrack = stream.getVideoTracks()[0];
-      
       pcs.current.forEach(pc => {
         if (pc.signalingState === 'closed') return;
         const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
         if (videoSender) videoSender.replaceTrack(screenTrack);
       });
-
       screenStreamRef.current = stream;
       setIsScreenSharing(true);
       updateDoc(meetingRef!, { screenSharerId: user.uid });
-      
       screenTrack.onended = () => stopScreenSharing();
     } catch (err) {
-      toast({ variant: 'destructive', title: 'Screen Share Failed', description: 'Permission for screen sharing was denied.' });
+      toast({ variant: 'destructive', title: 'Screen Share Failed' });
     }
   };
 
@@ -657,7 +621,6 @@ export default function RoomPage() {
       const lastStart = p.activeSegmentStart?.seconds || currentTime;
       const duration = (p.totalDuration || 0) + (currentTime - lastStart);
       const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
-      // Host is always present
       const isQualified = p.id === meetingData.hostId || ratio >= 0.7;
       if (isQualified && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
@@ -754,7 +717,7 @@ export default function RoomPage() {
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-3 bg-zinc-50 border border-zinc-100 rounded-[1.25rem] px-5 py-3 text-xs font-black text-zinc-600 shadow-sm"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
             {isHost ? (
-              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest shadow-[0_15px_30px_-10px_rgba(255,69,69,0.4)] bg-[#FF4545] hover:bg-red-600 transition-all hover:scale-[1.02] active:scale-95 border-none">
+              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest shadow-[0_15px_30px_-10px_rgba(255,69,69,0.4)] bg-[#FF4545] hover:bg-red-600 transition-all border-none">
                 {isProcessingAttendance ? 'Syncing...' : 'End Session'}
               </Button>
             ) : (
@@ -765,7 +728,7 @@ export default function RoomPage() {
 
         <main className="flex-1 flex overflow-hidden p-8 gap-8 relative">
           <div className="flex-1 flex flex-col gap-8 overflow-hidden">
-            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)] border border-white/5 group/main">
+            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)] border border-white/5">
                <div className="w-full h-full">
                  {meetingData?.screenSharerId ? (
                    <div className="w-full h-full relative">
@@ -776,7 +739,7 @@ export default function RoomPage() {
                         isFeatured={true}
                       />
                       {!isVideoOff && meetingData.screenSharerId === user?.uid && (
-                        <div className="absolute bottom-10 right-10 w-64 aspect-video rounded-[2rem] overflow-hidden border-4 border-white/10 shadow-2xl z-20 group-hover:scale-110 transition-transform duration-500">
+                        <div className="absolute bottom-10 right-10 w-64 aspect-video rounded-[2rem] overflow-hidden border-4 border-white/10 shadow-2xl z-20 transition-transform duration-500">
                           <RemoteStream stream={localStreamRef.current} name="Me" isMe={true} isVideoOff={isVideoOff} />
                         </div>
                       )}
@@ -804,37 +767,37 @@ export default function RoomPage() {
                 <div className="absolute inset-0 flex items-center justify-center bg-[#121212]/98 z-30 px-10">
                   <div className="max-w-md w-full text-center">
                     <div className="bg-[#FF4545]/10 w-32 h-32 rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 shadow-inner border border-white/5">
-                      {permissionErrorName === 'NotAllowedError' ? <Lock className="h-14 w-14 text-[#FF4545]" /> : <AlertCircle className="h-14 w-14 text-[#FF4545]" />}
+                      <AlertCircle className="h-14 w-14 text-[#FF4545]" />
                     </div>
-                    <h2 className="text-white text-3xl font-black mb-4 tracking-tight">{permissionErrorName === 'NotAllowedError' ? 'Permission Denied' : 'Hardware Access Required'}</h2>
+                    <h2 className="text-white text-3xl font-black mb-4 tracking-tight">Hardware Access Required</h2>
                     <p className="text-zinc-500 text-sm mb-12 leading-relaxed font-bold">Please ensure you have granted camera and microphone access in your browser settings to join the session.</p>
-                    <Button variant="secondary" className="w-full h-16 rounded-[1.5rem] font-black shadow-2xl uppercase tracking-widest text-[11px] bg-white text-zinc-900 hover:bg-zinc-100 transition-all active:scale-95" onClick={() => window.location.reload()}><RefreshCcw className="mr-4 h-5 w-5" /> Retry Connection</Button>
+                    <Button variant="secondary" className="w-full h-16 rounded-[1.5rem] font-black shadow-2xl uppercase tracking-widest text-[11px] bg-white text-zinc-900 hover:bg-zinc-100 transition-all" onClick={() => window.location.reload()}><RefreshCcw className="mr-4 h-5 w-5" /> Retry Connection</Button>
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="h-28 mx-auto w-fit bg-white rounded-[3rem] border border-zinc-100 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.15)] flex items-center px-12 gap-6 shrink-0 -mt-14 z-20 transition-all hover:scale-[1.02] hover:shadow-[0_40px_80px_-20px_rgba(0,0,0,0.2)]">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", isAudioMuted ? "bg-[#FF4545] hover:bg-red-600 shadow-red-200" : "bg-zinc-100 hover:bg-zinc-200")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", isVideoOff ? "bg-[#FF4545] hover:bg-red-600 shadow-red-200" : "bg-zinc-100 hover:bg-zinc-200")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
+            <div className="h-28 mx-auto w-fit bg-white rounded-[3rem] border border-zinc-100 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.15)] flex items-center px-12 gap-6 shrink-0 -mt-14 z-20 transition-all hover:scale-[1.02]">
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all border-none", isAudioMuted ? "bg-[#FF4545] hover:bg-red-600 shadow-red-200" : "bg-zinc-100 hover:bg-zinc-200")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all border-none", isVideoOff ? "bg-[#FF4545] hover:bg-red-600 shadow-red-200" : "bg-zinc-100 hover:bg-zinc-200")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
                <Separator orientation="vertical" className="h-12 mx-4 bg-zinc-100" />
-               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={isScreenSharing ? stopScreenSharing : startScreenSharing} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", isScreenSharing ? "bg-primary text-white" : "bg-zinc-50 hover:bg-zinc-100")}><ScreenShare className="h-7 w-7 text-zinc-500" /></Button>
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { const ns = !hasHandRaised; setHasHandRaised(ns); updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { hasRaisedHand: ns }); }} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", hasHandRaised ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500 shadow-yellow-200" : "bg-zinc-50 hover:bg-zinc-100")}><Hand className="h-7 w-7" /></Button>
+               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={isScreenSharing ? stopScreenSharing : startScreenSharing} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all border-none", isScreenSharing ? "bg-primary text-white" : "bg-zinc-50 hover:bg-zinc-100")}><ScreenShare className="h-7 w-7 text-zinc-500" /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { const ns = !hasHandRaised; setHasHandRaised(ns); updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { hasRaisedHand: ns }); }} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all border-none", hasHandRaised ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500 shadow-yellow-200" : "bg-zinc-50 hover:bg-zinc-100")}><Hand className="h-7 w-7" /></Button>
                <Popover open={isReactionOpen} onOpenChange={setIsReactionOpen}>
-                  <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100 active:scale-90 border-none"><Smile className="h-7 w-7 text-zinc-500" /></Button></PopoverTrigger>
+                  <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100 border-none"><Smile className="h-7 w-7 text-zinc-500" /></Button></PopoverTrigger>
                   <PopoverContent className="w-auto p-6 grid grid-cols-4 gap-6 rounded-[3rem] shadow-[0_50px_100px_-20px_rgba(0,0,0,0.3)] border-none bg-white mb-6">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
-                       <Button key={emoji} variant="ghost" className="h-16 w-16 p-0 text-4xl hover:bg-zinc-50 transition-all hover:scale-125 active:scale-90 rounded-2xl" onClick={() => handleReact(emoji)}>{emoji}</Button>
+                       <Button key={emoji} variant="ghost" className="h-16 w-16 p-0 text-4xl hover:bg-zinc-50 transition-all hover:scale-125 rounded-2xl" onClick={() => handleReact(emoji)}>{emoji}</Button>
                      ))}
                   </PopoverContent>
                </Popover>
                <Separator orientation="vertical" className="h-12 mx-4 bg-zinc-100" />
                <Dialog>
-                 <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100 active:scale-90 border-none"><BarChart3 className="h-7 w-7 text-zinc-500" /></Button></DialogTrigger>
+                 <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100 border-none"><BarChart3 className="h-7 w-7 text-zinc-500" /></Button></DialogTrigger>
                  <DialogContent className="max-w-5xl rounded-[3.5rem] p-0 overflow-hidden border-none shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)]">
                     <DialogHeader className="p-12 bg-zinc-50/50 border-b">
                       <DialogTitle className="text-4xl font-black tracking-tighter">Session Engagement</DialogTitle>
-                      <DialogDescription className="font-black text-zinc-400 uppercase tracking-[0.2em] text-[10px] mt-2">Real-time attendance tracking for {meetingData?.name}</DialogDescription>
+                      <DialogDescription className="font-black text-zinc-400 uppercase tracking-[0.2em] text-[10px] mt-2">Real-time attendance tracking</DialogDescription>
                     </DialogHeader>
                     <div className="p-12 overflow-auto max-h-[60vh]">
                        <Table>
@@ -845,7 +808,6 @@ export default function RoomPage() {
                                const dur = (p.totalDuration || 0) + (currentTime - lastStart);
                                const meetingElapsed = Math.max(1, currentTime - (meetingData?.createdAt?.seconds || currentTime));
                                const ratio = meetingElapsed > 0 ? dur / meetingElapsed : 0;
-                               // Host is always present
                                const isQualified = p.id === meetingData?.hostId || ratio >= 0.7;
                                return (
                                  <TableRow key={p.id} className="border-b border-zinc-50 hover:bg-zinc-50/50 transition-colors">
@@ -889,8 +851,8 @@ export default function RoomPage() {
                                     <span className="text-sm font-black truncate text-zinc-900 tracking-tight">{p.name}</span>
                                   </div>
                                   <div className="flex gap-4">
-                                    <Button size="sm" onClick={() => admitParticipant(p.id)} className="flex-1 h-12 text-[10px] font-black uppercase tracking-widest rounded-2xl shadow-lg hover:scale-105 active:scale-95 transition-all">Admit</Button>
-                                    <Button size="sm" variant="ghost" onClick={() => removeParticipant(p.id)} className="flex-1 h-12 text-[10px] font-black uppercase tracking-widest text-zinc-400 hover:text-[#FF4545] hover:bg-red-50 rounded-2xl transition-all">Decline</Button>
+                                    <Button size="sm" onClick={() => admitParticipant(p.id)} className="flex-1 h-12 text-[10px] font-black uppercase tracking-widest rounded-2xl shadow-lg">Admit</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => removeParticipant(p.id)} className="flex-1 h-12 text-[10px] font-black uppercase tracking-widest text-zinc-400 hover:text-[#FF4545] rounded-2xl">Decline</Button>
                                   </div>
                                </div>
                              ))}
@@ -900,14 +862,14 @@ export default function RoomPage() {
 
                         <div className="space-y-6">
                           <div className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-400 px-3 flex items-center gap-4">
-                            <div className="w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_10px_rgba(34,197,94,0.5)]" /> Active Sessions
+                            <div className="w-2.5 h-2.5 bg-green-500 rounded-full" /> Active Sessions
                           </div>
                           {participants?.filter(p => p.role !== 'waiting' && p.role !== 'left').map(p => {
                             const isMe = p.id === user?.uid;
                             return (
-                              <div key={p.id} className="group flex items-center gap-5 p-4 rounded-[2rem] hover:bg-zinc-50 transition-all border border-transparent hover:border-zinc-100">
+                              <div key={p.id} className="group flex items-center gap-5 p-4 rounded-[2rem] hover:bg-zinc-50 transition-all border border-transparent">
                                  <div className="relative">
-                                   <Avatar className="h-16 w-16 border-4 border-white shadow-xl group-hover:scale-110 transition-transform duration-500">
+                                   <Avatar className="h-16 w-16 border-4 border-white shadow-xl group-hover:scale-110 transition-transform">
                                       <AvatarFallback className="bg-zinc-100 text-zinc-900 font-black text-sm">{p.name[0]}</AvatarFallback>
                                    </Avatar>
                                    {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-2.5 border-4 border-white shadow-2xl animate-bounce z-10"><Hand className="h-3 w-3 text-yellow-900" /></div>}
@@ -923,7 +885,7 @@ export default function RoomPage() {
                                        {p.isVideoOff ? <VideoOff className="h-4 w-4 text-zinc-200" /> : <VideoIcon className="h-4 w-4 text-primary opacity-30" />}
                                        {!isMe && hasAdminPrivileges && (
                                          <Popover>
-                                            <PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-all hover:bg-zinc-100 rounded-lg ml-auto"><Shield className="h-4 w-4 text-zinc-300" /></Button></PopoverTrigger>
+                                            <PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-all ml-auto"><Shield className="h-4 w-4 text-zinc-300" /></Button></PopoverTrigger>
                                             <PopoverContent className="w-64 p-4 rounded-[2rem] border-none shadow-[0_30px_60px_-15px_rgba(0,0,0,0.2)] bg-white mb-2" align="end">
                                                <div className="grid gap-3">
                                                   <Button variant="ghost" size="sm" onClick={() => p.isMuted ? requestUnmute(p.id) : forceMute(p.id)} className="justify-start h-12 text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-zinc-50">
@@ -934,7 +896,7 @@ export default function RoomPage() {
                                                        <Star className="h-4 w-4 mr-4 text-yellow-500" /> Make Co-host
                                                     </Button>
                                                   )}
-                                                  <Button variant="ghost" size="sm" onClick={() => removeParticipant(p.id)} className="justify-start h-12 text-[10px] font-black uppercase tracking-widest text-[#FF4545] hover:text-red-700 hover:bg-red-50 rounded-2xl">
+                                                  <Button variant="ghost" size="sm" onClick={() => removeParticipant(p.id)} className="justify-start h-12 text-[10px] font-black uppercase tracking-widest text-[#FF4545] hover:bg-red-50 rounded-2xl">
                                                      <UserMinus className="h-4 w-4 mr-4" /> Kick Student
                                                   </Button>
                                                </div>
@@ -957,7 +919,7 @@ export default function RoomPage() {
                          </div>
                          <div className="h-4 w-full bg-zinc-100 rounded-full overflow-hidden shadow-inner border border-zinc-200/40">
                             <div 
-                              className="h-full bg-zinc-900 transition-all duration-1000 shadow-[0_0_15px_rgba(0,0,0,0.2)]" 
+                              className="h-full bg-zinc-900 transition-all duration-1000" 
                               style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / Math.max(1, (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
                             />
                          </div>
@@ -978,8 +940,8 @@ export default function RoomPage() {
                    </ScrollArea>
                    <div className="p-8 border-t bg-white">
                       <div className="relative flex items-center">
-                        <Input placeholder="Share something with the class..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="pr-16 rounded-[2rem] h-16 bg-zinc-50 border-zinc-100 focus-visible:ring-zinc-900 pl-8 font-bold text-sm shadow-inner" />
-                        <Button size="icon" variant="ghost" onClick={handleSendMessage} className="absolute right-3 top-1/2 -translate-y-1/2 h-12 w-12 text-zinc-900 hover:bg-transparent transition-transform active:scale-90"><Send className="h-6 w-6" /></Button>
+                        <Input placeholder="Share something..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="pr-16 rounded-[2rem] h-16 bg-zinc-50 border-zinc-100 pl-8 font-bold text-sm shadow-inner" />
+                        <Button size="icon" variant="ghost" onClick={handleSendMessage} className="absolute right-3 top-1/2 -translate-y-1/2 h-12 w-12 text-zinc-900 transition-transform active:scale-90"><Send className="h-6 w-6" /></Button>
                       </div>
                    </div>
                 </TabsContent>
