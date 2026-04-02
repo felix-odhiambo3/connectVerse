@@ -93,7 +93,7 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(e => console.warn("Auto-play blocked", e));
+      videoRef.current.play().catch(e => {});
     }
   }, [stream]);
 
@@ -145,14 +145,12 @@ export default function RoomPage() {
   const [floatingReaction, setFloatingReaction] = useState<FloatingReaction | null>(null);
   const [isReactionOpen, setIsReactionOpen] = useState(false);
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
-  const [permissionErrorName, setPermissionErrorName] = useState<string | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const isInitializingRef = useRef(false);
   const lastProcessedRemoteMuteAt = useRef<number>(0);
-  const lastProcessedRemoteUnmuteAt = useRef<number>(0);
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
 
@@ -172,8 +170,7 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // Limit chat messages to save quota
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(30));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(20));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -270,10 +267,7 @@ export default function RoomPage() {
         try {
           stream = await navigator.mediaDevices.getUserMedia({ video: true });
         } catch (error3: any) {
-          if (isMounted) {
-            setHasMediaPermission(false);
-            setPermissionErrorName(error.name);
-          }
+          if (isMounted) setHasMediaPermission(false);
           isInitializingRef.current = false;
           return;
         }
@@ -412,11 +406,11 @@ export default function RoomPage() {
             if (data?.answer && pc.signalingState === 'have-local-offer') {
               try {
                 await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-              } catch (e) { console.warn("SDP Error", e); }
+              } catch (e) {}
             }
           });
           signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
-        } catch (err) { console.warn("Offer Error", err); }
+        } catch (err) {}
       } else {
         const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
           if (pc.signalingState === 'closed') return;
@@ -429,13 +423,13 @@ export default function RoomPage() {
                 await pc.setLocalDescription(answer);
                 await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
               }
-            } catch (err) { console.warn("Handshake Error", err); }
+            } catch (err) {}
           }
         });
         signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
       }
 
-      const unsubCandidates = onSnapshot(collection(channelRef, 'candidates'), (snapshot) => {
+      const unsubCandidates = onSnapshot(query(collection(channelRef, 'candidates'), limit(50)), (snapshot) => {
         if (pc.signalingState === 'closed') return;
         snapshot.docChanges().forEach(async (change) => {
           if (change.type === 'added') {
@@ -498,7 +492,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // Frugal heartbeat: 3 minutes to preserve quota
+    // Frugal heartbeat: 5 minutes to preserve quota
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -510,7 +504,7 @@ export default function RoomPage() {
 
         updateDoc(pRef, { totalDuration: Math.max(0, currentDuration) });
       }
-    }, 180000); 
+    }, 300000); 
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
