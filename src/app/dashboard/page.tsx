@@ -1,16 +1,16 @@
 
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
-import { addDoc, collection, serverTimestamp, query, where, doc, updateDoc, writeBatch, limit, orderBy } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, query, where, doc, writeBatch, limit } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LogOut, Plus, Video, Calendar as CalendarIcon, Copy, Trash2, ArrowRight, Repeat } from 'lucide-react';
+import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat } from 'lucide-react';
 import Link from 'next/link';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
@@ -61,11 +61,11 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // Frugal Limit: Only fetch the 10 most recent meetings to preserve quota
+    // Ultra Frugal Limit: Only fetch the 5 most recent meetings to preserve quota
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      limit(10)
+      limit(5)
     );
   }, [user?.uid, firestore]);
 

@@ -27,7 +27,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, RefreshCcw, Lock, Unlock, MessageSquare, Users, BookOpen, Download, UserMinus, Star } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, RefreshCcw, Lock, MessageSquare, Users, BookOpen, Download, UserMinus, Star } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -171,7 +171,7 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(15));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -386,10 +386,19 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
+      // Buffered ICE gathering to save quota
+      const iceBuffer: RTCIceCandidateInit[] = [];
+      let iceTimeout: any = null;
+
       pc.onicecandidate = (event) => {
         if (event.candidate && pc.signalingState !== 'closed') {
-          updateDoc(channelRef, { candidates: arrayUnion({ candidate: event.candidate.toJSON(), from: user.uid }) })
-            .catch(() => setDoc(channelRef, { candidates: [{ candidate: event.candidate.toJSON(), from: user.uid }] }, { merge: true }));
+          iceBuffer.push(event.candidate.toJSON());
+          if (iceTimeout) clearTimeout(iceTimeout);
+          iceTimeout = setTimeout(() => {
+            updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
+              .catch(() => setDoc(channelRef, { candidates: iceBuffer.map(c => ({ candidate: c, from: user.uid })) }, { merge: true }));
+            iceBuffer.length = 0;
+          }, 500);
         }
       };
 
@@ -491,6 +500,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
+    // Ultra-frugal heartbeat: 15 minutes
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -500,9 +510,9 @@ export default function RoomPage() {
         durationRef.current = currentDuration;
         segmentStartRef.current = now;
 
-        updateDoc(pRef, { totalDuration: Math.max(0, currentDuration) });
+        updateDoc(pRef, { totalDuration: Math.max(0, currentDuration), activeSegmentStart: serverTimestamp() });
       }
-    }, 600000); 
+    }, 900000); 
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
