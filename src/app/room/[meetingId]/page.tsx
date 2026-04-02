@@ -165,15 +165,15 @@ export default function RoomPage() {
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
     // ULTRA FRUGAL: Limit participants to strictly preserve quota
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(8));
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Limit chat to 5 most recent to strictly preserve quota
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
+    // ULTRA FRUGAL: Limit chat to 3 most recent to strictly preserve quota
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
