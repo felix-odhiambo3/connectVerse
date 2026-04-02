@@ -4,7 +4,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
-import { addDoc, collection, serverTimestamp, query, where, doc, updateDoc, writeBatch } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, query, where, doc, updateDoc, writeBatch, limit, orderBy } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -61,7 +61,13 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user || !firestore) return null;
-    return query(collection(firestore, 'meetings'), where('hostId', '==', user.uid));
+    // Added limit and orderBy to save quota
+    return query(
+      collection(firestore, 'meetings'), 
+      where('hostId', '==', user.uid),
+      orderBy('createdAt', 'desc'),
+      limit(20)
+    );
   }, [user, firestore]);
 
   const { data: allUserMeetings } = useCollection(allUserMeetingsQuery);

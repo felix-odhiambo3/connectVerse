@@ -186,6 +186,7 @@ export default function RoomPage() {
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
   }, [participants]);
 
+  // Memoize stable participant IDs string to prevent WebRTC effect loops on minor updates (heartbeats)
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).join(','), [activeParticipants]);
 
   const sortedParticipants = useMemo(() => {
@@ -489,17 +490,26 @@ export default function RoomPage() {
       else if (meetingData.isLocked && !currentUserParticipant) initialRole = 'waiting';
       else if (currentUserParticipant?.role) initialRole = currentUserParticipant.role;
 
-      await setDoc(pRef, {
-        id: user.uid,
-        name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
-        joinedAt: currentUserParticipant?.joinedAt || serverTimestamp(),
-        activeSegmentStart: currentUserParticipant?.activeSegmentStart || serverTimestamp(),
-        role: initialRole,
-        isMuted: isAudioMuted,
-        isVideoOff: isVideoOff,
-        hasRaisedHand: hasHandRaised,
-        totalDuration: currentUserParticipant?.totalDuration || 0
-      }, { merge: true });
+      // Only write if there's an actual change in state to save quota
+      const shouldWrite = !currentUserParticipant || 
+        currentUserParticipant.role !== initialRole || 
+        currentUserParticipant.isMuted !== isAudioMuted || 
+        currentUserParticipant.isVideoOff !== isVideoOff || 
+        currentUserParticipant.hasRaisedHand !== hasHandRaised;
+
+      if (shouldWrite) {
+        await setDoc(pRef, {
+          id: user.uid,
+          name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
+          joinedAt: currentUserParticipant?.joinedAt || serverTimestamp(),
+          activeSegmentStart: currentUserParticipant?.activeSegmentStart || serverTimestamp(),
+          role: initialRole,
+          isMuted: isAudioMuted,
+          isVideoOff: isVideoOff,
+          hasRaisedHand: hasHandRaised,
+          totalDuration: currentUserParticipant?.totalDuration || 0
+        }, { merge: true });
+      }
     };
 
     syncPresence();
@@ -519,6 +529,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
+    // Optimized heartbeat to 2 minutes to stay within Firestore free tier quotas
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -530,7 +541,7 @@ export default function RoomPage() {
 
         updateDoc(pRef, { totalDuration: Math.max(0, currentDuration) });
       }
-    }, 60000); // Optimized to 60s to prevent quota exhaustion
+    }, 120000); 
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
@@ -646,7 +657,8 @@ export default function RoomPage() {
       const lastStart = p.activeSegmentStart?.seconds || currentTime;
       const duration = (p.totalDuration || 0) + (currentTime - lastStart);
       const ratio = totalSessionSeconds > 0 ? duration / totalSessionSeconds : 0;
-      const isQualified = p.role === 'host' || ratio >= 0.7;
+      // Host is always present
+      const isQualified = p.id === meetingData.hostId || ratio >= 0.7;
       if (isQualified && meetingData.seriesId) {
         const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
         batch.set(seriesUserRef, { userId: p.id, seriesId: meetingData.seriesId, attendedHours: increment(meetingData.fixedDurationHours || 0), sessionsAttended: increment(1) }, { merge: true });
@@ -833,7 +845,8 @@ export default function RoomPage() {
                                const dur = (p.totalDuration || 0) + (currentTime - lastStart);
                                const meetingElapsed = Math.max(1, currentTime - (meetingData?.createdAt?.seconds || currentTime));
                                const ratio = meetingElapsed > 0 ? dur / meetingElapsed : 0;
-                               const isQualified = p.role === 'host' || ratio >= 0.7;
+                               // Host is always present
+                               const isQualified = p.id === meetingData?.hostId || ratio >= 0.7;
                                return (
                                  <TableRow key={p.id} className="border-b border-zinc-50 hover:bg-zinc-50/50 transition-colors">
                                     <TableCell className="py-6"><div className="font-black text-zinc-900 flex items-center gap-2">{p.name} {p.id === user?.uid && <Badge variant="secondary" className="bg-primary/5 text-primary text-[8px] font-black uppercase border-none px-2">Me</Badge>}</div></TableCell>
@@ -977,4 +990,3 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
-
