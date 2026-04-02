@@ -18,6 +18,7 @@ import {
   Timestamp,
   onSnapshot,
   limit,
+  arrayUnion,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -170,7 +171,7 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(20));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(15));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -349,9 +350,7 @@ export default function RoomPage() {
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
-        signalingUnsubs.current.get(`${id}_candidates`)?.();
         signalingUnsubs.current.delete(`${id}_channel`);
-        signalingUnsubs.current.delete(`${id}_candidates`);
         pc.close();
         pcs.current.delete(id);
         setRemoteStreams(prev => {
@@ -387,9 +386,11 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
+      // Frugal Signaling: Use arrayUnion to reduce individual candidate doc writes
       pc.onicecandidate = (event) => {
         if (event.candidate && pc.signalingState !== 'closed') {
-          addDoc(collection(channelRef, 'candidates'), { candidate: event.candidate.toJSON(), from: user.uid });
+          updateDoc(channelRef, { candidates: arrayUnion({ candidate: event.candidate.toJSON(), from: user.uid }) })
+            .catch(() => setDoc(channelRef, { candidates: [{ candidate: event.candidate.toJSON(), from: user.uid }] }, { merge: true }));
         }
       };
 
@@ -404,9 +405,14 @@ export default function RoomPage() {
             const data = snapshot.data();
             if (pc.signalingState === 'closed') return;
             if (data?.answer && pc.signalingState === 'have-local-offer') {
-              try {
-                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-              } catch (e) {}
+              try { await pc.setRemoteDescription(new RTCSessionDescription(data.answer)); } catch (e) {}
+            }
+            if (data?.candidates && pc.remoteDescription) {
+              data.candidates.forEach(async (cand: any) => {
+                if (cand.from !== user.uid) {
+                  try { await pc.addIceCandidate(new RTCIceCandidate(cand.candidate)); } catch (e) {}
+                }
+              });
             }
           });
           signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
@@ -425,22 +431,16 @@ export default function RoomPage() {
               }
             } catch (err) {}
           }
+          if (data?.candidates && pc.remoteDescription) {
+            data.candidates.forEach(async (cand: any) => {
+              if (cand.from !== user.uid) {
+                try { await pc.addIceCandidate(new RTCIceCandidate(cand.candidate)); } catch (e) {}
+              }
+            });
+          }
         });
         signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
       }
-
-      const unsubCandidates = onSnapshot(query(collection(channelRef, 'candidates'), limit(50)), (snapshot) => {
-        if (pc.signalingState === 'closed') return;
-        snapshot.docChanges().forEach(async (change) => {
-          if (change.type === 'added') {
-            const data = change.doc.data();
-            if (data.from !== user.uid && pc.signalingState !== 'closed' && pc.remoteDescription) {
-              try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (e) {}
-            }
-          }
-        });
-      });
-      signalingUnsubs.current.set(`${participantId}_candidates`, unsubCandidates);
     });
   }, [user?.uid, firestore, meetingId, activeParticipantIds, hasMediaPermission]);
 
@@ -492,7 +492,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // Frugal heartbeat: 5 minutes to preserve quota
+    // Extreme Heartbeat Throttling: 5 minutes to preserve quota
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;

@@ -61,12 +61,12 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user || !firestore) return null;
-    // Frugal query: strictly limit to 10 most recent to preserve quota
+    // Frugal: Strictly limit to 5 to preserve quota
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
       orderBy('createdAt', 'desc'),
-      limit(10)
+      limit(5)
     );
   }, [user, firestore]);
 
