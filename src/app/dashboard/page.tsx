@@ -60,23 +60,29 @@ export default function DashboardPage() {
   });
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
-    if (!user || !firestore) return null;
-    // Frugal: Strictly limit to 5 to preserve quota
+    // Frugal check: Ensure user is fully loaded
+    if (!user?.uid || !firestore) return null;
+    
+    // Removing orderBy to avoid composite index requirements for MVP security stability
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      orderBy('createdAt', 'desc'),
-      limit(5)
+      limit(20)
     );
-  }, [user, firestore]);
+  }, [user?.uid, firestore]);
 
   const { data: allUserMeetings } = useCollection(allUserMeetingsQuery);
 
   const upcomingMeetings = useMemo(() => {
     if (!allUserMeetings) return [];
+    // Handle sorting and filtering in memory to ensure quota-friendly performance
     return allUserMeetings
       .filter(meeting => meeting.status === 'scheduled')
-      .sort((a, b) => (a.scheduledAt?.seconds || 0) - (b.scheduledAt?.seconds || 0));
+      .sort((a, b) => {
+        const dateA = a.scheduledAt?.seconds || 0;
+        const dateB = b.scheduledAt?.seconds || 0;
+        return dateA - dateB;
+      });
   }, [allUserMeetings]);
 
   const handleScheduleSubmit = async (values: z.infer<typeof scheduleMeetingSchema>) => {
@@ -299,8 +305,8 @@ export default function DashboardPage() {
                           {meeting.seriesId && <Repeat className="h-4 w-4 text-primary opacity-50" />}
                         </div>
                         <CardDescription className="font-medium text-zinc-600 mt-1">
-                          {format(new Date(meeting.scheduledAt.seconds * 1000), 'PPP')}<br />
-                          <span className="text-zinc-400 font-normal">{format(new Date(meeting.scheduledAt.seconds * 1000), 'p')} • {meeting.fixedDurationHours}h Session</span>
+                          {meeting.scheduledAt ? format(new Date(meeting.scheduledAt.seconds * 1000), 'PPP') : 'No date'}<br />
+                          <span className="text-zinc-400 font-normal">{meeting.scheduledAt ? format(new Date(meeting.scheduledAt.seconds * 1000), 'p') : '--'} • {meeting.fixedDurationHours}h Session</span>
                         </CardDescription>
                       </CardHeader>
                       <CardFooter className="bg-zinc-50/80 border-t pt-4 pb-4 gap-2">

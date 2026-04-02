@@ -20,8 +20,8 @@ service cloud.firestore {
     }
 
     match /meetings/{meetingId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
+      // Allow any signed-in user to read meeting details
+      allow read: if isSignedIn();
       allow create: if isSignedIn();
       allow update: if isSignedIn();
       allow delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
@@ -36,15 +36,15 @@ service cloud.firestore {
         allow create: if isSignedIn();
       }
       
-      match /webrtc/{channel}/{docId=**} {
+      match /webrtc/{channelId} {
         allow read, write: if isSignedIn();
       }
     }
 
     match /seriesAttendance/{seriesId}/users/{userId} {
       allow get: if isSignedIn();
-      allow list: if isSignedIn(); // Host needs to list to see reports
-      allow write: if isSignedIn(); // Simplified for MVP updates from client
+      allow list: if isSignedIn();
+      allow write: if isSignedIn();
     }
   }
 }
