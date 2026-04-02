@@ -11,14 +11,12 @@ import {
   addDoc,
   query,
   orderBy,
-  getDoc,
   updateDoc,
   increment,
   writeBatch,
   setDoc,
   Timestamp,
   onSnapshot,
-  deleteDoc,
 } from 'firebase/firestore';
 import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
@@ -371,14 +369,38 @@ export default function RoomPage() {
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: newState });
   };
 
+  // Stable WebRTC Effect: Uses ID set comparison to avoid cascading updates from heartbeat/mute
+  const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).join(','), [activeParticipants]);
+
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipants.length) return;
 
-    activeParticipants.forEach(async (participant) => {
-      if (participant.id === user.uid || pcs.current.has(participant.id)) return;
+    const currentIds = activeParticipants.map(p => p.id).filter(id => id !== user.uid);
+    
+    // 1. Cleanup old connections
+    const currentIdSet = new Set(currentIds);
+    pcs.current.forEach((pc, id) => {
+      if (!currentIdSet.has(id)) {
+        signalingUnsubs.current.get(`${id}_channel`)?.();
+        signalingUnsubs.current.get(`${id}_candidates`)?.();
+        signalingUnsubs.current.delete(`${id}_channel`);
+        signalingUnsubs.current.delete(`${id}_candidates`);
+        pc.close();
+        pcs.current.delete(id);
+        setRemoteStreams(prev => {
+          const next = new Map(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    });
+
+    // 2. Setup new connections
+    currentIds.forEach(async (participantId) => {
+      if (pcs.current.has(participantId)) return;
 
       const pc = new RTCPeerConnection(ICE_SERVERS);
-      pcs.current.set(participant.id, pc);
+      pcs.current.set(participantId, pc);
 
       const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv', streams: [localStreamRef.current!] });
       const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv', streams: [localStreamRef.current!] });
@@ -392,15 +414,14 @@ export default function RoomPage() {
         if (pc.signalingState === 'closed') return;
         setRemoteStreams(prev => {
           const next = new Map(prev);
-          const existingStream = next.get(participant.id) || new MediaStream();
+          const existingStream = next.get(participantId) || new MediaStream();
           existingStream.addTrack(event.track);
-          // Return a new MediaStream instance to trigger re-renders in RemoteStream
-          next.set(participant.id, new MediaStream(existingStream.getTracks()));
+          next.set(participantId, new MediaStream(existingStream.getTracks()));
           return next;
         });
       };
 
-      const channelId = [user.uid, participant.id].sort().join('_');
+      const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
       pc.onicecandidate = (event) => {
@@ -412,7 +433,7 @@ export default function RoomPage() {
         }
       };
 
-      if (user.uid < participant.id) {
+      if (user.uid < participantId) {
         try {
           const offer = await pc.createOffer();
           if (pc.signalingState !== 'stable') return;
@@ -428,7 +449,7 @@ export default function RoomPage() {
               } catch (e) { console.warn("SetRemoteDescription failed", e); }
             }
           });
-          signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
+          signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
         } catch (err) {
           console.warn("Failed to create offer", err);
         }
@@ -449,7 +470,7 @@ export default function RoomPage() {
             }
           }
         });
-        signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
+        signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
       }
 
       const unsubCandidates = onSnapshot(collection(channelRef, 'candidates'), (snapshot) => {
@@ -467,28 +488,9 @@ export default function RoomPage() {
           }
         });
       });
-      signalingUnsubs.current.set(`${participant.id}_candidates`, unsubCandidates);
+      signalingUnsubs.current.set(`${participantId}_candidates`, unsubCandidates);
     });
-
-    return () => {
-      const activeIds = new Set(activeParticipants.map(p => p.id));
-      pcs.current.forEach((pc, id) => {
-        if (!activeIds.has(id)) {
-          signalingUnsubs.current.get(`${id}_channel`)?.();
-          signalingUnsubs.current.get(`${id}_candidates`)?.();
-          signalingUnsubs.current.delete(`${id}_channel`);
-          signalingUnsubs.current.delete(`${id}_candidates`);
-          pc.close();
-          pcs.current.delete(id);
-          setRemoteStreams(prev => {
-            const next = new Map(prev);
-            next.delete(id);
-            return next;
-          });
-        }
-      });
-    };
-  }, [user?.uid, firestore, meetingId, activeParticipants, hasMediaPermission]);
+  }, [user?.uid, firestore, meetingId, activeParticipantIds, hasMediaPermission]);
 
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
@@ -514,7 +516,18 @@ export default function RoomPage() {
     };
 
     syncPresence();
-  }, [user, meetingId, firestore, meetingData?.status, meetingData?.isLocked, isAudioMuted, isVideoOff, hasHandRaised, meetingData?.hostId]);
+  }, [user?.uid, meetingId, firestore, meetingData?.status, meetingData?.isLocked, isAudioMuted, isVideoOff, hasHandRaised, meetingData?.hostId]);
+
+  // Stable Heartbeat Effect: Ref-based duration calculation to prevent quota exhaustion
+  const durationRef = useRef(0);
+  const segmentStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (currentUserParticipant) {
+      durationRef.current = currentUserParticipant.totalDuration || 0;
+      segmentStartRef.current = currentUserParticipant.activeSegmentStart?.seconds || Date.now() / 1000;
+    }
+  }, [currentUserParticipant?.id]); // Only reset when identity changes
 
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
@@ -523,13 +536,18 @@ export default function RoomPage() {
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
-        const lastStart = currentUserParticipant?.activeSegmentStart?.seconds || now;
-        const currentDuration = (currentUserParticipant?.totalDuration || 0) + (now - lastStart);
+        const lastStart = segmentStartRef.current || now;
+        const currentDuration = durationRef.current + (now - lastStart);
+        
+        // Update local ref to keep track
+        durationRef.current = currentDuration;
+        segmentStartRef.current = now;
+
         updateDoc(pRef, { totalDuration: Math.max(0, currentDuration), activeSegmentStart: serverTimestamp() });
       }
     }, 30000);
     return () => clearInterval(interval);
-  }, [user, meetingId, firestore, meetingData?.status, currentUserParticipant?.role, currentUserParticipant?.totalDuration, currentUserParticipant?.activeSegmentStart]);
+  }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
