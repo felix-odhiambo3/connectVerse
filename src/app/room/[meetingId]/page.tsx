@@ -105,12 +105,20 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
         muted={isMe}
         className={cn("w-full h-full object-cover transition-opacity duration-500", (isVideoOff && !stream?.getVideoTracks()[0]?.enabled) ? "opacity-0" : "opacity-100")}
       />
-      {isVideoOff && (
+      {(isVideoOff && !isFeatured) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
-           <div className={cn("rounded-full bg-zinc-800 flex items-center justify-center transition-all shadow-inner border border-white/5", isFeatured ? "w-32 h-32" : "w-16 h-16")}>
-              <UserIcon className={cn("text-zinc-600 transition-all", isFeatured ? "h-16 w-16" : "h-8 w-8")} />
+           <div className="rounded-full bg-zinc-800 flex items-center justify-center w-16 h-16 shadow-inner border border-white/5">
+              <UserIcon className="text-zinc-600 h-8 w-8" />
            </div>
-           <div className={cn("text-zinc-500 mt-4 font-bold tracking-tight uppercase tracking-widest", isFeatured ? "text-sm" : "text-[10px]")}>Camera Off</div>
+           <div className="text-zinc-500 mt-4 font-bold tracking-tight uppercase tracking-widest text-[10px]">Camera Off</div>
+        </div>
+      )}
+      {isVideoOff && isFeatured && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
+           <div className="rounded-full bg-zinc-800 flex items-center justify-center w-32 h-32 shadow-inner border border-white/5">
+              <UserIcon className="text-zinc-600 h-16 w-16" />
+           </div>
+           <div className="text-zinc-500 mt-6 font-bold tracking-tight uppercase tracking-widest text-sm">Waiting for Video</div>
         </div>
       )}
       <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
@@ -191,7 +199,14 @@ export default function RoomPage() {
     return [...activeParticipants].sort((a, b) => (rolePriority[a.role as keyof typeof rolePriority] || 2) - (rolePriority[b.role as keyof typeof rolePriority] || 2));
   }, [activeParticipants]);
 
-  const featuredParticipant = sortedParticipants[0];
+  const featuredParticipant = useMemo(() => {
+    if (!activeParticipants.length) return null;
+    if (meetingData?.screenSharerId) {
+      const sharer = activeParticipants.find(p => p.id === meetingData.screenSharerId);
+      if (sharer) return sharer;
+    }
+    return sortedParticipants[0];
+  }, [activeParticipants, sortedParticipants, meetingData?.screenSharerId]);
 
   const waitingParticipants = participants?.filter(p => p.role === 'waiting') || [];
 
@@ -546,17 +561,21 @@ export default function RoomPage() {
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', pId), { remoteUnmuteRequestAt: serverTimestamp() });
   };
 
-  const toggleLock = () => {
-    if (!hasAdminPrivileges || !firestore) return;
-    updateDoc(meetingRef!, { isLocked: !meetingData?.isLocked });
-  };
-
   const stopScreenSharing = () => {
     if (screenStreamRef.current) {
       screenStreamRef.current.getTracks().forEach(t => t.stop());
       screenStreamRef.current = null;
     }
     setIsScreenSharing(false);
+    
+    // Put back camera track in connections if it exists
+    const cameraTrack = localStreamRef.current?.getVideoTracks().find(t => t.readyState === 'live');
+    pcs.current.forEach(pc => {
+      if (pc.signalingState === 'closed') return;
+      const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+      if (videoSender) videoSender.replaceTrack(cameraTrack || null);
+    });
+
     updateDoc(meetingRef!, { screenSharerId: null });
   };
 
@@ -564,10 +583,20 @@ export default function RoomPage() {
     if (!meetingData || !user || !firestore) return;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const screenTrack = stream.getVideoTracks()[0];
+      
+      // Replace tracks in all peer connections
+      pcs.current.forEach(pc => {
+        if (pc.signalingState === 'closed') return;
+        const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (videoSender) videoSender.replaceTrack(screenTrack);
+      });
+
       screenStreamRef.current = stream;
       setIsScreenSharing(true);
       updateDoc(meetingRef!, { screenSharerId: user.uid });
-      stream.getVideoTracks()[0].onended = () => stopScreenSharing();
+      
+      screenTrack.onended = () => stopScreenSharing();
     } catch (err) {
       toast({ variant: 'destructive', title: 'Screen Share Failed', description: 'Permission for screen sharing was denied.' });
     }
@@ -710,10 +739,15 @@ export default function RoomPage() {
           <div className="flex-1 flex flex-col gap-6 overflow-hidden">
             <div className="flex-1 bg-zinc-900 rounded-[2.5rem] relative overflow-hidden shadow-2xl border border-white/5">
                <div className="w-full h-full">
-                 {isScreenSharing ? (
+                 {meetingData?.screenSharerId ? (
                    <div className="w-full h-full relative">
-                      <RemoteStream stream={screenStreamRef.current} name="Your Screen" isMe={true} />
-                      {!isVideoOff && (
+                      <RemoteStream 
+                        stream={meetingData.screenSharerId === user?.uid ? screenStreamRef.current : remoteStreams.get(meetingData.screenSharerId) || null} 
+                        name={featuredParticipant?.name || 'Screen Share'} 
+                        isMe={meetingData.screenSharerId === user?.uid} 
+                        isFeatured={true}
+                      />
+                      {!isVideoOff && meetingData.screenSharerId === user?.uid && (
                         <div className="absolute bottom-8 right-8 w-56 aspect-video rounded-3xl overflow-hidden border-2 border-white/20 shadow-2xl z-20">
                           <RemoteStream stream={localStreamRef.current} name="Me" isMe={true} isVideoOff={isVideoOff} />
                         </div>
