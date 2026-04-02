@@ -153,6 +153,7 @@ export default function RoomPage() {
   const lastProcessedRemoteMuteAt = useRef<number>(0);
   const lastProcessedRemoteUnmuteAt = useRef<number>(0);
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -308,6 +309,7 @@ export default function RoomPage() {
       localStreamRef.current?.getTracks().forEach(t => t.stop());
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
       pcs.current.forEach(pc => pc.close());
+      signalingUnsubs.current.forEach(unsub => unsub());
     };
   }, [initMedia]);
 
@@ -317,7 +319,6 @@ export default function RoomPage() {
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     
     if (isVideoOff) {
-      // Logic to turn video ON
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newTrack = stream.getVideoTracks()[0];
@@ -325,6 +326,7 @@ export default function RoomPage() {
         oldTracks.forEach(t => { localStreamRef.current?.removeTrack(t); t.stop(); });
         localStreamRef.current.addTrack(newTrack);
         pcs.current.forEach(pc => {
+          if (pc.signalingState === 'closed') return;
           const sender = pc.getSenders().find(s => s.track?.kind === 'video');
           if (sender) sender.replaceTrack(newTrack);
         });
@@ -334,7 +336,6 @@ export default function RoomPage() {
         toast({ variant: 'destructive', title: 'Camera Error', description: 'Could not access camera hardware.' });
       }
     } else {
-      // Logic to turn video OFF
       localStreamRef.current.getVideoTracks().forEach(track => {
         track.enabled = false;
         track.stop();
@@ -365,6 +366,7 @@ export default function RoomPage() {
       localStreamRef.current?.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current!));
 
       pc.ontrack = (event) => {
+        if (pc.signalingState === 'closed') return;
         setRemoteStreams(prev => {
           const next = new Map(prev);
           next.set(participant.id, event.streams[0]);
@@ -376,7 +378,7 @@ export default function RoomPage() {
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
       pc.onicecandidate = (event) => {
-        if (event.candidate) {
+        if (event.candidate && pc.signalingState !== 'closed') {
           addDoc(collection(channelRef, 'candidates'), {
             candidate: event.candidate.toJSON(),
             from: user.uid,
@@ -386,43 +388,59 @@ export default function RoomPage() {
 
       if (user.uid < participant.id) {
         const offer = await pc.createOffer();
+        if (pc.signalingState === 'closed') return;
         await pc.setLocalDescription(offer);
         await setDoc(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
 
-        onSnapshot(channelRef, async (snapshot) => {
+        const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
+          if (pc.signalingState === 'closed') return;
           const data = snapshot.data();
           if (data?.answer && pc.signalingState !== 'stable') {
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
         });
+        signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
       } else {
-        onSnapshot(channelRef, async (snapshot) => {
+        const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
+          if (pc.signalingState === 'closed') return;
           const data = snapshot.data();
           if (data?.offer && pc.signalingState !== 'have-remote-offer') {
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
+            if (pc.signalingState === 'closed') return;
             await pc.setLocalDescription(answer);
             await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
           }
         });
+        signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
       }
 
-      onSnapshot(collection(channelRef, 'candidates'), (snapshot) => {
+      const unsubCandidates = onSnapshot(collection(channelRef, 'candidates'), (snapshot) => {
+        if (pc.signalingState === 'closed') return;
         snapshot.docChanges().forEach(async (change) => {
           if (change.type === 'added') {
             const data = change.doc.data();
-            if (data.from !== user.uid) {
-              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            if (data.from !== user.uid && pc.signalingState !== 'closed') {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+              } catch (e) {
+                console.warn("Failed to add ice candidate", e);
+              }
             }
           }
         });
       });
+      signalingUnsubs.current.set(`${participant.id}_candidates`, unsubCandidates);
     });
 
     return () => {
       const activeIds = new Set(activeParticipants.map(p => p.id));
       pcs.current.forEach((pc, id) => {
         if (!activeIds.has(id)) {
+          signalingUnsubs.current.get(`${id}_channel`)?.();
+          signalingUnsubs.current.get(`${id}_candidates`)?.();
+          signalingUnsubs.current.delete(`${id}_channel`);
+          signalingUnsubs.current.delete(`${id}_candidates`);
           pc.close();
           pcs.current.delete(id);
           setRemoteStreams(prev => {
@@ -899,3 +917,4 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
+
