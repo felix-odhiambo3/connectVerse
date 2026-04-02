@@ -97,35 +97,27 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
   }, [stream]);
 
   return (
-    <div className={cn("relative w-full h-full bg-zinc-800 rounded-3xl overflow-hidden group border shadow-sm flex items-center justify-center transition-all", isFeatured && "border-primary/20 shadow-2xl bg-zinc-900")}>
+    <div className={cn("relative w-full h-full bg-[#1A1A1A] rounded-[2.5rem] overflow-hidden group border border-white/5 shadow-2xl flex items-center justify-center transition-all", isFeatured && "ring-1 ring-white/10")}>
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted={isMe}
-        className={cn("w-full h-full object-cover transition-opacity duration-500", (isVideoOff && !isMe) ? "opacity-0" : "opacity-100")}
+        className={cn("w-full h-full object-cover transition-opacity duration-700", (isVideoOff && !isMe) ? "opacity-0" : "opacity-100")}
       />
-      {(isVideoOff && !isMe && !isFeatured) && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
-           <div className="rounded-full bg-zinc-800 flex items-center justify-center w-16 h-16 shadow-inner border border-white/5">
-              <UserIcon className="text-zinc-600 h-8 w-8" />
+      {(isVideoOff && !isMe) && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#121212] z-10">
+           <div className="rounded-full bg-[#1E1E1E] flex items-center justify-center w-24 h-24 shadow-2xl border border-white/5 mb-6">
+              <UserIcon className="text-zinc-700 h-10 w-10" />
            </div>
-           <div className="text-zinc-500 mt-4 font-bold tracking-tight uppercase tracking-widest text-[10px]">Camera Off</div>
+           <div className="text-zinc-500 font-black tracking-[0.3em] uppercase text-[10px] opacity-60">Camera Off</div>
         </div>
       )}
-      {isVideoOff && !isMe && isFeatured && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
-           <div className="rounded-full bg-zinc-800 flex items-center justify-center w-32 h-32 shadow-inner border border-white/5">
-              <UserIcon className="text-zinc-600 h-16 w-16" />
-           </div>
-           <div className="text-zinc-500 mt-6 font-bold tracking-tight uppercase tracking-widest text-sm">Waiting for Video</div>
-        </div>
-      )}
-      <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
-        <Badge variant="secondary" className="bg-black/40 text-white backdrop-blur-sm border-none px-3 py-1 font-bold">
+      <div className="absolute bottom-6 left-6 flex items-center gap-3 z-20">
+        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-xl border-white/10 px-4 py-2 font-black text-[11px] uppercase tracking-wider rounded-xl">
           {name} {isMe && "(You)"}
         </Badge>
-        {isMuted && <div className="p-1.5 bg-red-500 rounded-full shadow-lg border border-white/10"><MicOff className="h-3.5 w-3.5 text-white" /></div>}
+        {isMuted && <div className="p-2 bg-[#FF4545] rounded-xl shadow-xl border border-white/20"><MicOff className="h-3.5 w-3.5 text-white" /></div>}
       </div>
     </div>
   );
@@ -193,6 +185,8 @@ export default function RoomPage() {
     if (!participants) return [];
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
   }, [participants]);
+
+  const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).join(','), [activeParticipants]);
 
   const sortedParticipants = useMemo(() => {
     const rolePriority = { host: 0, 'co-host': 1, participant: 2 };
@@ -269,7 +263,7 @@ export default function RoomPage() {
           toast({ 
             title: 'Unmute Request', 
             description: 'The host has requested that you unmute your microphone.',
-            action: <Button size="sm" onClick={handleToggleAudio}>Unmute Now</Button>
+            action: <Button size="sm" className="bg-zinc-900 text-white hover:bg-black font-bold" onClick={handleToggleAudio}>Unmute Now</Button>
           });
         }
       }
@@ -340,6 +334,7 @@ export default function RoomPage() {
         const oldTracks = localStreamRef.current.getVideoTracks();
         oldTracks.forEach(t => { localStreamRef.current?.removeTrack(t); t.stop(); });
         localStreamRef.current.addTrack(newTrack);
+        
         pcs.current.forEach(pc => {
           if (pc.signalingState === 'closed') return;
           const sender = pc.getSenders().find(s => s.track?.kind === 'video');
@@ -369,16 +364,12 @@ export default function RoomPage() {
     updateDoc(doc(firestore, 'meetings', meetingId, 'participants', user.uid), { isMuted: newState });
   };
 
-  // Stable WebRTC Effect: Uses ID set comparison to avoid cascading updates from heartbeat/mute
-  const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).join(','), [activeParticipants]);
-
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipants.length) return;
 
     const currentIds = activeParticipants.map(p => p.id).filter(id => id !== user.uid);
-    
-    // 1. Cleanup old connections
     const currentIdSet = new Set(currentIds);
+
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -395,27 +386,23 @@ export default function RoomPage() {
       }
     });
 
-    // 2. Setup new connections
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
 
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
 
-      const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv', streams: [localStreamRef.current!] });
-      const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv', streams: [localStreamRef.current!] });
-
-      const audioTrack = localStreamRef.current?.getAudioTracks()[0];
-      const videoTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack);
-      if (videoTrack) videoTransceiver.sender.replaceTrack(videoTrack);
+      pc.addTransceiver('audio', { direction: 'sendrecv', streams: [localStreamRef.current!] });
+      pc.addTransceiver('video', { direction: 'sendrecv', streams: [localStreamRef.current!] });
 
       pc.ontrack = (event) => {
         if (pc.signalingState === 'closed') return;
         setRemoteStreams(prev => {
           const next = new Map(prev);
           const existingStream = next.get(participantId) || new MediaStream();
-          existingStream.addTrack(event.track);
+          if (!existingStream.getTracks().find(t => t.id === event.track.id)) {
+            existingStream.addTrack(event.track);
+          }
           next.set(participantId, new MediaStream(existingStream.getTracks()));
           return next;
         });
@@ -506,7 +493,7 @@ export default function RoomPage() {
         id: user.uid,
         name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
         joinedAt: currentUserParticipant?.joinedAt || serverTimestamp(),
-        activeSegmentStart: serverTimestamp(),
+        activeSegmentStart: currentUserParticipant?.activeSegmentStart || serverTimestamp(),
         role: initialRole,
         isMuted: isAudioMuted,
         isVideoOff: isVideoOff,
@@ -518,7 +505,6 @@ export default function RoomPage() {
     syncPresence();
   }, [user?.uid, meetingId, firestore, meetingData?.status, meetingData?.isLocked, isAudioMuted, isVideoOff, hasHandRaised, meetingData?.hostId]);
 
-  // Stable Heartbeat Effect: Ref-based duration calculation to prevent quota exhaustion
   const durationRef = useRef(0);
   const segmentStartRef = useRef<number | null>(null);
 
@@ -527,7 +513,7 @@ export default function RoomPage() {
       durationRef.current = currentUserParticipant.totalDuration || 0;
       segmentStartRef.current = currentUserParticipant.activeSegmentStart?.seconds || Date.now() / 1000;
     }
-  }, [currentUserParticipant?.id]); // Only reset when identity changes
+  }, [currentUserParticipant?.id]);
 
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
@@ -539,13 +525,12 @@ export default function RoomPage() {
         const lastStart = segmentStartRef.current || now;
         const currentDuration = durationRef.current + (now - lastStart);
         
-        // Update local ref to keep track
         durationRef.current = currentDuration;
         segmentStartRef.current = now;
 
-        updateDoc(pRef, { totalDuration: Math.max(0, currentDuration), activeSegmentStart: serverTimestamp() });
+        updateDoc(pRef, { totalDuration: Math.max(0, currentDuration) });
       }
-    }, 30000);
+    }, 60000); // Optimized to 60s to prevent quota exhaustion
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
@@ -674,11 +659,11 @@ export default function RoomPage() {
 
   if (currentUserParticipant?.role === 'waiting') {
     return (
-      <div className="flex h-screen flex-col items-center justify-center bg-zinc-50 p-6 text-center">
-        <div className="bg-primary/10 w-24 h-24 rounded-full flex items-center justify-center mb-6 animate-pulse"><Lock className="h-10 w-10 text-primary" /></div>
-        <h1 className="text-3xl font-black mb-2">Meeting Restricted</h1>
-        <p className="text-zinc-500 max-w-sm">The host has been notified. Please wait until you are admitted to the session.</p>
-        <Button variant="ghost" className="mt-8 text-zinc-400 font-bold" onClick={() => router.push('/dashboard')}>Leave Waiting Room</Button>
+      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
+        <div className="bg-primary/10 w-32 h-32 rounded-[2.5rem] flex items-center justify-center mb-8 animate-pulse shadow-inner border border-white/5"><Lock className="h-12 w-12 text-primary" /></div>
+        <h1 className="text-4xl font-black mb-3 tracking-tight">Meeting Restricted</h1>
+        <p className="text-zinc-500 max-w-sm font-bold text-sm leading-relaxed">The host has been notified. Please wait until you are admitted to the session.</p>
+        <Button variant="ghost" className="mt-12 text-zinc-400 font-black uppercase tracking-widest text-[11px]" onClick={() => router.push('/dashboard')}>Leave Waiting Room</Button>
       </div>
     );
   }
@@ -689,36 +674,39 @@ export default function RoomPage() {
     const isPresentOverall = isHost || (attendedHours / (totalExpectedHours || 1)) >= 0.7;
 
     return (
-      <div className="flex h-screen items-center justify-center bg-zinc-50 p-6">
-        <Card className="w-full max-w-2xl shadow-xl rounded-3xl overflow-hidden border-none bg-white">
-          <CardHeader className="text-center border-b pb-8 pt-12">
-            <div className="mx-auto bg-primary/10 w-20 h-20 rounded-full flex items-center justify-center mb-4"><BookOpen className="h-10 w-10 text-primary" /></div>
-            <CardTitle className="text-4xl font-black">Attendance Report</CardTitle>
-            <CardDescription className="text-lg">Series: {meetingData?.name}</CardDescription>
+      <div className="flex h-screen items-center justify-center bg-[#F8F9FB] p-6">
+        <Card className="w-full max-w-2xl shadow-[0_50px_100px_-20px_rgba(0,0,0,0.15)] rounded-[3rem] overflow-hidden border-none bg-white">
+          <CardHeader className="text-center border-b pb-10 pt-16 bg-zinc-50/50">
+            <div className="mx-auto bg-primary/5 w-24 h-24 rounded-[2rem] flex items-center justify-center mb-6 shadow-inner border border-white/5"><BookOpen className="h-12 w-12 text-primary" /></div>
+            <CardTitle className="text-5xl font-black tracking-tighter">Attendance Report</CardTitle>
+            <CardDescription className="text-zinc-400 font-bold uppercase tracking-[0.2em] mt-2 text-[11px]">Series: {meetingData?.name}</CardDescription>
           </CardHeader>
-          <CardContent className="pt-10 space-y-10 px-10">
+          <CardContent className="pt-12 space-y-12 px-12">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              <div className="bg-zinc-50 p-8 rounded-3xl border text-center shadow-sm">
-                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-3">Total Hours</p>
-                <div className="text-4xl font-black">{attendedHours}<span className="text-zinc-400 text-xl">/{totalExpectedHours}</span></div>
+              <div className="bg-zinc-50 p-10 rounded-[2rem] border border-zinc-100 text-center shadow-sm">
+                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-4">Total Hours</p>
+                <div className="text-5xl font-black tracking-tighter">{attendedHours}<span className="text-zinc-300 text-2xl">/{totalExpectedHours}</span></div>
               </div>
-              <div className="bg-zinc-50 p-8 rounded-3xl border text-center shadow-sm">
-                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-3">Completion</p>
-                <div className="text-4xl font-black">{((attendedHours / (totalExpectedHours || 1)) * 100).toFixed(0)}%</div>
+              <div className="bg-zinc-50 p-10 rounded-[2rem] border border-zinc-100 text-center shadow-sm">
+                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-4">Completion</p>
+                <div className="text-5xl font-black tracking-tighter">{((attendedHours / (totalExpectedHours || 1)) * 100).toFixed(0)}%</div>
               </div>
-              <div className="bg-zinc-50 p-8 rounded-3xl border text-center shadow-sm">
-                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-3">Sessions</p>
-                <div className="text-4xl font-black">{myCumulativeStats?.sessionsAttended || 0}<span className="text-zinc-400 text-xl">/{meetingData?.totalSessionsInSeries || 1}</span></div>
+              <div className="bg-zinc-50 p-10 rounded-[2rem] border border-zinc-100 text-center shadow-sm">
+                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-4">Sessions</p>
+                <div className="text-5xl font-black tracking-tighter">{myCumulativeStats?.sessionsAttended || 0}<span className="text-zinc-300 text-2xl">/{meetingData?.totalSessionsInSeries || 1}</span></div>
               </div>
             </div>
-            <div className={cn("p-10 rounded-3xl flex flex-col items-center gap-6 text-center border-4", isPresentOverall ? "bg-green-50/50 border-green-100 text-green-900" : "bg-red-50/50 border-red-100 text-red-900")}>
-              {isPresentOverall ? <Trophy className="h-16 w-16" /> : <Frown className="h-16 w-16" />}
-              <div><h3 className="text-3xl font-black">Status: {isPresentOverall ? 'PRESENT' : 'ABSENT'}</h3></div>
+            <div className={cn("p-12 rounded-[2.5rem] flex flex-col items-center gap-8 text-center border-4 transition-all", isPresentOverall ? "bg-green-50/30 border-green-100 text-green-900 shadow-green-100/50" : "bg-red-50/30 border-red-100 text-red-900 shadow-red-100/50")}>
+              {isPresentOverall ? <Trophy className="h-20 w-20 animate-bounce" /> : <Frown className="h-20 w-20" />}
+              <div>
+                <h3 className="text-4xl font-black tracking-tighter uppercase">Status: {isPresentOverall ? 'PRESENT' : 'ABSENT'}</h3>
+                <p className="text-[11px] font-black uppercase tracking-[0.2em] mt-2 opacity-60">{isPresentOverall ? 'Attendance Credit Granted' : 'Attendance Requirement Not Met'}</p>
+              </div>
             </div>
           </CardContent>
-          <CardFooter className="bg-zinc-50/80 p-10 gap-4 border-t">
-            <Button variant="outline" className="flex-1 h-14 rounded-2xl font-bold" onClick={() => window.print()}><Download className="mr-2 h-5 w-5" /> Export PDF</Button>
-            <Button className="flex-1 h-14 rounded-2xl font-bold" onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
+          <CardFooter className="bg-zinc-50/80 p-12 gap-6 border-t">
+            <Button variant="outline" className="flex-1 h-16 rounded-[1.5rem] font-black uppercase tracking-widest text-[11px] border-zinc-200" onClick={() => window.print()}><Download className="mr-3 h-5 w-5" /> Export PDF</Button>
+            <Button className="flex-1 h-16 rounded-[1.5rem] font-black uppercase tracking-widest text-[11px] shadow-xl" onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
           </CardFooter>
         </Card>
       </div>
@@ -730,42 +718,42 @@ export default function RoomPage() {
       <div className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
         <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
           {floatingReaction && (
-            <div key={floatingReaction.id} className="absolute bottom-0 animate-float-up flex flex-col items-center gap-1" style={{ left: `${floatingReaction.left}%` }}>
-              <div className="text-4xl filter drop-shadow-lg">{floatingReaction.emoji}</div>
-              <Badge variant="secondary" className="bg-black/50 text-white border-none text-[10px] py-0 px-2 font-bold whitespace-nowrap">{floatingReaction.userName}</Badge>
+            <div key={floatingReaction.id} className="absolute bottom-0 animate-float-up flex flex-col items-center gap-2" style={{ left: `${floatingReaction.left}%` }}>
+              <div className="text-6xl filter drop-shadow-[0_15px_15px_rgba(0,0,0,0.2)]">{floatingReaction.emoji}</div>
+              <Badge variant="secondary" className="bg-black/60 text-white border-none text-[10px] py-1 px-3 font-black uppercase tracking-widest backdrop-blur-md rounded-lg">{floatingReaction.userName}</Badge>
             </div>
           )}
         </div>
 
-        <header className="flex h-16 items-center justify-between px-8 bg-white border-b z-10">
-          <div className="flex items-center gap-6">
-            <div className="bg-zinc-900 flex items-center justify-center h-10 w-10 rounded-xl text-white font-black text-lg">CV</div>
-            <div className="flex items-center gap-4">
+        <header className="flex h-20 items-center justify-between px-10 bg-white border-b z-10 shadow-sm">
+          <div className="flex items-center gap-8">
+            <div className="bg-zinc-900 flex items-center justify-center h-12 w-12 rounded-[1.25rem] text-white font-black text-xl shadow-lg ring-4 ring-zinc-50">CV</div>
+            <div className="flex items-center gap-6">
                <div className="flex flex-col">
-                  <h1 className="text-sm font-bold truncate max-w-[200px] leading-tight">{meetingData?.name || 'Loading session...'}</h1>
-                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">{meetingData?.isLocked ? 'Restricted Session' : 'Public Session'}</p>
+                  <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Loading session...'}</h1>
+                  <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">{meetingData?.isLocked ? 'Restricted Session' : 'Public Session'}</p>
                </div>
-               <div className="flex items-center bg-zinc-50 px-3 py-1.5 rounded-full border gap-2 cursor-pointer hover:bg-zinc-100 transition-colors" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/room/${meetingId}`); toast({ title: "Invite link copied!" }); }}>
-                 <span className="text-[11px] font-mono text-zinc-500">{meetingId}</span>
-                 <Share2 className="h-3 w-3 text-zinc-400" />
+               <div className="flex items-center bg-zinc-50 px-4 py-2 rounded-2xl border border-zinc-100 gap-3 cursor-pointer hover:bg-zinc-100 transition-all hover:scale-105 active:scale-95 group" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/room/${meetingId}`); toast({ title: "Invite link copied!" }); }}>
+                 <span className="text-[11px] font-mono font-black text-zinc-400 group-hover:text-zinc-600">{meetingId}</span>
+                 <Share2 className="h-3.5 w-3.5 text-zinc-300 group-hover:text-primary transition-colors" />
                </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 bg-zinc-50 border rounded-full px-4 py-2 text-xs font-bold text-zinc-600 shadow-sm"><Timer className="h-3.5 w-3.5" /> {elapsedTime}</div>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3 bg-zinc-50 border border-zinc-100 rounded-[1.25rem] px-5 py-3 text-xs font-black text-zinc-600 shadow-sm"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
             {isHost ? (
-              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-full h-11 px-8 font-black uppercase text-xs tracking-wider shadow-lg bg-[#FF4545] hover:bg-red-600">
+              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest shadow-[0_15px_30px_-10px_rgba(255,69,69,0.4)] bg-[#FF4545] hover:bg-red-600 transition-all hover:scale-[1.02] active:scale-95 border-none">
                 {isProcessingAttendance ? 'Syncing...' : 'End Session'}
               </Button>
             ) : (
-              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-full h-11 px-8 font-black uppercase text-xs tracking-wider">Leave</Button>
+              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest border-zinc-200 hover:bg-zinc-50 transition-all active:scale-95">Leave</Button>
             )}
           </div>
         </header>
 
-        <main className="flex-1 flex overflow-hidden p-6 gap-6 relative">
-          <div className="flex-1 flex flex-col gap-6 overflow-hidden">
-            <div className="flex-1 bg-zinc-900 rounded-[2.5rem] relative overflow-hidden shadow-2xl border border-white/5">
+        <main className="flex-1 flex overflow-hidden p-8 gap-8 relative">
+          <div className="flex-1 flex flex-col gap-8 overflow-hidden">
+            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)] border border-white/5 group/main">
                <div className="w-full h-full">
                  {meetingData?.screenSharerId ? (
                    <div className="w-full h-full relative">
@@ -776,15 +764,15 @@ export default function RoomPage() {
                         isFeatured={true}
                       />
                       {!isVideoOff && meetingData.screenSharerId === user?.uid && (
-                        <div className="absolute bottom-8 right-8 w-56 aspect-video rounded-3xl overflow-hidden border-2 border-white/20 shadow-2xl z-20">
+                        <div className="absolute bottom-10 right-10 w-64 aspect-video rounded-[2rem] overflow-hidden border-4 border-white/10 shadow-2xl z-20 group-hover:scale-110 transition-transform duration-500">
                           <RemoteStream stream={localStreamRef.current} name="Me" isMe={true} isVideoOff={isVideoOff} />
                         </div>
                       )}
                    </div>
                  ) : (
-                   <div className="h-full w-full flex items-center justify-center p-6">
+                   <div className="h-full w-full flex items-center justify-center p-8">
                       {featuredParticipant ? (
-                        <div className="w-full h-full max-w-[1200px] mx-auto">
+                        <div className="w-full h-full max-w-[1400px] mx-auto transition-all duration-700">
                           <RemoteStream 
                             stream={featuredParticipant.id === user?.uid ? localStreamRef.current : remoteStreams.get(featuredParticipant.id) || null} 
                             name={featuredParticipant.name} 
@@ -795,50 +783,50 @@ export default function RoomPage() {
                           />
                         </div>
                       ) : (
-                        <div className="text-zinc-500 font-bold uppercase tracking-[0.5em] animate-pulse">Initializing...</div>
+                        <div className="text-zinc-700 font-black uppercase tracking-[1em] animate-pulse text-[10px]">Initializing Mesh Network...</div>
                       )}
                    </div>
                  )}
                </div>
               {hasMediaPermission === false && (
-                <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/95 z-30 px-6">
+                <div className="absolute inset-0 flex items-center justify-center bg-[#121212]/98 z-30 px-10">
                   <div className="max-w-md w-full text-center">
-                    <div className="bg-destructive/10 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8">
-                      {permissionErrorName === 'NotAllowedError' ? <Lock className="h-12 w-12 text-destructive" /> : <AlertCircle className="h-12 w-12 text-destructive" />}
+                    <div className="bg-[#FF4545]/10 w-32 h-32 rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 shadow-inner border border-white/5">
+                      {permissionErrorName === 'NotAllowedError' ? <Lock className="h-14 w-14 text-[#FF4545]" /> : <AlertCircle className="h-14 w-14 text-[#FF4545]" />}
                     </div>
-                    <h2 className="text-white text-2xl font-black mb-3">{permissionErrorName === 'NotAllowedError' ? 'Permission Denied' : 'Hardware Access Required'}</h2>
-                    <p className="text-zinc-500 text-sm mb-10 leading-relaxed font-medium">Please ensure you have granted camera and microphone access in your browser settings to join the session.</p>
-                    <Button variant="secondary" className="w-full h-14 rounded-2xl font-black shadow-lg uppercase tracking-wider" onClick={() => window.location.reload()}><RefreshCcw className="mr-3 h-5 w-5" /> Retry Connection</Button>
+                    <h2 className="text-white text-3xl font-black mb-4 tracking-tight">{permissionErrorName === 'NotAllowedError' ? 'Permission Denied' : 'Hardware Access Required'}</h2>
+                    <p className="text-zinc-500 text-sm mb-12 leading-relaxed font-bold">Please ensure you have granted camera and microphone access in your browser settings to join the session.</p>
+                    <Button variant="secondary" className="w-full h-16 rounded-[1.5rem] font-black shadow-2xl uppercase tracking-widest text-[11px] bg-white text-zinc-900 hover:bg-zinc-100 transition-all active:scale-95" onClick={() => window.location.reload()}><RefreshCcw className="mr-4 h-5 w-5" /> Retry Connection</Button>
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="h-24 mx-auto w-fit bg-white rounded-full border shadow-2xl flex items-center px-10 gap-4 shrink-0 -mt-12 z-20 transition-transform hover:scale-[1.02]">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", isAudioMuted ? "bg-[#FF4545] hover:bg-red-600" : "bg-zinc-100 hover:bg-zinc-200")}>{isAudioMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6 text-zinc-700" />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", isVideoOff ? "bg-[#FF4545] hover:bg-red-600" : "bg-zinc-100 hover:bg-zinc-200")}>{isVideoOff ? <VideoOff className="h-6 w-6" /> : <VideoIcon className="h-6 w-6 text-zinc-700" />}</Button>
-               <Separator orientation="vertical" className="h-10 mx-4 bg-zinc-100" />
-               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={isScreenSharing ? stopScreenSharing : startScreenSharing} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", isScreenSharing ? "bg-blue-600 hover:bg-blue-700" : "bg-zinc-50 hover:bg-zinc-100")}>{isScreenSharing ? <ScreenShareOff className="h-6 w-6" /> : <ScreenShare className="h-6 w-6 text-zinc-500" />}</Button>
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { const ns = !hasHandRaised; setHasHandRaised(ns); updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { hasRaisedHand: ns }); }} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", hasHandRaised ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500 shadow-yellow-200" : "bg-zinc-50 hover:bg-zinc-100")}><Hand className="h-6 w-6" /></Button>
+            <div className="h-28 mx-auto w-fit bg-white rounded-[3rem] border border-zinc-100 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.15)] flex items-center px-12 gap-6 shrink-0 -mt-14 z-20 transition-all hover:scale-[1.02] hover:shadow-[0_40px_80px_-20px_rgba(0,0,0,0.2)]">
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", isAudioMuted ? "bg-[#FF4545] hover:bg-red-600 shadow-red-200" : "bg-zinc-100 hover:bg-zinc-200")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", isVideoOff ? "bg-[#FF4545] hover:bg-red-600 shadow-red-200" : "bg-zinc-100 hover:bg-zinc-200")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
+               <Separator orientation="vertical" className="h-12 mx-4 bg-zinc-100" />
+               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={isScreenSharing ? stopScreenSharing : startScreenSharing} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", isScreenSharing ? "bg-primary text-white" : "bg-zinc-50 hover:bg-zinc-100")}><ScreenShare className="h-7 w-7 text-zinc-500" /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { const ns = !hasHandRaised; setHasHandRaised(ns); updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { hasRaisedHand: ns }); }} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all active:scale-90 border-none", hasHandRaised ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500 shadow-yellow-200" : "bg-zinc-50 hover:bg-zinc-100")}><Hand className="h-7 w-7" /></Button>
                <Popover open={isReactionOpen} onOpenChange={setIsReactionOpen}>
-                  <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-14 w-14 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100"><Smile className="h-6 w-6 text-zinc-500" /></Button></PopoverTrigger>
-                  <PopoverContent className="w-auto p-4 grid grid-cols-4 gap-4 rounded-[2rem] shadow-2xl border-none bg-white">
+                  <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100 active:scale-90 border-none"><Smile className="h-7 w-7 text-zinc-500" /></Button></PopoverTrigger>
+                  <PopoverContent className="w-auto p-6 grid grid-cols-4 gap-6 rounded-[3rem] shadow-[0_50px_100px_-20px_rgba(0,0,0,0.3)] border-none bg-white mb-6">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
-                       <Button key={emoji} variant="ghost" className="h-14 w-14 p-0 text-3xl hover:bg-zinc-50 transition-transform active:scale-90" onClick={() => handleReact(emoji)}>{emoji}</Button>
+                       <Button key={emoji} variant="ghost" className="h-16 w-16 p-0 text-4xl hover:bg-zinc-50 transition-all hover:scale-125 active:scale-90 rounded-2xl" onClick={() => handleReact(emoji)}>{emoji}</Button>
                      ))}
                   </PopoverContent>
                </Popover>
-               <Separator orientation="vertical" className="h-10 mx-4 bg-zinc-100" />
+               <Separator orientation="vertical" className="h-12 mx-4 bg-zinc-100" />
                <Dialog>
-                 <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-14 w-14 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100"><BarChart3 className="h-6 w-6 text-zinc-500" /></Button></DialogTrigger>
-                 <DialogContent className="max-w-4xl rounded-[2.5rem] p-0 overflow-hidden border-none shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)]">
-                    <DialogHeader className="p-10 bg-zinc-50 border-b">
-                      <DialogTitle className="text-3xl font-black">Session Participation</DialogTitle>
-                      <DialogDescription className="font-bold text-zinc-400 uppercase tracking-widest text-[11px]">Real-time engagement tracking for {meetingData?.name}</DialogDescription>
+                 <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100 active:scale-90 border-none"><BarChart3 className="h-7 w-7 text-zinc-500" /></Button></DialogTrigger>
+                 <DialogContent className="max-w-5xl rounded-[3.5rem] p-0 overflow-hidden border-none shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)]">
+                    <DialogHeader className="p-12 bg-zinc-50/50 border-b">
+                      <DialogTitle className="text-4xl font-black tracking-tighter">Session Engagement</DialogTitle>
+                      <DialogDescription className="font-black text-zinc-400 uppercase tracking-[0.2em] text-[10px] mt-2">Real-time attendance tracking for {meetingData?.name}</DialogDescription>
                     </DialogHeader>
-                    <div className="p-10">
+                    <div className="p-12 overflow-auto max-h-[60vh]">
                        <Table>
-                          <TableHeader><TableRow className="border-none hover:bg-transparent"><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400">Student</TableHead><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400">Status</TableHead><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400">Join Time</TableHead><TableHead className="text-right font-black text-[11px] uppercase tracking-widest text-zinc-400">Active Time</TableHead><TableHead className="text-right font-black text-[11px] uppercase tracking-widest text-zinc-400">Credit</TableHead></TableRow></TableHeader>
+                          <TableHeader><TableRow className="border-none hover:bg-transparent"><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400 pb-6">Student</TableHead><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400 pb-6">Status</TableHead><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400 pb-6">Join Time</TableHead><TableHead className="text-right font-black text-[11px] uppercase tracking-widest text-zinc-400 pb-6">Active Time</TableHead><TableHead className="text-right font-black text-[11px] uppercase tracking-widest text-zinc-400 pb-6">Credit</TableHead></TableRow></TableHeader>
                           <TableBody>
                              {activeParticipants.map(p => {
                                const lastStart = p.activeSegmentStart?.seconds || currentTime;
@@ -847,12 +835,12 @@ export default function RoomPage() {
                                const ratio = meetingElapsed > 0 ? dur / meetingElapsed : 0;
                                const isQualified = p.role === 'host' || ratio >= 0.7;
                                return (
-                                 <TableRow key={p.id} className="border-b border-zinc-50 hover:bg-zinc-50/50">
-                                    <TableCell className="font-bold text-zinc-900">{p.name} {p.id === user?.uid && <span className="text-primary/60 font-medium ml-1">(You)</span>}</TableCell>
-                                    <TableCell><Badge variant="outline" className="capitalize font-black border-zinc-200 text-[10px] tracking-wide">{p.role}</Badge></TableCell>
-                                    <TableCell className="text-muted-foreground font-bold text-[11px]">{p.joinedAt ? format(new Date(p.joinedAt.seconds * 1000), 'p') : '--'}</TableCell>
-                                    <TableCell className="text-right font-mono font-black text-zinc-700 text-[11px]">{formatDuration(dur)}</TableCell>
-                                    <TableCell className="text-right"><Badge className={cn("font-black text-[9px] uppercase tracking-widest px-3 py-1", isQualified ? "bg-green-100 text-green-700 border-none" : "bg-zinc-100 text-zinc-400 border-none")}>{isQualified ? 'Qualified' : 'Pending'}</Badge></TableCell>
+                                 <TableRow key={p.id} className="border-b border-zinc-50 hover:bg-zinc-50/50 transition-colors">
+                                    <TableCell className="py-6"><div className="font-black text-zinc-900 flex items-center gap-2">{p.name} {p.id === user?.uid && <Badge variant="secondary" className="bg-primary/5 text-primary text-[8px] font-black uppercase border-none px-2">Me</Badge>}</div></TableCell>
+                                    <TableCell className="py-6"><Badge variant="outline" className="capitalize font-black border-zinc-200 text-[10px] tracking-widest px-3 py-1 bg-white">{p.role}</Badge></TableCell>
+                                    <TableCell className="py-6 text-zinc-400 font-black text-[10px] tracking-widest">{p.joinedAt ? format(new Date(p.joinedAt.seconds * 1000), 'p') : '--'}</TableCell>
+                                    <TableCell className="py-6 text-right font-mono font-black text-zinc-800 text-[11px]">{formatDuration(dur)}</TableCell>
+                                    <TableCell className="py-6 text-right"><Badge className={cn("font-black text-[9px] uppercase tracking-widest px-4 py-1.5 rounded-lg border-none", isQualified ? "bg-green-100 text-green-700" : "bg-zinc-100 text-zinc-400 shadow-inner")}>{isQualified ? 'Qualified' : 'In Progress'}</Badge></TableCell>
                                  </TableRow>
                                );
                              })}
@@ -864,74 +852,77 @@ export default function RoomPage() {
             </div>
           </div>
 
-          <Card className="w-96 flex flex-col overflow-hidden border shadow-2xl shrink-0 rounded-[2.5rem] bg-white">
+          <Card className="w-[420px] flex flex-col overflow-hidden border-zinc-100 shadow-[0_50px_100px_-20px_rgba(0,0,0,0.1)] shrink-0 rounded-[3.5rem] bg-white border-none">
              <Tabs defaultValue="participants" className="flex-1 flex flex-col overflow-hidden">
-                <div className="px-6 pt-6 pb-2 border-b bg-zinc-50/30">
-                   <TabsList className="w-full h-14 grid grid-cols-2 rounded-2xl bg-zinc-100 p-1.5 shadow-inner">
-                      <TabsTrigger value="participants" className="rounded-xl flex items-center gap-2 font-black text-[11px] uppercase tracking-widest transition-all data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-lg"><Users className="h-4 w-4" /> Students</TabsTrigger>
-                      <TabsTrigger value="chat" className="rounded-xl flex items-center gap-2 font-black text-[11px] uppercase tracking-widest transition-all data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-lg"><MessageSquare className="h-4 w-4" /> Chat</TabsTrigger>
+                <div className="px-8 pt-10 pb-4 border-b bg-zinc-50/20">
+                   <TabsList className="w-full h-16 grid grid-cols-2 rounded-[1.5rem] bg-zinc-100/80 p-1.5 shadow-inner">
+                      <TabsTrigger value="participants" className="rounded-2xl flex items-center gap-3 font-black text-[11px] uppercase tracking-widest transition-all data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-xl"><Users className="h-4 w-4" /> Students</TabsTrigger>
+                      <TabsTrigger value="chat" className="rounded-2xl flex items-center gap-3 font-black text-[11px] uppercase tracking-widest transition-all data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-xl"><MessageSquare className="h-4 w-4" /> Chat</TabsTrigger>
                    </TabsList>
                 </div>
 
                 <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-6">
-                      <div className="space-y-8">
+                   <ScrollArea className="flex-1 p-8">
+                      <div className="space-y-10">
                         {waitingParticipants.length > 0 && hasAdminPrivileges && (
-                          <div className="space-y-4">
-                             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 px-2 flex items-center gap-3">
-                               <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse shadow-sm shadow-yellow-200" /> Waiting Room
+                          <div className="space-y-6">
+                             <div className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-400 px-3 flex items-center gap-4">
+                               <div className="w-2.5 h-2.5 bg-yellow-400 rounded-full animate-pulse shadow-[0_0_10px_rgba(250,204,21,0.5)]" /> Waiting Room
                              </div>
                              {waitingParticipants.map(p => (
-                               <div key={p.id} className="bg-zinc-50 p-4 rounded-3xl border border-zinc-100 space-y-4 shadow-sm">
-                                  <div className="flex items-center gap-3">
-                                    <Avatar className="h-10 w-10 border-2 border-white shadow-md"><AvatarFallback className="text-xs font-black bg-zinc-100">{p.name[0]}</AvatarFallback></Avatar>
-                                    <span className="text-xs font-black truncate text-zinc-700">{p.name}</span>
+                               <div key={p.id} className="bg-zinc-50/80 p-6 rounded-[2rem] border border-zinc-100 space-y-6 shadow-sm group hover:shadow-md transition-all">
+                                  <div className="flex items-center gap-4">
+                                    <Avatar className="h-14 w-14 border-4 border-white shadow-xl"><AvatarFallback className="text-sm font-black bg-zinc-100 text-zinc-900">{p.name[0]}</AvatarFallback></Avatar>
+                                    <span className="text-sm font-black truncate text-zinc-900 tracking-tight">{p.name}</span>
                                   </div>
-                                  <div className="flex gap-3">
-                                    <Button size="sm" onClick={() => admitParticipant(p.id)} className="flex-1 h-10 text-[10px] font-black uppercase tracking-widest rounded-xl shadow-md">Admit</Button>
-                                    <Button size="sm" variant="ghost" onClick={() => removeParticipant(p.id)} className="flex-1 h-10 text-[10px] font-black uppercase tracking-widest text-zinc-400 hover:text-red-500 rounded-xl">Decline</Button>
+                                  <div className="flex gap-4">
+                                    <Button size="sm" onClick={() => admitParticipant(p.id)} className="flex-1 h-12 text-[10px] font-black uppercase tracking-widest rounded-2xl shadow-lg hover:scale-105 active:scale-95 transition-all">Admit</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => removeParticipant(p.id)} className="flex-1 h-12 text-[10px] font-black uppercase tracking-widest text-zinc-400 hover:text-[#FF4545] hover:bg-red-50 rounded-2xl transition-all">Decline</Button>
                                   </div>
                                </div>
                              ))}
-                             <Separator className="my-6 opacity-50" />
+                             <Separator className="my-8 opacity-40" />
                           </div>
                         )}
 
-                        <div className="space-y-5">
+                        <div className="space-y-6">
+                          <div className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-400 px-3 flex items-center gap-4">
+                            <div className="w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_10px_rgba(34,197,94,0.5)]" /> Active Sessions
+                          </div>
                           {participants?.filter(p => p.role !== 'waiting' && p.role !== 'left').map(p => {
                             const isMe = p.id === user?.uid;
                             return (
-                              <div key={p.id} className="group flex items-center gap-4 p-3 rounded-3xl hover:bg-zinc-50 transition-all border border-transparent hover:border-zinc-100">
+                              <div key={p.id} className="group flex items-center gap-5 p-4 rounded-[2rem] hover:bg-zinc-50 transition-all border border-transparent hover:border-zinc-100">
                                  <div className="relative">
-                                   <Avatar className="h-12 w-12 border-2 border-white shadow-md">
-                                      <AvatarFallback className="bg-zinc-100 text-zinc-800 font-black text-xs">{p.name[0]}</AvatarFallback>
+                                   <Avatar className="h-16 w-16 border-4 border-white shadow-xl group-hover:scale-110 transition-transform duration-500">
+                                      <AvatarFallback className="bg-zinc-100 text-zinc-900 font-black text-sm">{p.name[0]}</AvatarFallback>
                                    </Avatar>
-                                   {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-2 border-2 border-white shadow-xl animate-bounce z-10"><Hand className="h-2.5 w-2.5 text-yellow-900" /></div>}
+                                   {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-2.5 border-4 border-white shadow-2xl animate-bounce z-10"><Hand className="h-3 w-3 text-yellow-900" /></div>}
                                  </div>
                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                       <div className="text-[13px] font-black truncate text-zinc-900">{p.name}</div>
-                                       {p.role === 'host' && <Shield className="h-3.5 w-3.5 text-blue-500" />}
-                                       {p.role === 'co-host' && <Star className="h-3.5 w-3.5 text-yellow-500" />}
+                                    <div className="flex items-center gap-3">
+                                       <div className="text-sm font-black truncate text-zinc-900 tracking-tight">{p.name}</div>
+                                       {p.role === 'host' && <Shield className="h-4 w-4 text-primary opacity-60" />}
+                                       {p.role === 'co-host' && <Star className="h-4 w-4 text-yellow-500" />}
                                     </div>
-                                    <div className="flex items-center gap-3 mt-1.5">
-                                       {p.isMuted ? <MicOff className="h-3.5 w-3.5 text-[#FF4545]" /> : <Mic className="h-3.5 w-3.5 text-green-500" />}
-                                       {p.isVideoOff ? <VideoOff className="h-3.5 w-3.5 text-zinc-200" /> : <VideoIcon className="h-3.5 w-3.5 text-primary/40" />}
+                                    <div className="flex items-center gap-4 mt-2">
+                                       {p.isMuted ? <MicOff className="h-4 w-4 text-[#FF4545]" /> : <Mic className="h-4 w-4 text-green-500" />}
+                                       {p.isVideoOff ? <VideoOff className="h-4 w-4 text-zinc-200" /> : <VideoIcon className="h-4 w-4 text-primary opacity-30" />}
                                        {!isMe && hasAdminPrivileges && (
                                          <Popover>
-                                            <PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"><Shield className="h-3.5 w-3.5 text-zinc-300" /></Button></PopoverTrigger>
-                                            <PopoverContent className="w-56 p-3 rounded-3xl border-none shadow-[0_20px_50px_rgba(0,0,0,0.15)] bg-white" align="end">
-                                               <div className="grid gap-2">
-                                                  <Button variant="ghost" size="sm" onClick={() => p.isMuted ? requestUnmute(p.id) : forceMute(p.id)} className="justify-start h-10 text-[10px] font-black uppercase tracking-wider rounded-xl">
-                                                    {p.isMuted ? <><Mic className="h-4 w-4 mr-3" /> Request Unmute</> : <><MicOff className="h-4 w-4 mr-3 text-[#FF4545]" /> Force Mute</>}
+                                            <PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-all hover:bg-zinc-100 rounded-lg ml-auto"><Shield className="h-4 w-4 text-zinc-300" /></Button></PopoverTrigger>
+                                            <PopoverContent className="w-64 p-4 rounded-[2rem] border-none shadow-[0_30px_60px_-15px_rgba(0,0,0,0.2)] bg-white mb-2" align="end">
+                                               <div className="grid gap-3">
+                                                  <Button variant="ghost" size="sm" onClick={() => p.isMuted ? requestUnmute(p.id) : forceMute(p.id)} className="justify-start h-12 text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-zinc-50">
+                                                    {p.isMuted ? <><Mic className="h-4 w-4 mr-4 text-primary" /> Request Unmute</> : <><MicOff className="h-4 w-4 mr-4 text-[#FF4545]" /> Force Mute</>}
                                                   </Button>
                                                   {isHost && p.role === 'participant' && (
-                                                    <Button variant="ghost" size="sm" onClick={() => promoteToCoHost(p.id)} className="justify-start h-10 text-[10px] font-black uppercase tracking-wider rounded-xl">
-                                                       <Star className="h-4 w-4 mr-3 text-yellow-500" /> Make Co-host
+                                                    <Button variant="ghost" size="sm" onClick={() => promoteToCoHost(p.id)} className="justify-start h-12 text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-zinc-50">
+                                                       <Star className="h-4 w-4 mr-4 text-yellow-500" /> Make Co-host
                                                     </Button>
                                                   )}
-                                                  <Button variant="ghost" size="sm" onClick={() => removeParticipant(p.id)} className="justify-start h-10 text-[10px] font-black uppercase tracking-wider text-[#FF4545] hover:text-red-600 hover:bg-red-50 rounded-xl">
-                                                     <UserMinus className="h-4 w-4 mr-3" /> Kick Out
+                                                  <Button variant="ghost" size="sm" onClick={() => removeParticipant(p.id)} className="justify-start h-12 text-[10px] font-black uppercase tracking-widest text-[#FF4545] hover:text-red-700 hover:bg-red-50 rounded-2xl">
+                                                     <UserMinus className="h-4 w-4 mr-4" /> Kick Student
                                                   </Button>
                                                </div>
                                             </PopoverContent>
@@ -945,15 +936,15 @@ export default function RoomPage() {
                         </div>
                       </div>
                    </ScrollArea>
-                   <div className="p-8 bg-zinc-50/50 border-t">
-                      <div className="space-y-5">
-                         <div className="flex justify-between text-[10px] uppercase font-black text-zinc-400 tracking-widest px-1">
+                   <div className="p-10 bg-zinc-50/50 border-t">
+                      <div className="space-y-6">
+                         <div className="flex justify-between text-[10px] uppercase font-black text-zinc-400 tracking-[0.2em] px-2">
                             <div>Series Progress</div>
                             <div className="text-primary">{myCumulativeStats?.attendedHours || 0}h / {((meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0))}h</div>
                          </div>
-                         <div className="h-3 w-full bg-zinc-100 rounded-full overflow-hidden shadow-inner border border-zinc-200/50">
+                         <div className="h-4 w-full bg-zinc-100 rounded-full overflow-hidden shadow-inner border border-zinc-200/40">
                             <div 
-                              className="h-full bg-zinc-900 transition-all duration-1000 shadow-sm" 
+                              className="h-full bg-zinc-900 transition-all duration-1000 shadow-[0_0_15px_rgba(0,0,0,0.2)]" 
                               style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / Math.max(1, (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
                             />
                          </div>
@@ -962,20 +953,20 @@ export default function RoomPage() {
                 </TabsContent>
 
                 <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-8">
-                      <div className="space-y-8">
+                   <ScrollArea className="flex-1 p-10">
+                      <div className="space-y-10">
                          {chatMessages?.map((msg) => (
-                           <div key={msg.id} className={cn("flex flex-col gap-2", msg.senderId === user?.uid ? "items-end" : "items-start")}>
-                              <div className="text-[10px] font-black text-zinc-400 px-2 uppercase tracking-[0.1em]">{msg.senderName}</div>
-                              <div className={cn("max-w-[85%] px-5 py-4 rounded-[1.5rem] text-[13px] font-bold leading-relaxed shadow-sm", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 border rounded-tl-none")}>{msg.text}</div>
+                           <div key={msg.id} className={cn("flex flex-col gap-3", msg.senderId === user?.uid ? "items-end" : "items-start")}>
+                              <div className="text-[10px] font-black text-zinc-400 px-3 uppercase tracking-[0.2em]">{msg.senderName}</div>
+                              <div className={cn("max-w-[90%] px-6 py-5 rounded-[2rem] text-[13px] font-bold leading-relaxed shadow-sm", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none shadow-zinc-200" : "bg-zinc-50 text-zinc-800 border border-zinc-100 rounded-tl-none")}>{msg.text}</div>
                            </div>
                          ))}
                       </div>
                    </ScrollArea>
-                   <div className="p-6 border-t bg-white">
+                   <div className="p-8 border-t bg-white">
                       <div className="relative flex items-center">
-                        <Input placeholder="Type a message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="pr-14 rounded-full h-14 bg-zinc-50 border-zinc-100 focus-visible:ring-zinc-900 pl-6 font-bold text-sm" />
-                        <Button size="icon" variant="ghost" onClick={handleSendMessage} className="absolute right-2 top-1/2 -translate-y-1/2 h-10 w-10 text-zinc-900 hover:bg-transparent"><Send className="h-5 w-5" /></Button>
+                        <Input placeholder="Share something with the class..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="pr-16 rounded-[2rem] h-16 bg-zinc-50 border-zinc-100 focus-visible:ring-zinc-900 pl-8 font-bold text-sm shadow-inner" />
+                        <Button size="icon" variant="ghost" onClick={handleSendMessage} className="absolute right-3 top-1/2 -translate-y-1/2 h-12 w-12 text-zinc-900 hover:bg-transparent transition-transform active:scale-90"><Send className="h-6 w-6" /></Button>
                       </div>
                    </div>
                 </TabsContent>
@@ -986,3 +977,4 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
+
