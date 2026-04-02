@@ -387,29 +387,39 @@ export default function RoomPage() {
       };
 
       if (user.uid < participant.id) {
-        const offer = await pc.createOffer();
-        if (pc.signalingState === 'closed') return;
-        await pc.setLocalDescription(offer);
-        await setDoc(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
-
-        const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
+        try {
+          const offer = await pc.createOffer();
           if (pc.signalingState === 'closed') return;
-          const data = snapshot.data();
-          if (data?.answer && pc.signalingState !== 'stable') {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          }
-        });
-        signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
+          await pc.setLocalDescription(offer);
+          await setDoc(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
+
+          const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
+            if (pc.signalingState === 'closed') return;
+            const data = snapshot.data();
+            if (data?.answer && pc.signalingState === 'have-local-offer') {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            }
+          });
+          signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
+        } catch (err) {
+          console.warn("Failed to create offer", err);
+        }
       } else {
         const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
           if (pc.signalingState === 'closed') return;
           const data = snapshot.data();
-          if (data?.offer && pc.signalingState !== 'have-remote-offer') {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-            const answer = await pc.createAnswer();
-            if (pc.signalingState === 'closed') return;
-            await pc.setLocalDescription(answer);
-            await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
+          if (data?.offer && pc.signalingState === 'stable') {
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+              const answer = await pc.createAnswer();
+              if (pc.signalingState === 'closed') return;
+              if (pc.signalingState === 'have-remote-offer') {
+                await pc.setLocalDescription(answer);
+                await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
+              }
+            } catch (err) {
+              console.warn("Signaling handling error", err);
+            }
           }
         });
         signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
@@ -420,7 +430,7 @@ export default function RoomPage() {
         snapshot.docChanges().forEach(async (change) => {
           if (change.type === 'added') {
             const data = change.doc.data();
-            if (data.from !== user.uid && pc.signalingState !== 'closed') {
+            if (data.from !== user.uid && pc.signalingState !== 'closed' && pc.remoteDescription) {
               try {
                 await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
               } catch (e) {
