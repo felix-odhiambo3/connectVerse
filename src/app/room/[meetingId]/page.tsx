@@ -165,15 +165,15 @@ export default function RoomPage() {
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
     // ULTRA FRUGAL: Limit participants to strictly preserve quota
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(10));
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(8));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Limit chat to 10 most recent to strictly preserve quota
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
+    // ULTRA FRUGAL: Limit chat to 5 most recent to strictly preserve quota
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -395,14 +395,14 @@ export default function RoomPage() {
         if (event.candidate && pc.signalingState !== 'closed') {
           iceBuffer.push(event.candidate.toJSON());
           if (iceTimeout) clearTimeout(iceTimeout);
-          // ULTRA FRUGAL: Wait 1.5s to batch all candidates into one write
+          // ULTRA FRUGAL: Wait 2.5s to batch all candidates into one write
           iceTimeout = setTimeout(() => {
             if (iceBuffer.length > 0) {
               updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
                 .catch(() => setDoc(channelRef, { candidates: iceBuffer.map(c => ({ candidate: c, from: user.uid })) }, { merge: true }));
               iceBuffer.length = 0;
             }
-          }, 1500);
+          }, 2500);
         }
       };
 
