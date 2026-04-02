@@ -370,7 +370,7 @@ export default function RoomPage() {
   };
 
   useEffect(() => {
-    if (!user || !firestore || !meetingId || !localStreamRef.current || !activeParticipants.length) return;
+    if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipants.length) return;
 
     activeParticipants.forEach(async (participant) => {
       if (participant.id === user.uid || pcs.current.has(participant.id)) return;
@@ -378,7 +378,16 @@ export default function RoomPage() {
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participant.id, pc);
 
-      localStreamRef.current?.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current!));
+      // Using Transceivers to ensure consistent m-line count (Audio + Video)
+      // This prevents the "Offer and answer have different number of m-lines" error.
+      const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
+
+      // Associate local tracks with transceivers
+      const audioTrack = localStreamRef.current?.getAudioTracks()[0];
+      const videoTrack = localStreamRef.current?.getVideoTracks()[0];
+      if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack);
+      if (videoTrack) videoTransceiver.sender.replaceTrack(videoTrack);
 
       pc.ontrack = (event) => {
         if (pc.signalingState === 'closed') return;
@@ -404,15 +413,17 @@ export default function RoomPage() {
       if (user.uid < participant.id) {
         try {
           const offer = await pc.createOffer();
-          if (pc.signalingState === 'closed') return;
+          if (pc.signalingState !== 'stable') return; // Signaling check
           await pc.setLocalDescription(offer);
           await setDoc(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
 
           const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
-            if (pc.signalingState === 'closed') return;
             const data = snapshot.data();
+            if (pc.signalingState === 'closed') return;
             if (data?.answer && pc.signalingState === 'have-local-offer') {
-              await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+              try {
+                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+              } catch (e) { console.warn("SetRemoteDescription failed", e); }
             }
           });
           signalingUnsubs.current.set(`${participant.id}_channel`, unsubChannel);
@@ -427,7 +438,6 @@ export default function RoomPage() {
             try {
               await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
               const answer = await pc.createAnswer();
-              if (pc.signalingState === 'closed') return;
               if (pc.signalingState === 'have-remote-offer') {
                 await pc.setLocalDescription(answer);
                 await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
@@ -476,7 +486,7 @@ export default function RoomPage() {
         }
       });
     };
-  }, [user?.uid, firestore, meetingId, activeParticipants, localStreamRef.current]);
+  }, [user?.uid, firestore, meetingId, activeParticipants, hasMediaPermission]);
 
   useEffect(() => {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
