@@ -89,10 +89,12 @@ function formatDuration(seconds: number) {
 }
 
 function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: { stream: MediaStream | null, name: string, isMuted?: boolean, isVideoOff?: boolean, isMe?: boolean, isFeatured?: boolean }) {
-  const videoRef = useCallback((node: HTMLVideoElement | null) => {
-    if (node && stream) {
-      node.srcObject = stream;
-      node.play().catch(e => console.warn("Auto-play blocked or failed", e));
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(e => console.warn("Auto-play blocked or failed", e));
     }
   }, [stream]);
 
@@ -103,9 +105,9 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
         autoPlay
         playsInline
         muted={isMe}
-        className={cn("w-full h-full object-cover transition-opacity duration-500", (isVideoOff && !stream?.getVideoTracks()[0]?.enabled) ? "opacity-0" : "opacity-100")}
+        className={cn("w-full h-full object-cover transition-opacity duration-500", (isVideoOff && !isMe) ? "opacity-0" : "opacity-100")}
       />
-      {(isVideoOff && !isFeatured) && (
+      {(isVideoOff && !isMe && !isFeatured) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
            <div className="rounded-full bg-zinc-800 flex items-center justify-center w-16 h-16 shadow-inner border border-white/5">
               <UserIcon className="text-zinc-600 h-8 w-8" />
@@ -113,7 +115,7 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
            <div className="text-zinc-500 mt-4 font-bold tracking-tight uppercase tracking-widest text-[10px]">Camera Off</div>
         </div>
       )}
-      {isVideoOff && isFeatured && (
+      {isVideoOff && !isMe && isFeatured && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10 transition-all">
            <div className="rounded-full bg-zinc-800 flex items-center justify-center w-32 h-32 shadow-inner border border-white/5">
               <UserIcon className="text-zinc-600 h-16 w-16" />
@@ -378,12 +380,9 @@ export default function RoomPage() {
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participant.id, pc);
 
-      // Using Transceivers to ensure consistent m-line count (Audio + Video)
-      // This prevents the "Offer and answer have different number of m-lines" error.
-      const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-      const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
+      const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv', streams: [localStreamRef.current!] });
+      const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv', streams: [localStreamRef.current!] });
 
-      // Associate local tracks with transceivers
       const audioTrack = localStreamRef.current?.getAudioTracks()[0];
       const videoTrack = localStreamRef.current?.getVideoTracks()[0];
       if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack);
@@ -393,7 +392,10 @@ export default function RoomPage() {
         if (pc.signalingState === 'closed') return;
         setRemoteStreams(prev => {
           const next = new Map(prev);
-          next.set(participant.id, event.streams[0]);
+          const existingStream = next.get(participant.id) || new MediaStream();
+          existingStream.addTrack(event.track);
+          // Return a new MediaStream instance to trigger re-renders in RemoteStream
+          next.set(participant.id, new MediaStream(existingStream.getTracks()));
           return next;
         });
       };
@@ -413,7 +415,7 @@ export default function RoomPage() {
       if (user.uid < participant.id) {
         try {
           const offer = await pc.createOffer();
-          if (pc.signalingState !== 'stable') return; // Signaling check
+          if (pc.signalingState !== 'stable') return;
           await pc.setLocalDescription(offer);
           await setDoc(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
 
@@ -578,7 +580,6 @@ export default function RoomPage() {
     }
     setIsScreenSharing(false);
     
-    // Put back camera track in connections if it exists
     const cameraTrack = localStreamRef.current?.getVideoTracks().find(t => t.readyState === 'live');
     pcs.current.forEach(pc => {
       if (pc.signalingState === 'closed') return;
@@ -595,7 +596,6 @@ export default function RoomPage() {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       const screenTrack = stream.getVideoTracks()[0];
       
-      // Replace tracks in all peer connections
       pcs.current.forEach(pc => {
         if (pc.signalingState === 'closed') return;
         const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
@@ -665,7 +665,7 @@ export default function RoomPage() {
     );
   }
 
-  if (showSummary || meetingData?.status === 'finished') {
+  if (showSummary || (meetingData?.status === 'finished' && user)) {
     const totalExpectedHours = (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0);
     const attendedHours = myCumulativeStats?.attendedHours || 0;
     const isPresentOverall = isHost || (attendedHours / (totalExpectedHours || 1)) >= 0.7;
