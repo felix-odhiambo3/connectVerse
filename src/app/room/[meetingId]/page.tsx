@@ -110,7 +110,7 @@ function RemoteStream({ stream, name, isMuted, isVideoOff, isMe, isFeatured }: {
            <div className={cn("rounded-full bg-zinc-800 flex items-center justify-center transition-all shadow-inner border border-white/5", isFeatured ? "w-32 h-32" : "w-16 h-16")}>
               <UserIcon className={cn("text-zinc-600 transition-all", isFeatured ? "h-16 w-16" : "h-8 w-8")} />
            </div>
-           <div className={cn("text-zinc-500 mt-4 font-bold tracking-tight", isFeatured ? "text-sm uppercase tracking-widest" : "text-xs")}>Camera Off</div>
+           <div className={cn("text-zinc-500 mt-4 font-bold tracking-tight uppercase tracking-widest", isFeatured ? "text-sm" : "text-[10px]")}>Camera Off</div>
         </div>
       )}
       <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
@@ -333,7 +333,7 @@ export default function RoomPage() {
         setIsVideoOff(false);
         updateDoc(pRef, { isVideoOff: false });
       } catch (err) {
-        toast({ variant: 'destructive', title: 'Camera Error', description: 'Could not access camera hardware.' });
+        toast({ variant: 'destructive', title: 'Camera Error!', description: 'Could not access camera hardware.' });
       }
     } else {
       localStreamRef.current.getVideoTracks().forEach(track => {
@@ -660,7 +660,7 @@ export default function RoomPage() {
 
   return (
     <AuthGuard>
-      <div className="flex h-screen w-full flex-col overflow-hidden bg-background">
+      <div className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
         <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
           {floatingReaction && (
             <div key={floatingReaction.id} className="absolute bottom-0 animate-float-up flex flex-col items-center gap-1" style={{ left: `${floatingReaction.left}%` }}>
@@ -670,52 +670,49 @@ export default function RoomPage() {
           )}
         </div>
 
-        <header className="flex h-16 items-center justify-between border-b px-6 shrink-0 bg-card z-10">
-          <div className="flex items-center gap-4">
-            <div className="bg-primary p-2 rounded-lg"><VideoIcon className="h-5 w-5 text-primary-foreground" /></div>
-            <div>
-              <h1 className="text-sm font-bold truncate max-w-[200px]">{meetingData?.name || 'Loading session...'}</h1>
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className="text-[10px] py-0 font-mono">{meetingId}</Badge>
-                {hasAdminPrivileges && (
-                  <Button variant="ghost" size="sm" onClick={toggleLock} className="h-5 px-1.5 text-[10px] font-bold">
-                    {meetingData?.isLocked ? <><Lock className="h-2.5 w-2.5 mr-1" /> Locked</> : <><Unlock className="h-2.5 w-2.5 mr-1" /> Open</>}
-                  </Button>
-                )}
-              </div>
+        <header className="flex h-16 items-center justify-between px-8 bg-white border-b z-10">
+          <div className="flex items-center gap-6">
+            <div className="bg-zinc-900 flex items-center justify-center h-10 w-10 rounded-xl text-white font-black text-lg">CV</div>
+            <div className="flex items-center gap-4">
+               <div className="flex flex-col">
+                  <h1 className="text-sm font-bold truncate max-w-[200px] leading-tight">{meetingData?.name || 'Loading session...'}</h1>
+                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">{meetingData?.isLocked ? 'Restricted Session' : 'Public Session'}</p>
+               </div>
+               <div className="flex items-center bg-zinc-50 px-3 py-1.5 rounded-full border gap-2 cursor-pointer hover:bg-zinc-100 transition-colors" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/room/${meetingId}`); toast({ title: "Invite link copied!" }); }}>
+                 <span className="text-[11px] font-mono text-zinc-500">{meetingId}</span>
+                 <Share2 className="h-3 w-3 text-zinc-400" />
+               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex bg-muted/50 px-3 py-1.5 rounded-full border text-xs font-mono items-center gap-2 shadow-inner"><Timer className="h-3.5 w-3.5 text-primary" /> {elapsedTime}</div>
-            <Separator orientation="vertical" className="h-6 mx-1" />
-            <Button variant="ghost" size="icon" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/room/${meetingId}`); toast({ title: "Invite link copied!" }); }} className="rounded-full"><Share2 className="h-4 w-4" /></Button>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-zinc-50 border rounded-full px-4 py-2 text-xs font-bold text-zinc-600 shadow-sm"><Timer className="h-3.5 w-3.5" /> {elapsedTime}</div>
             {isHost ? (
-              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-full h-10 px-6 text-xs font-black uppercase tracking-tight shadow-md">
+              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-full h-11 px-8 font-black uppercase text-xs tracking-wider shadow-lg bg-[#FF4545] hover:bg-red-600">
                 {isProcessingAttendance ? 'Syncing...' : 'End Session'}
               </Button>
             ) : (
-              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-full h-10 px-6 text-xs font-black uppercase tracking-tight">Leave</Button>
+              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-full h-11 px-8 font-black uppercase text-xs tracking-wider">Leave</Button>
             )}
           </div>
         </header>
 
-        <main className="flex-1 flex overflow-hidden p-4 gap-4 relative">
-          <div className="flex-1 flex flex-col gap-4 overflow-hidden">
-            <div className="flex-1 bg-zinc-900 rounded-3xl relative overflow-hidden shadow-2xl border">
+        <main className="flex-1 flex overflow-hidden p-6 gap-6 relative">
+          <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+            <div className="flex-1 bg-zinc-900 rounded-[2.5rem] relative overflow-hidden shadow-2xl border border-white/5">
                <div className="w-full h-full">
                  {isScreenSharing ? (
                    <div className="w-full h-full relative">
                       <RemoteStream stream={screenStreamRef.current} name="Your Screen" isMe={true} />
                       {!isVideoOff && (
-                        <div className="absolute bottom-6 right-6 w-48 aspect-video rounded-2xl overflow-hidden border-2 border-white shadow-2xl z-20">
+                        <div className="absolute bottom-8 right-8 w-56 aspect-video rounded-3xl overflow-hidden border-2 border-white/20 shadow-2xl z-20">
                           <RemoteStream stream={localStreamRef.current} name="Me" isMe={true} isVideoOff={isVideoOff} />
                         </div>
                       )}
                    </div>
                  ) : (
-                   <div className="h-full w-full flex items-center justify-center p-4">
+                   <div className="h-full w-full flex items-center justify-center p-6">
                       {featuredParticipant ? (
-                        <div className="w-full h-full max-w-5xl mx-auto">
+                        <div className="w-full h-full max-w-[1200px] mx-auto">
                           <RemoteStream 
                             stream={featuredParticipant.id === user?.uid ? localStreamRef.current : remoteStreams.get(featuredParticipant.id) || null} 
                             name={featuredParticipant.name} 
@@ -726,7 +723,7 @@ export default function RoomPage() {
                           />
                         </div>
                       ) : (
-                        <div className="text-zinc-500 font-bold uppercase tracking-widest animate-pulse">Waiting for host...</div>
+                        <div className="text-zinc-500 font-bold uppercase tracking-[0.5em] animate-pulse">Initializing...</div>
                       )}
                    </div>
                  )}
@@ -734,42 +731,42 @@ export default function RoomPage() {
               {hasMediaPermission === false && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/95 z-30 px-6">
                   <div className="max-w-md w-full text-center">
-                    <div className="bg-destructive/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                      {permissionErrorName === 'NotAllowedError' ? <Lock className="h-10 w-10 text-destructive" /> : <AlertCircle className="h-10 w-10 text-destructive" />}
+                    <div className="bg-destructive/10 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8">
+                      {permissionErrorName === 'NotAllowedError' ? <Lock className="h-12 w-12 text-destructive" /> : <AlertCircle className="h-12 w-12 text-destructive" />}
                     </div>
-                    <h2 className="text-white text-xl font-bold mb-2">{permissionErrorName === 'NotAllowedError' ? 'Permission Denied' : 'Hardware Access Required'}</h2>
-                    <p className="text-zinc-400 text-sm mb-8 leading-relaxed">Please ensure you have granted camera and microphone access in your browser settings to join the session.</p>
-                    <Button variant="secondary" className="w-full h-14 rounded-2xl font-bold shadow-lg" onClick={() => window.location.reload()}><RefreshCcw className="mr-2 h-5 w-5" /> Retry Connection</Button>
+                    <h2 className="text-white text-2xl font-black mb-3">{permissionErrorName === 'NotAllowedError' ? 'Permission Denied' : 'Hardware Access Required'}</h2>
+                    <p className="text-zinc-500 text-sm mb-10 leading-relaxed font-medium">Please ensure you have granted camera and microphone access in your browser settings to join the session.</p>
+                    <Button variant="secondary" className="w-full h-14 rounded-2xl font-black shadow-lg uppercase tracking-wider" onClick={() => window.location.reload()}><RefreshCcw className="mr-3 h-5 w-5" /> Retry Connection</Button>
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="h-20 bg-card rounded-3xl border shadow-xl flex items-center justify-center px-6 gap-4 shrink-0">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className="rounded-full h-12 w-12 shadow-sm">{isAudioMuted ? <MicOff /> : <Mic />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className="rounded-full h-12 w-12 shadow-sm">{isVideoOff ? <VideoOff /> : <VideoIcon />}</Button>
-               <Separator orientation="vertical" className="h-8 mx-2" />
-               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={isScreenSharing ? stopScreenSharing : startScreenSharing} className={cn("rounded-full h-12 w-12 shadow-sm", isScreenSharing && "bg-blue-600 hover:bg-blue-700")}>{isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}</Button>
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { const ns = !hasHandRaised; setHasHandRaised(ns); updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { hasRaisedHand: ns }); }} className={cn("rounded-full h-12 w-12 shadow-sm", hasHandRaised && "bg-yellow-400 text-yellow-900 hover:bg-yellow-500")}><Hand /></Button>
+            <div className="h-24 mx-auto w-fit bg-white rounded-full border shadow-2xl flex items-center px-10 gap-4 shrink-0 -mt-12 z-20 transition-transform hover:scale-[1.02]">
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", isAudioMuted ? "bg-[#FF4545] hover:bg-red-600" : "bg-zinc-100 hover:bg-zinc-200")}>{isAudioMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6 text-zinc-700" />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", isVideoOff ? "bg-[#FF4545] hover:bg-red-600" : "bg-zinc-100 hover:bg-zinc-200")}>{isVideoOff ? <VideoOff className="h-6 w-6" /> : <VideoIcon className="h-6 w-6 text-zinc-700" />}</Button>
+               <Separator orientation="vertical" className="h-10 mx-4 bg-zinc-100" />
+               <Button variant={isScreenSharing ? "default" : "secondary"} size="icon" onClick={isScreenSharing ? stopScreenSharing : startScreenSharing} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", isScreenSharing ? "bg-blue-600 hover:bg-blue-700" : "bg-zinc-50 hover:bg-zinc-100")}>{isScreenSharing ? <ScreenShareOff className="h-6 w-6" /> : <ScreenShare className="h-6 w-6 text-zinc-500" />}</Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { const ns = !hasHandRaised; setHasHandRaised(ns); updateDoc(doc(firestore!, 'meetings', meetingId, 'participants', user!.uid), { hasRaisedHand: ns }); }} className={cn("rounded-full h-14 w-14 shadow-lg transition-all", hasHandRaised ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500 shadow-yellow-200" : "bg-zinc-50 hover:bg-zinc-100")}><Hand className="h-6 w-6" /></Button>
                <Popover open={isReactionOpen} onOpenChange={setIsReactionOpen}>
-                  <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12 shadow-sm"><Smile /></Button></PopoverTrigger>
-                  <PopoverContent className="w-auto p-3 grid grid-cols-4 gap-3 rounded-2xl shadow-2xl border-none bg-white">
+                  <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-14 w-14 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100"><Smile className="h-6 w-6 text-zinc-500" /></Button></PopoverTrigger>
+                  <PopoverContent className="w-auto p-4 grid grid-cols-4 gap-4 rounded-[2rem] shadow-2xl border-none bg-white">
                      {['👍', '👏', '🔥', '❤️', '😮', '🎉', '💡', '💯'].map(emoji => (
-                       <Button key={emoji} variant="ghost" className="h-12 w-12 p-0 text-2xl hover:bg-zinc-100" onClick={() => handleReact(emoji)}>{emoji}</Button>
+                       <Button key={emoji} variant="ghost" className="h-14 w-14 p-0 text-3xl hover:bg-zinc-50 transition-transform active:scale-90" onClick={() => handleReact(emoji)}>{emoji}</Button>
                      ))}
                   </PopoverContent>
                </Popover>
-               <Separator orientation="vertical" className="h-8 mx-2" />
+               <Separator orientation="vertical" className="h-10 mx-4 bg-zinc-100" />
                <Dialog>
-                 <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-12 w-12 shadow-sm"><BarChart3 /></Button></DialogTrigger>
-                 <DialogContent className="max-w-4xl rounded-3xl p-0 overflow-hidden border-none shadow-2xl">
-                    <DialogHeader className="p-8 bg-zinc-50 border-b">
-                      <DialogTitle className="text-2xl font-black">Session Participation</DialogTitle>
-                      <DialogDescription className="font-medium">Real-time engagement tracking for {meetingData?.name}</DialogDescription>
+                 <DialogTrigger asChild><Button variant="secondary" size="icon" className="rounded-full h-14 w-14 shadow-lg transition-all bg-zinc-50 hover:bg-zinc-100"><BarChart3 className="h-6 w-6 text-zinc-500" /></Button></DialogTrigger>
+                 <DialogContent className="max-w-4xl rounded-[2.5rem] p-0 overflow-hidden border-none shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)]">
+                    <DialogHeader className="p-10 bg-zinc-50 border-b">
+                      <DialogTitle className="text-3xl font-black">Session Participation</DialogTitle>
+                      <DialogDescription className="font-bold text-zinc-400 uppercase tracking-widest text-[11px]">Real-time engagement tracking for {meetingData?.name}</DialogDescription>
                     </DialogHeader>
-                    <div className="p-8">
+                    <div className="p-10">
                        <Table>
-                          <TableHeader><TableRow className="border-none hover:bg-transparent"><TableHead className="font-black text-xs uppercase tracking-widest">Student</TableHead><TableHead className="font-black text-xs uppercase tracking-widest">Status</TableHead><TableHead className="font-black text-xs uppercase tracking-widest">Join Time</TableHead><TableHead className="text-right font-black text-xs uppercase tracking-widest">Active Time</TableHead><TableHead className="text-right font-black text-xs uppercase tracking-widest">Credit</TableHead></TableRow></TableHeader>
+                          <TableHeader><TableRow className="border-none hover:bg-transparent"><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400">Student</TableHead><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400">Status</TableHead><TableHead className="font-black text-[11px] uppercase tracking-widest text-zinc-400">Join Time</TableHead><TableHead className="text-right font-black text-[11px] uppercase tracking-widest text-zinc-400">Active Time</TableHead><TableHead className="text-right font-black text-[11px] uppercase tracking-widest text-zinc-400">Credit</TableHead></TableRow></TableHeader>
                           <TableBody>
                              {activeParticipants.map(p => {
                                const lastStart = p.activeSegmentStart?.seconds || currentTime;
@@ -779,11 +776,11 @@ export default function RoomPage() {
                                const isQualified = p.role === 'host' || ratio >= 0.7;
                                return (
                                  <TableRow key={p.id} className="border-b border-zinc-50 hover:bg-zinc-50/50">
-                                    <TableCell className="font-bold">{p.name} {p.id === user?.uid && <span className="text-primary/60 font-medium ml-1">(You)</span>}</TableCell>
-                                    <TableCell><Badge variant="outline" className="capitalize font-bold border-zinc-200">{p.role}</Badge></TableCell>
-                                    <TableCell className="text-muted-foreground font-medium">{p.joinedAt ? format(new Date(p.joinedAt.seconds * 1000), 'p') : '--'}</TableCell>
-                                    <TableCell className="text-right font-mono font-bold text-zinc-600">{formatDuration(dur)}</TableCell>
-                                    <TableCell className="text-right"><Badge className={cn("font-black", isQualified ? "bg-green-100 text-green-700 border-none" : "bg-zinc-100 text-zinc-400 border-none")}>{isQualified ? 'Qualified' : 'Pending'}</Badge></TableCell>
+                                    <TableCell className="font-bold text-zinc-900">{p.name} {p.id === user?.uid && <span className="text-primary/60 font-medium ml-1">(You)</span>}</TableCell>
+                                    <TableCell><Badge variant="outline" className="capitalize font-black border-zinc-200 text-[10px] tracking-wide">{p.role}</Badge></TableCell>
+                                    <TableCell className="text-muted-foreground font-bold text-[11px]">{p.joinedAt ? format(new Date(p.joinedAt.seconds * 1000), 'p') : '--'}</TableCell>
+                                    <TableCell className="text-right font-mono font-black text-zinc-700 text-[11px]">{formatDuration(dur)}</TableCell>
+                                    <TableCell className="text-right"><Badge className={cn("font-black text-[9px] uppercase tracking-widest px-3 py-1", isQualified ? "bg-green-100 text-green-700 border-none" : "bg-zinc-100 text-zinc-400 border-none")}>{isQualified ? 'Qualified' : 'Pending'}</Badge></TableCell>
                                  </TableRow>
                                );
                              })}
@@ -795,74 +792,74 @@ export default function RoomPage() {
             </div>
           </div>
 
-          <Card className="w-80 flex flex-col overflow-hidden border shadow-xl shrink-0 rounded-3xl bg-card">
+          <Card className="w-96 flex flex-col overflow-hidden border shadow-2xl shrink-0 rounded-[2.5rem] bg-white">
              <Tabs defaultValue="participants" className="flex-1 flex flex-col overflow-hidden">
-                <div className="px-4 pt-4 border-b bg-zinc-50/50">
-                   <TabsList className="w-full h-12 grid grid-cols-2 rounded-2xl bg-zinc-200/50 p-1">
-                      <TabsTrigger value="participants" className="rounded-xl flex items-center gap-2 font-bold transition-all data-[state=active]:bg-white data-[state=active]:shadow-sm"><Users className="h-4 w-4" /> Students</TabsTrigger>
-                      <TabsTrigger value="chat" className="rounded-xl flex items-center gap-2 font-bold transition-all data-[state=active]:bg-white data-[state=active]:shadow-sm"><MessageSquare className="h-4 w-4" /> Chat</TabsTrigger>
+                <div className="px-6 pt-6 pb-2 border-b bg-zinc-50/30">
+                   <TabsList className="w-full h-14 grid grid-cols-2 rounded-2xl bg-zinc-100 p-1.5 shadow-inner">
+                      <TabsTrigger value="participants" className="rounded-xl flex items-center gap-2 font-black text-[11px] uppercase tracking-widest transition-all data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-lg"><Users className="h-4 w-4" /> Students</TabsTrigger>
+                      <TabsTrigger value="chat" className="rounded-xl flex items-center gap-2 font-black text-[11px] uppercase tracking-widest transition-all data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-lg"><MessageSquare className="h-4 w-4" /> Chat</TabsTrigger>
                    </TabsList>
                 </div>
 
                 <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-4">
-                      <div className="space-y-6">
+                   <ScrollArea className="flex-1 p-6">
+                      <div className="space-y-8">
                         {waitingParticipants.length > 0 && hasAdminPrivileges && (
-                          <div className="space-y-3">
-                             <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400 px-2 flex items-center gap-2">
-                               <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" /> Waiting Room
+                          <div className="space-y-4">
+                             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 px-2 flex items-center gap-3">
+                               <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse shadow-sm shadow-yellow-200" /> Waiting Room
                              </div>
                              {waitingParticipants.map(p => (
-                               <div key={p.id} className="bg-zinc-50 p-3 rounded-2xl border border-zinc-100 space-y-3">
-                                  <div className="flex items-center gap-2">
-                                    <Avatar className="h-8 w-8"><AvatarFallback className="text-[10px]">{p.name[0]}</AvatarFallback></Avatar>
-                                    <span className="text-xs font-bold truncate">{p.name}</span>
+                               <div key={p.id} className="bg-zinc-50 p-4 rounded-3xl border border-zinc-100 space-y-4 shadow-sm">
+                                  <div className="flex items-center gap-3">
+                                    <Avatar className="h-10 w-10 border-2 border-white shadow-md"><AvatarFallback className="text-xs font-black bg-zinc-100">{p.name[0]}</AvatarFallback></Avatar>
+                                    <span className="text-xs font-black truncate text-zinc-700">{p.name}</span>
                                   </div>
-                                  <div className="flex gap-2">
-                                    <Button size="sm" onClick={() => admitParticipant(p.id)} className="flex-1 h-8 text-[10px] font-black uppercase">Admit</Button>
-                                    <Button size="sm" variant="ghost" onClick={() => removeParticipant(p.id)} className="flex-1 h-8 text-[10px] font-black uppercase text-zinc-400">Decline</Button>
+                                  <div className="flex gap-3">
+                                    <Button size="sm" onClick={() => admitParticipant(p.id)} className="flex-1 h-10 text-[10px] font-black uppercase tracking-widest rounded-xl shadow-md">Admit</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => removeParticipant(p.id)} className="flex-1 h-10 text-[10px] font-black uppercase tracking-widest text-zinc-400 hover:text-red-500 rounded-xl">Decline</Button>
                                   </div>
                                </div>
                              ))}
-                             <Separator className="my-4" />
+                             <Separator className="my-6 opacity-50" />
                           </div>
                         )}
 
-                        <div className="space-y-4">
+                        <div className="space-y-5">
                           {participants?.filter(p => p.role !== 'waiting' && p.role !== 'left').map(p => {
                             const isMe = p.id === user?.uid;
                             return (
-                              <div key={p.id} className="group flex items-center gap-3 p-2 rounded-2xl hover:bg-zinc-50 transition-colors">
+                              <div key={p.id} className="group flex items-center gap-4 p-3 rounded-3xl hover:bg-zinc-50 transition-all border border-transparent hover:border-zinc-100">
                                  <div className="relative">
-                                   <Avatar className="h-10 w-10 border-2 border-white shadow-sm">
-                                      <AvatarFallback className="bg-primary/5 text-primary font-black text-xs">{p.name[0]}</AvatarFallback>
+                                   <Avatar className="h-12 w-12 border-2 border-white shadow-md">
+                                      <AvatarFallback className="bg-zinc-100 text-zinc-800 font-black text-xs">{p.name[0]}</AvatarFallback>
                                    </Avatar>
-                                   {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-1.5 border-2 border-white shadow-lg animate-bounce z-10"><Hand className="h-2.5 w-2.5 text-yellow-900" /></div>}
+                                   {p.hasRaisedHand && <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-2 border-2 border-white shadow-xl animate-bounce z-10"><Hand className="h-2.5 w-2.5 text-yellow-900" /></div>}
                                  </div>
                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                       <div className="text-xs font-black truncate text-zinc-800">{p.name}</div>
-                                       {p.role === 'host' && <Shield className="h-3 w-3 text-blue-500" />}
-                                       {p.role === 'co-host' && <Star className="h-3 w-3 text-yellow-500" />}
+                                    <div className="flex items-center gap-2">
+                                       <div className="text-[13px] font-black truncate text-zinc-900">{p.name}</div>
+                                       {p.role === 'host' && <Shield className="h-3.5 w-3.5 text-blue-500" />}
+                                       {p.role === 'co-host' && <Star className="h-3.5 w-3.5 text-yellow-500" />}
                                     </div>
-                                    <div className="flex items-center gap-3 mt-1 text-[10px] text-zinc-400 font-bold uppercase tracking-widest">
-                                       {p.isMuted ? <MicOff className="h-3 w-3 text-red-500" /> : <Mic className="h-3 w-3 text-green-500" />}
-                                       {p.isVideoOff ? <VideoOff className="h-3 w-3 text-zinc-300" /> : <VideoIcon className="h-3 w-3 text-primary" />}
+                                    <div className="flex items-center gap-3 mt-1.5">
+                                       {p.isMuted ? <MicOff className="h-3.5 w-3.5 text-[#FF4545]" /> : <Mic className="h-3.5 w-3.5 text-green-500" />}
+                                       {p.isVideoOff ? <VideoOff className="h-3.5 w-3.5 text-zinc-200" /> : <VideoIcon className="h-3.5 w-3.5 text-primary/40" />}
                                        {!isMe && hasAdminPrivileges && (
                                          <Popover>
-                                            <PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-4 w-4 opacity-0 group-hover:opacity-100"><Shield className="h-3 w-3" /></Button></PopoverTrigger>
-                                            <PopoverContent className="w-48 p-2 rounded-2xl border-none shadow-2xl bg-white" align="end">
-                                               <div className="grid gap-1">
-                                                  <Button variant="ghost" size="sm" onClick={() => p.isMuted ? requestUnmute(p.id) : forceMute(p.id)} className="justify-start h-9 text-[10px] font-bold uppercase">
-                                                    {p.isMuted ? <><Mic className="h-3 w-3 mr-2" /> Request Unmute</> : <><MicOff className="h-3 w-3 mr-2 text-red-500" /> Force Mute</>}
+                                            <PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"><Shield className="h-3.5 w-3.5 text-zinc-300" /></Button></PopoverTrigger>
+                                            <PopoverContent className="w-56 p-3 rounded-3xl border-none shadow-[0_20px_50px_rgba(0,0,0,0.15)] bg-white" align="end">
+                                               <div className="grid gap-2">
+                                                  <Button variant="ghost" size="sm" onClick={() => p.isMuted ? requestUnmute(p.id) : forceMute(p.id)} className="justify-start h-10 text-[10px] font-black uppercase tracking-wider rounded-xl">
+                                                    {p.isMuted ? <><Mic className="h-4 w-4 mr-3" /> Request Unmute</> : <><MicOff className="h-4 w-4 mr-3 text-[#FF4545]" /> Force Mute</>}
                                                   </Button>
                                                   {isHost && p.role === 'participant' && (
-                                                    <Button variant="ghost" size="sm" onClick={() => promoteToCoHost(p.id)} className="justify-start h-9 text-[10px] font-bold uppercase">
-                                                       <Star className="h-3 w-3 mr-2 text-yellow-500" /> Make Co-host
+                                                    <Button variant="ghost" size="sm" onClick={() => promoteToCoHost(p.id)} className="justify-start h-10 text-[10px] font-black uppercase tracking-wider rounded-xl">
+                                                       <Star className="h-4 w-4 mr-3 text-yellow-500" /> Make Co-host
                                                     </Button>
                                                   )}
-                                                  <Button variant="ghost" size="sm" onClick={() => removeParticipant(p.id)} className="justify-start h-9 text-[10px] font-bold uppercase text-red-500 hover:text-red-600 hover:bg-red-50">
-                                                     <UserMinus className="h-3 w-3 mr-2" /> Kick Out
+                                                  <Button variant="ghost" size="sm" onClick={() => removeParticipant(p.id)} className="justify-start h-10 text-[10px] font-black uppercase tracking-wider text-[#FF4545] hover:text-red-600 hover:bg-red-50 rounded-xl">
+                                                     <UserMinus className="h-4 w-4 mr-3" /> Kick Out
                                                   </Button>
                                                </div>
                                             </PopoverContent>
@@ -876,15 +873,15 @@ export default function RoomPage() {
                         </div>
                       </div>
                    </ScrollArea>
-                   <div className="p-5 bg-zinc-50/80 border-t">
-                      <div className="space-y-4">
+                   <div className="p-8 bg-zinc-50/50 border-t">
+                      <div className="space-y-5">
                          <div className="flex justify-between text-[10px] uppercase font-black text-zinc-400 tracking-widest px-1">
                             <div>Series Progress</div>
-                            <div className="text-primary">{myCumulativeStats?.attendedHours || 0}h Earned</div>
+                            <div className="text-primary">{myCumulativeStats?.attendedHours || 0}h / {((meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0))}h</div>
                          </div>
-                         <div className="h-2.5 w-full bg-zinc-200 rounded-full overflow-hidden shadow-inner">
+                         <div className="h-3 w-full bg-zinc-100 rounded-full overflow-hidden shadow-inner border border-zinc-200/50">
                             <div 
-                              className="h-full bg-primary transition-all duration-1000" 
+                              className="h-full bg-zinc-900 transition-all duration-1000 shadow-sm" 
                               style={{ width: `${Math.min(100, (myCumulativeStats?.attendedHours || 0) / Math.max(1, (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0)) * 100)}%` }} 
                             />
                          </div>
@@ -893,20 +890,20 @@ export default function RoomPage() {
                 </TabsContent>
 
                 <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-6">
-                      <div className="space-y-6">
+                   <ScrollArea className="flex-1 p-8">
+                      <div className="space-y-8">
                          {chatMessages?.map((msg) => (
-                           <div key={msg.id} className={cn("flex flex-col gap-1.5", msg.senderId === user?.uid ? "items-end" : "items-start")}>
-                              <div className="text-[10px] font-black text-zinc-400 px-1 uppercase tracking-wider">{msg.senderName}</div>
-                              <div className={cn("max-w-[85%] px-4 py-3 rounded-2xl text-xs font-medium shadow-sm", msg.senderId === user?.uid ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-white border rounded-tl-none")}>{msg.text}</div>
+                           <div key={msg.id} className={cn("flex flex-col gap-2", msg.senderId === user?.uid ? "items-end" : "items-start")}>
+                              <div className="text-[10px] font-black text-zinc-400 px-2 uppercase tracking-[0.1em]">{msg.senderName}</div>
+                              <div className={cn("max-w-[85%] px-5 py-4 rounded-[1.5rem] text-[13px] font-bold leading-relaxed shadow-sm", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 border rounded-tl-none")}>{msg.text}</div>
                            </div>
                          ))}
                       </div>
                    </ScrollArea>
-                   <div className="p-4 border-t bg-white">
+                   <div className="p-6 border-t bg-white">
                       <div className="relative flex items-center">
-                        <Input placeholder="Type message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="pr-12 rounded-2xl h-12 bg-zinc-50 border-zinc-100" />
-                        <Button size="icon" variant="ghost" onClick={handleSendMessage} className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 text-primary hover:bg-transparent"><Send className="h-5 w-5" /></Button>
+                        <Input placeholder="Type a message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="pr-14 rounded-full h-14 bg-zinc-50 border-zinc-100 focus-visible:ring-zinc-900 pl-6 font-bold text-sm" />
+                        <Button size="icon" variant="ghost" onClick={handleSendMessage} className="absolute right-2 top-1/2 -translate-y-1/2 h-10 w-10 text-zinc-900 hover:bg-transparent"><Send className="h-5 w-5" /></Button>
                       </div>
                    </div>
                 </TabsContent>
@@ -917,4 +914,3 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
-
