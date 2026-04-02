@@ -53,15 +53,15 @@ export default function DashboardPage() {
       time: "12:00",
       date: new Date(),
       isRecurring: false,
-      occurrences: "5",
-      fixedDurationHours: "3",
+      occurrences: "3",
+      fixedDurationHours: "1",
       repeatInterval: "weekly",
     },
   });
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // ULTRA FRUGAL: Limit to 5 most recent to preserve quota
+    // ULTRA FRUGAL: Limit to 5 most recent to strictly preserve quota
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
@@ -101,8 +101,8 @@ export default function DashboardPage() {
     try {
       const batch = writeBatch(firestore);
       const seriesId = Math.random().toString(36).substr(2, 9);
-      // Frugal limit: 10 sessions max
-      const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 10) : 1;
+      // Frugal limit: 3 sessions max for MVP
+      const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 3) : 1;
       const duration = parseFloat(fixedDurationHours);
 
       for (let i = 0; i < count; i++) {
@@ -228,7 +228,7 @@ export default function DashboardPage() {
                   <DialogContent className="sm:max-w-[500px]">
                     <DialogHeader>
                       <DialogTitle>Schedule Meeting</DialogTitle>
-                      <DialogDescription>Set up your session details and recurrence pattern.</DialogDescription>
+                      <DialogDescription>Set up your session details and recurrence pattern (Max 3).</DialogDescription>
                     </DialogHeader>
                     <Form {...form}>
                       <form onSubmit={form.handleSubmit(handleScheduleSubmit)} className="space-y-4 pt-4">
@@ -259,7 +259,7 @@ export default function DashboardPage() {
                         <div className="p-4 bg-zinc-50 rounded-lg border space-y-4">
                           <FormField control={form.control} name="isRecurring" render={({ field }) => (
                             <FormItem className="flex items-center justify-between">
-                              <div className="space-y-0.5"><FormLabel>Recurring Meeting</FormLabel><FormDescription>Create up to 10 sessions at once.</FormDescription></div>
+                              <div className="space-y-0.5"><FormLabel>Recurring Meeting</FormLabel><FormDescription>Create up to 3 sessions at once.</FormDescription></div>
                               <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
                             </FormItem>
                           )} />
@@ -269,7 +269,7 @@ export default function DashboardPage() {
                                 <FormItem><FormLabel>Pattern</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select interval" /></SelectTrigger></FormControl><SelectContent><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem></SelectContent></Select></FormItem>
                               )} />
                               <FormField control={form.control} name="occurrences" render={({ field }) => (
-                                <FormItem><FormLabel>Total Sessions</FormLabel><FormControl><Input type="number" min="2" max="10" {...field} /></FormControl></FormItem>
+                                <FormItem><FormLabel>Total Sessions</FormLabel><FormControl><Input type="number" min="2" max="3" {...field} /></FormControl></FormItem>
                               )} />
                             </div>
                           )}

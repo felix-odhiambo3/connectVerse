@@ -164,15 +164,15 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // FRUGAL: Limit participants to avoid O(N^2) read complexity
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(50));
+    // ULTRA FRUGAL: Limit participants to strictly preserve quota
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Limit chat to 10 most recent to preserve quota
+    // ULTRA FRUGAL: Limit chat to 10 most recent to strictly preserve quota
     return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
   }, [firestore, meetingId, user]);
 
@@ -216,10 +216,10 @@ export default function RoomPage() {
 
   useEffect(() => {
     if (participants) {
-      const sorted = [...participants]
+      const latest = [...participants]
         .filter(p => p.lastReaction && p.lastReactionAt)
-        .sort((a, b) => (b.lastReactionAt?.seconds || 0) - (a.lastReactionAt?.seconds || 0));
-      const latest = sorted[0];
+        .sort((a, b) => (b.lastReactionAt?.seconds || 0) - (a.lastReactionAt?.seconds || 0))[0];
+      
       if (latest) {
         const ts = latest.lastReactionAt?.seconds || 0;
         const reactionId = `${latest.id}-${ts}`;
@@ -388,7 +388,6 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
-      // FRUGAL: Aggressive candidate buffering to reduce signaling writes
       const iceBuffer: RTCIceCandidateInit[] = [];
       let iceTimeout: any = null;
 
@@ -396,11 +395,13 @@ export default function RoomPage() {
         if (event.candidate && pc.signalingState !== 'closed') {
           iceBuffer.push(event.candidate.toJSON());
           if (iceTimeout) clearTimeout(iceTimeout);
-          // 1.5s delay to batch all initial candidates
+          // ULTRA FRUGAL: Wait 1.5s to batch all candidates into one write
           iceTimeout = setTimeout(() => {
-            updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
-              .catch(() => setDoc(channelRef, { candidates: iceBuffer.map(c => ({ candidate: c, from: user.uid })) }, { merge: true }));
-            iceBuffer.length = 0;
+            if (iceBuffer.length > 0) {
+              updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
+                .catch(() => setDoc(channelRef, { candidates: iceBuffer.map(c => ({ candidate: c, from: user.uid })) }, { merge: true }));
+              iceBuffer.length = 0;
+            }
           }, 1500);
         }
       };
@@ -415,6 +416,7 @@ export default function RoomPage() {
           const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
             const data = snapshot.data();
             if (pc.signalingState === 'closed') return;
+            // STRICT SIGNALING GUARD
             if (data?.answer && pc.signalingState === 'have-local-offer') {
               try { await pc.setRemoteDescription(new RTCSessionDescription(data.answer)); } catch (e) {}
             }
@@ -465,7 +467,6 @@ export default function RoomPage() {
       else if (meetingData.isLocked && !currentUserParticipant) initialRole = 'waiting';
       else if (currentUserParticipant?.role) initialRole = currentUserParticipant.role;
 
-      // Only write if state actually changed to save quota
       const shouldWrite = !currentUserParticipant || 
         currentUserParticipant.role !== initialRole || 
         currentUserParticipant.isMuted !== isAudioMuted || 
@@ -475,7 +476,7 @@ export default function RoomPage() {
       if (shouldWrite) {
         await setDoc(pRef, {
           id: user.uid,
-          name: user.displayName || user.email?.split('@')[0] || 'Unknown User',
+          name: user.displayName || user.email?.split('@')[0],
           joinedAt: currentUserParticipant?.joinedAt || serverTimestamp(),
           activeSegmentStart: currentUserParticipant?.activeSegmentStart || serverTimestamp(),
           role: initialRole,
@@ -504,7 +505,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // ULTRA FRUGAL: 15-minute credit heartbeat to strictly preserve quota
+    // ULTRA FRUGAL: 30-minute credit heartbeat to strictly preserve quota
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -514,13 +515,12 @@ export default function RoomPage() {
         durationRef.current = currentDuration;
         segmentStartRef.current = now;
 
-        // Use updateDoc to target only duration fields
         updateDoc(pRef, { 
           totalDuration: Math.max(0, currentDuration), 
           activeSegmentStart: serverTimestamp() 
         });
       }
-    }, 900000); 
+    }, 1800000); 
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
