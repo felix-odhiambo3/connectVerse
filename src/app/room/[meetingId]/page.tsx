@@ -165,16 +165,16 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // FRUGAL: Limit participants window for mesh efficiency
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(10));
+    // FRUGAL: Limit participants window for mesh efficiency (Max 6 for Spark quota safety)
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(6));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // FRUGAL: Limit chat to preserve quota while remaining usable
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(15));
+    // FRUGAL: Limit chat history to strictly preserve quota
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -396,7 +396,7 @@ export default function RoomPage() {
         if (event.candidate && pc.signalingState !== 'closed') {
           iceBuffer.push(event.candidate.toJSON());
           if (iceTimeout) clearTimeout(iceTimeout);
-          // FRUGAL: Wait to batch all candidates into one write
+          // FRUGAL: Wait longer to batch candidates to minimize write count
           iceTimeout = setTimeout(() => {
             if (iceBuffer.length > 0) {
               updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
@@ -505,7 +505,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // FRUGAL: High-interval credit heartbeat
+    // FRUGAL: Very high-interval credit heartbeat (30 minutes) to strictly preserve quota
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
