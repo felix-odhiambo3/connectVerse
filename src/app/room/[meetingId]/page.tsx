@@ -153,6 +153,7 @@ export default function RoomPage() {
   const screenStreamRef = useRef<MediaStream | null>(null);
   const isInitializingRef = useRef(false);
   const lastProcessedRemoteMuteAt = useRef<number>(0);
+  const lastPresenceWriteAt = useRef<number>(0);
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
 
@@ -165,16 +166,16 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // FRUGAL: Limit participants window for mesh efficiency (Max 6 for Spark quota safety)
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(6));
+    // FRUGAL: Extreme Mesh Reduction (Max 4 for Spark safety)
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(4));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // FRUGAL: Limit chat history to strictly preserve quota
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
+    // FRUGAL: Ultra-tight chat window
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -396,14 +397,14 @@ export default function RoomPage() {
         if (event.candidate && pc.signalingState !== 'closed') {
           iceBuffer.push(event.candidate.toJSON());
           if (iceTimeout) clearTimeout(iceTimeout);
-          // FRUGAL: Wait longer to batch candidates to minimize write count
+          // FRUGAL: Max latency buffering (5s) to eliminate signaling writes
           iceTimeout = setTimeout(() => {
             if (iceBuffer.length > 0) {
               updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
                 .catch(() => setDoc(channelRef, { candidates: iceBuffer.map(c => ({ candidate: c, from: user.uid })) }, { merge: true }));
               iceBuffer.length = 0;
             }
-          }, 2500);
+          }, 5000);
         }
       };
 
@@ -462,6 +463,10 @@ export default function RoomPage() {
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     
     const syncPresence = async () => {
+      const now = Date.now();
+      // FRUGAL: Presence Cooldown (10s) to prevent write-storm from toggles
+      if (now - lastPresenceWriteAt.current < 10000) return;
+
       let initialRole = 'participant';
       if (user.uid === meetingData.hostId) initialRole = 'host';
       else if (meetingData.isLocked && !currentUserParticipant) initialRole = 'waiting';
@@ -474,6 +479,7 @@ export default function RoomPage() {
         currentUserParticipant.hasRaisedHand !== hasHandRaised;
 
       if (shouldWrite) {
+        lastPresenceWriteAt.current = now;
         await setDoc(pRef, {
           id: user.uid,
           name: user.displayName || user.email?.split('@')[0],
@@ -505,7 +511,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // FRUGAL: Very high-interval credit heartbeat (30 minutes) to strictly preserve quota
+    // FRUGAL: Ultra-Passive Heartbeat (60 minutes) to eliminate background reads
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -520,7 +526,7 @@ export default function RoomPage() {
           activeSegmentStart: serverTimestamp() 
         });
       }
-    }, 1800000); 
+    }, 3600000); 
     return () => clearInterval(interval);
   }, [user?.uid, meetingId, firestore, meetingData?.status, currentUserParticipant?.role]);
 
