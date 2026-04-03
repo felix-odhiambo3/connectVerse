@@ -166,16 +166,16 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ABSOLUTE FRUGAL: Max 3 participants in mesh to slash O(N^2) signaling
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
+    // ABSOLUTE FRUGAL: Reduced participant window to 2 members to minimize signaling complexity
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ABSOLUTE FRUGAL: Minimal chat history window
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
+    // ABSOLUTE FRUGAL: Reduced chat history window to 2 messages
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(2));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -397,14 +397,14 @@ export default function RoomPage() {
         if (event.candidate && pc.signalingState !== 'closed') {
           iceBuffer.push(event.candidate.toJSON());
           if (iceTimeout) clearTimeout(iceTimeout);
-          // ABSOLUTE FRUGAL: Extreme latency buffering (10s) to batch all candidates into ONE write
+          // ABSOLUTE FRUGAL: Increased latency buffering (15s) to batch candidates
           iceTimeout = setTimeout(() => {
             if (iceBuffer.length > 0) {
               updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
                 .catch(() => setDoc(channelRef, { candidates: iceBuffer.map(c => ({ candidate: c, from: user.uid })) }, { merge: true }));
               iceBuffer.length = 0;
             }
-          }, 10000);
+          }, 15000);
         }
       };
 
@@ -464,8 +464,8 @@ export default function RoomPage() {
     
     const syncPresence = async () => {
       const now = Date.now();
-      // ABSOLUTE FRUGAL: Increased Cooldown (30s) to prevent write-storm
-      if (now - lastPresenceWriteAt.current < 30000) return;
+      // ABSOLUTE FRUGAL: Increased Cooldown (60s) to prevent write-storm
+      if (now - lastPresenceWriteAt.current < 60000) return;
 
       let initialRole = 'participant';
       if (user.uid === meetingData.hostId) initialRole = 'host';
@@ -496,19 +496,6 @@ export default function RoomPage() {
 
     syncPresence();
   }, [user?.uid, meetingId, firestore, meetingData?.status, meetingData?.isLocked, isAudioMuted, isVideoOff, hasHandRaised, meetingData?.hostId]);
-
-  const durationRef = useRef(0);
-  const segmentStartRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (currentUserParticipant) {
-      durationRef.current = currentUserParticipant.totalDuration || 0;
-      segmentStartRef.current = currentUserParticipant.activeSegmentStart?.seconds || Date.now() / 1000;
-    }
-  }, [currentUserParticipant?.id]);
-
-  // ABSOLUTE FRUGAL: REMOVED PERIODIC HEARTBEAT TIMER entirely to eliminate background reads/writes.
-  // Attendance is now flushed only during manual state changes or meeting exit.
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);

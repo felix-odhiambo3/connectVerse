@@ -61,7 +61,7 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // ABSOLUTE FRUGAL: Extreme minimal history window to preserve read quota
+    // ABSOLUTE FRUGAL: History window restricted to 2 sessions to minimize document reads
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
@@ -101,7 +101,7 @@ export default function DashboardPage() {
     try {
       const batch = writeBatch(firestore);
       const seriesId = Math.random().toString(36).substr(2, 9);
-      // Frugal limit: 2 sessions max for MVP
+      // Frugal limit: 2 sessions max per action
       const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 2) : 1;
       const duration = parseFloat(fixedDurationHours);
 
