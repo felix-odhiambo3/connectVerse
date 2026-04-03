@@ -66,7 +66,7 @@ export default function DashboardPage() {
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
       orderBy('createdAt', 'desc'),
-      limit(5) // Reduced limit to preserve quota
+      limit(5) // QUOTA: Keep dashboard load extremely light
     );
   }, [user?.uid, firestore]);
 
