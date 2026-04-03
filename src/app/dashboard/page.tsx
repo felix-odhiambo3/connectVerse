@@ -61,11 +61,11 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA EFFICIENCY: Stricter limit of 5 sessions for Spark plan
+    // QUOTA EFFICIENCY: Ultra-strict limit of 3 sessions to minimize read overhead
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      limit(5)
+      limit(3)
     );
   }, [user?.uid, firestore]);
 
@@ -154,7 +154,7 @@ export default function DashboardPage() {
         name: 'Instant Meeting',
         hostId: user.uid,
         createdAt: serverTimestamp(),
-        status: 'active',
+        status: 'active', // Set to active immediately
         isLocked: false,
         isRecording: false,
         fixedDurationHours: 1, 

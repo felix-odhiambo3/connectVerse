@@ -130,6 +130,9 @@ export default function RoomPage() {
   const isInitializingRef = useRef(false);
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
+  
+  // QUOTA PROTECTION: Ref to track last sync to prevent redundant writes
+  const lastSyncRef = useRef<string>("");
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -138,18 +141,20 @@ export default function RoomPage() {
 
   const { data: meetingData, isLoading: isMeetingLoading } = useDoc<any>(meetingRef);
 
+  const isHost = user?.uid === meetingData?.hostId;
+
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Limit real-time mesh to 4 active participants to reduce signaling pairs from 10 to 6
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(4));
+    // QUOTA EFFICIENCY: Ultra-strict limit of 3 participants to minimize signaling read/write overhead
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Limit chat history to 5 messages to reduce read overhead
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
+    // QUOTA EFFICIENCY: Limit chat to 3 most recent messages
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -169,8 +174,13 @@ export default function RoomPage() {
 
   const updatePresence = useCallback((updates: Partial<Participant>) => {
     if (!user || !firestore || !meetingId) return;
+    
+    // QUOTA EFFICIENCY: Throttled sync - only write if state actually changed
+    const currentSyncKey = `${isAudioMuted}_${isVideoOff}_${hasHandRaised}`;
+    if (lastSyncRef.current === currentSyncKey && Object.keys(updates).length === 0) return;
+    lastSyncRef.current = currentSyncKey;
+
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
-    // Use surgical non-blocking updates to reduce write-stream exhaustion
     setDocumentNonBlocking(pRef, {
       ...updates,
       id: user.uid,
@@ -186,7 +196,7 @@ export default function RoomPage() {
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData) return;
     updatePresence({});
-  }, [user?.uid, meetingId, firestore, isMeetingLoading, !!meetingData]);
+  }, [user?.uid, meetingId, firestore, isMeetingLoading, !!meetingData, isAudioMuted, isVideoOff, hasHandRaised]);
 
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
@@ -249,14 +259,12 @@ export default function RoomPage() {
           if (sender) sender.replaceTrack(newTrack);
         });
         setIsVideoOff(false);
-        updatePresence({ isVideoOff: false });
       } catch (err) {
         toast({ variant: 'destructive', title: 'Camera Error' });
       }
     } else {
       localStreamRef.current.getVideoTracks().forEach(track => { track.enabled = false; track.stop(); });
       setIsVideoOff(true);
-      updatePresence({ isVideoOff: true });
     }
     setIsTogglingVideo(false);
   };
@@ -266,7 +274,6 @@ export default function RoomPage() {
     const newState = !isAudioMuted;
     setIsAudioMuted(newState);
     localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !newState);
-    updatePresence({ isMuted: newState });
   };
 
   useEffect(() => {
@@ -318,8 +325,8 @@ export default function RoomPage() {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
       };
 
+      // QUOTA PROTECTION: Atomic Signaling - Buffer candidates for 8s to send ONCE
       pc.onicegatheringstatechange = () => {
-        // ATOMIC SIGNALING: Wait for completion or 5s to send all candidates in ONE write
         if (pc.iceGatheringState === 'complete') {
            updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
@@ -327,14 +334,13 @@ export default function RoomPage() {
         }
       };
 
-      // Fallback: Send after 5s if not complete to avoid hanging peer connection
       setTimeout(() => {
         if (pc.iceGatheringState !== 'complete' && iceCandidates.length > 0) {
            updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
           });
         }
-      }, 5000);
+      }, 8000);
 
       if (user.uid < participantId) {
         const offer = await pc.createOffer();
@@ -386,15 +392,13 @@ export default function RoomPage() {
   }, [meetingData?.createdAt, meetingData?.status]);
 
   const endMeetingForAll = async () => {
-    if (!isHost || !meetingRef || !firestore || !participants) return;
+    if (!isHost || !meetingRef || !firestore) return;
     setIsProcessingAttendance(true);
-    const batch = writeBatch(firestore);
-    batch.update(meetingRef, { status: 'finished', endedAt: serverTimestamp() });
-    await batch.commit();
-    setIsProcessingAttendance(false);
+    updateDoc(meetingRef, { status: 'finished', endedAt: serverTimestamp() })
+      .finally(() => setIsProcessingAttendance(false));
   };
 
-  if (isMeetingLoading || (meetingId && !meetingData && !isMeetingLoading && !meetingRef)) {
+  if (isMeetingLoading) {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-8">
         <div className="space-y-4 w-full max-w-sm">
@@ -406,7 +410,7 @@ export default function RoomPage() {
     );
   }
 
-  if (!meetingData && !isMeetingLoading && meetingRef) {
+  if (!meetingData) {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
         <h1 className="text-4xl font-black mb-3 tracking-tight text-zinc-900">Meeting Not Found</h1>
@@ -419,7 +423,7 @@ export default function RoomPage() {
   if (meetingData?.status === 'finished') {
     return (
       <div className="flex h-screen items-center justify-center bg-[#F8F9FB] p-6">
-        <Card className="w-full max-w-md shadow-xl rounded-[3rem] text-center p-12">
+        <Card className="w-full max-md shadow-xl rounded-[3rem] text-center p-12">
           <Trophy className="h-20 w-20 mx-auto text-primary mb-6" />
           <h2 className="text-3xl font-black mb-4">Meeting Finished</h2>
           <p className="text-zinc-500 mb-8 font-medium">The host has ended this session.</p>
@@ -436,7 +440,7 @@ export default function RoomPage() {
           <div className="flex items-center gap-8">
             <div className="bg-zinc-900 flex items-center justify-center h-12 w-12 rounded-[1.25rem] text-white font-black text-xl shadow-lg ring-4 ring-zinc-50">CV</div>
             <div className="flex flex-col">
-               <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Loading session...'}</h1>
+               <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Session'}</h1>
                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">{meetingData?.isLocked ? 'Restricted' : 'Public Session'}</p>
             </div>
           </div>
@@ -444,7 +448,7 @@ export default function RoomPage() {
             <div className="flex items-center gap-3 bg-zinc-50 border border-zinc-100 rounded-[1.25rem] px-5 py-3 text-xs font-black text-zinc-600 shadow-sm"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
             {isHost ? (
               <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest shadow-lg bg-[#FF4545] hover:bg-red-600 border-none">
-                {isProcessingAttendance ? 'Syncing...' : 'End Session'}
+                {isProcessingAttendance ? 'Ending...' : 'End Session'}
               </Button>
             ) : (
               <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest border-zinc-200">Leave</Button>
@@ -488,7 +492,7 @@ export default function RoomPage() {
                <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg", isAudioMuted ? "bg-[#FF4545]" : "bg-zinc-100")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
                <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-2xl h-16 w-16 shadow-lg", isVideoOff ? "bg-[#FF4545]" : "bg-zinc-100")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
                <Separator orientation="vertical" className="h-12 mx-4" />
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { const ns = !hasHandRaised; setHasHandRaised(ns); updatePresence({ hasRaisedHand: ns }); }} className={cn("rounded-2xl h-16 w-16 shadow-lg", hasHandRaised ? "bg-yellow-400" : "bg-zinc-50")}><Hand className="h-7 w-7" /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => setHasHandRaised(!hasHandRaised)} className={cn("rounded-2xl h-16 w-16 shadow-lg", hasHandRaised ? "bg-yellow-400" : "bg-zinc-50")}><Hand className="h-7 w-7" /></Button>
             </div>
           </div>
 
@@ -507,7 +511,7 @@ export default function RoomPage() {
                         {participants?.filter(p => p.role !== 'waiting' && p.role !== 'left').map(p => (
                           <div key={p.id} className="flex items-center gap-5 p-4 rounded-[2rem] hover:bg-zinc-50">
                              <Avatar className="h-16 w-16 border-4 border-white shadow-xl">
-                                <AvatarFallback className="bg-zinc-100 text-zinc-900 font-black text-sm">{p.name[0]}</AvatarFallback>
+                                <AvatarFallback className="bg-zinc-100 text-zinc-900 font-black text-sm">{p.name?.[0] || '?'}</AvatarFallback>
                              </Avatar>
                              <div className="flex-1 min-w-0">
                                 <div className="text-sm font-black truncate text-zinc-900 tracking-tight">{p.name}</div>
