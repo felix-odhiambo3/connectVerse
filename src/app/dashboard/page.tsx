@@ -61,11 +61,11 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // ULTRA FRUGAL: History window restricted to 5 sessions to minimize document reads
+    // ULTRA FRUGAL: Limited to 3 sessions to minimize document reads
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      limit(5)
+      limit(3)
     );
   }, [user?.uid, firestore]);
 
@@ -101,7 +101,7 @@ export default function DashboardPage() {
     try {
       const batch = writeBatch(firestore);
       const seriesId = Math.random().toString(36).substr(2, 9);
-      // Frugal limit: 2 sessions max per action
+      // Frugal limit: Max 2 recurring sessions per action
       const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 2) : 1;
       const duration = parseFloat(fixedDurationHours);
 
@@ -212,7 +212,9 @@ export default function DashboardPage() {
                     <CardDescription>Start a video call immediately.</CardDescription>
                   </CardHeader>
                   <CardFooter className="mt-auto">
-                    <Button onClick={createInstantMeeting} disabled={isCreating} className="w-full">Start Now</Button>
+                    <Button onClick={createInstantMeeting} disabled={isCreating} className="w-full">
+                      {isCreating ? 'Creating...' : 'Start Now'}
+                    </Button>
                   </CardFooter>
                 </Card>
 

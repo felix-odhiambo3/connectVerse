@@ -154,16 +154,16 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Restrict signaling mesh to the 3 most active participants to save quota
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
+    // ULTRA FRUGAL: Restrict signaling mesh to the 2 most active participants to save quota
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Restricted chat history to 5 messages
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
+    // ULTRA FRUGAL: Restricted chat history to 3 messages
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -224,7 +224,8 @@ export default function RoomPage() {
   }, [user, firestore, meetingId, meetingData?.hostId, isAudioMuted, isVideoOff, hasHandRaised]);
 
   useEffect(() => {
-    if (!user || !meetingId || !firestore || !meetingData || isMeetingLoading) return;
+    if (!user || !meetingId || !firestore || isMeetingLoading) return;
+    // Only update presence once on mount when loading finishes
     updatePresence({});
   }, [user?.uid, meetingId, firestore, isMeetingLoading]);
 
@@ -354,13 +355,13 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
-      // QUOTA OPTIMIZATION: Buffer ICE candidates for 3 seconds to send as one atomic write
       const iceCandidates: RTCIceCandidateInit[] = [];
       pc.onicecandidate = (event) => {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
       };
 
       pc.onicegatheringstatechange = () => {
+        // QUOTA OPTIMIZATION: Send all candidates in a single write per peer
         if (pc.iceGatheringState === 'complete') {
           updateDoc(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
@@ -451,6 +452,17 @@ export default function RoomPage() {
           <Skeleton className="h-4 w-1/2 mx-auto rounded-xl" />
           <Skeleton className="h-64 w-full rounded-[3rem] mt-8" />
         </div>
+      </div>
+    );
+  }
+
+  // Handle meeting not found
+  if (!meetingData && !isMeetingLoading) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
+        <h1 className="text-4xl font-black mb-3 tracking-tight text-zinc-900">Meeting Not Found</h1>
+        <p className="text-zinc-500 max-w-sm font-bold text-sm leading-relaxed mb-8">This session may have ended or the link is incorrect.</p>
+        <Button onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
       </div>
     );
   }
@@ -633,8 +645,28 @@ export default function RoomPage() {
                    </ScrollArea>
                    <div className="p-8 border-t">
                       <div className="relative flex items-center">
-                        <Input placeholder="Message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (addDoc(collection(firestore!, 'meetings', meetingId, 'chat'), { senderId: user!.uid, senderName: user!.displayName || user!.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }), setChatInput(''))} className="pr-16 rounded-[2rem] h-14 bg-zinc-50 border-zinc-100" />
-                        <Button size="icon" variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2" onClick={() => (addDoc(collection(firestore!, 'meetings', meetingId, 'chat'), { senderId: user!.uid, senderName: user!.displayName || user!.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }), setChatInput(''))}><Send className="h-5 w-5" /></Button>
+                        <Input placeholder="Message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => {
+                          if (e.key === 'Enter' && chatInput.trim() && firestore && user) {
+                            addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
+                              senderId: user.uid, 
+                              senderName: user.displayName || user.email?.split('@')[0], 
+                              text: chatInput, 
+                              createdAt: serverTimestamp() 
+                            });
+                            setChatInput('');
+                          }
+                        }} className="pr-16 rounded-[2rem] h-14 bg-zinc-50 border-zinc-100" />
+                        <Button size="icon" variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2" onClick={() => {
+                          if (chatInput.trim() && firestore && user) {
+                            addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
+                              senderId: user.uid, 
+                              senderName: user.displayName || user.email?.split('@')[0], 
+                              text: chatInput, 
+                              createdAt: serverTimestamp() 
+                            });
+                            setChatInput('');
+                          }
+                        }}><Send className="h-5 w-5" /></Button>
                       </div>
                    </div>
                 </TabsContent>
