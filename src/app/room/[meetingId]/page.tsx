@@ -12,7 +12,6 @@ import {
   query,
   orderBy,
   updateDoc,
-  writeBatch,
   setDoc,
   Timestamp,
   onSnapshot,
@@ -136,7 +135,7 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Ultra-strict limit of 3 participants for signaling
+    // QUOTA EFFICIENCY: Ultra-strict limit of 3 participants for signaling on Spark plan
     return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
   }, [firestore, meetingId, user]);
 
@@ -144,8 +143,8 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Limit chat to 3 messages
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
+    // QUOTA EFFICIENCY: Limit chat to 5 most recent messages
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -163,10 +162,10 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // EVENT-DRIVEN SYNC: No more reactive useEffect for state sync.
+  // PRESENCE: Synchronize state to Firestore only when explicit changes occur
   const syncPresence = useCallback((updates: Partial<Participant>) => {
-    if (!user || !firestore || !meetingId) return;
-    console.log("Syncing Firestore presence...");
+    if (!user || !firestore || !meetingId || isMeetingLoading || !meetingData) return;
+    
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     setDocumentNonBlocking(pRef, {
       ...updates,
@@ -175,13 +174,13 @@ export default function RoomPage() {
       joinedAt: serverTimestamp(),
       role: user.uid === meetingData?.hostId ? 'host' : 'participant',
     }, { merge: true });
-  }, [user, firestore, meetingId, meetingData?.hostId]);
+  }, [user, firestore, meetingId, meetingData?.hostId, isMeetingLoading]);
 
   // Initial presence on mount
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData) return;
     syncPresence({ isMuted: isAudioMuted, isVideoOff: isVideoOff, hasRaisedHand: hasHandRaised });
-  }, [user?.uid, meetingId, !!meetingData, isMeetingLoading]);
+  }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
@@ -270,7 +269,7 @@ export default function RoomPage() {
     syncPresence({ hasRaisedHand: newState });
   };
 
-  // SIGNALING: Atomic ICE Handshake
+  // SIGNALING: Atomic ICE Handshake using Array Union to batch writes
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
@@ -320,10 +319,9 @@ export default function RoomPage() {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
       };
 
-      // ATOMIC SIGNALING: Batch candidates once gathering is complete
+      // ATOMIC SIGNALING: Batch candidates once gathering is complete to save write quota
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === 'complete') {
-           console.log("Signaling: Sending batch candidates...");
            updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
           });

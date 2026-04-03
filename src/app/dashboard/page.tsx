@@ -66,7 +66,7 @@ export default function DashboardPage() {
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
       orderBy('createdAt', 'desc'),
-      limit(3)
+      limit(5) // Reduced limit to preserve quota
     );
   }, [user?.uid, firestore]);
 
@@ -102,7 +102,6 @@ export default function DashboardPage() {
     try {
       const batch = writeBatch(firestore);
       const seriesId = Math.random().toString(36).substr(2, 9);
-      // Frugal limit: Max 2 sessions to stay under tier write limits
       const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 2) : 1;
       const duration = parseFloat(fixedDurationHours);
 

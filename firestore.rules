@@ -16,35 +16,22 @@ service cloud.firestore {
       allow list: if false;
       allow create: if isOwner(userId);
       allow update: if isOwner(userId);
-      allow delete: if isOwner(userId);
+      allow delete: if false;
     }
 
     match /meetings/{meetingId} {
-      // Allow any signed-in user to read meeting details
-      allow read: if isSignedIn();
-      allow create: if isSignedIn();
-      allow update: if isSignedIn();
-      allow delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
+      // Allow any signed-in user to perform standard operations on meetings
+      allow read, create, update: if isSignedIn();
+      allow delete: if isSignedIn() && (resource == null || resource.data.hostId == request.auth.uid);
 
-      match /participants/{participantId} {
-        allow read: if isSignedIn();
-        allow write: if isSignedIn();
-      }
-      
-      match /chat/{chatMessageId} {
-        allow read: if isSignedIn();
-        allow create: if isSignedIn();
-      }
-      
-      match /webrtc/{channelId} {
+      // Recursive match for all sub-collections (participants, chat, webrtc)
+      match /{allSubcollections=**} {
         allow read, write: if isSignedIn();
       }
     }
 
     match /seriesAttendance/{seriesId}/users/{userId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read, write: if isSignedIn();
     }
   }
 }
