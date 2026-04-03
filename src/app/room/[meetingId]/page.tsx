@@ -37,21 +37,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
+import { updateDocumentNonBlocking, setDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 
 interface Participant {
   id: string;
   name: string;
   joinedAt: Timestamp | null;
-  activeSegmentStart?: Timestamp | null;
-  totalDuration?: number;
   role: 'host' | 'co-host' | 'participant' | 'waiting' | 'left';
   hasRaisedHand?: boolean;
   isMuted?: boolean;
   isVideoOff?: boolean;
-  lastReaction?: string;
-  lastReactionAt?: Timestamp;
-  remoteMuteRequestAt?: Timestamp;
-  remoteUnmuteRequestAt?: Timestamp;
 }
 
 interface ChatMessage {
@@ -60,11 +55,6 @@ interface ChatMessage {
   senderName: string;
   text: string;
   createdAt: Timestamp;
-}
-
-interface CumulativeStats {
-  attendedHours: number;
-  sessionsAttended: number;
 }
 
 const ICE_SERVERS = {
@@ -128,11 +118,9 @@ export default function RoomPage() {
 
   const [isAudioMuted, setIsAudioMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(true);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [hasHandRaised, setHasHandRaised] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
-  const [showSummary, setShowSummary] = useState(false);
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [isTogglingVideo, setIsTogglingVideo] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
@@ -140,7 +128,6 @@ export default function RoomPage() {
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
 
   const localStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
   const isInitializingRef = useRef(false);
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
@@ -154,16 +141,16 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Restrict signaling mesh to the 2 most active participants to save quota
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
+    // QUOTA EFFICIENCY: Limit real-time mesh to 5 active participants
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Restricted chat history to 3 messages
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
+    // QUOTA EFFICIENCY: Limit chat history to 10 messages
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -179,55 +166,31 @@ export default function RoomPage() {
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
 
-  const sortedParticipants = useMemo(() => {
-    const rolePriority = { host: 0, 'co-host': 1, participant: 2 };
-    return [...activeParticipants].sort((a, b) => (rolePriority[a.role as keyof typeof rolePriority] || 2) - (rolePriority[b.role as keyof typeof rolePriority] || 2));
-  }, [activeParticipants]);
-
   const featuredParticipant = useMemo(() => {
     if (!activeParticipants.length) return null;
-    if (meetingData?.screenSharerId) {
-      const sharer = activeParticipants.find(p => p.id === meetingData.screenSharerId);
-      if (sharer) return sharer;
-    }
-    return sortedParticipants[0];
-  }, [activeParticipants, sortedParticipants, meetingData?.screenSharerId]);
-
-  const seriesAttendanceRef = useMemoFirebase(() => {
-    if (!firestore || !meetingData?.seriesId || !user) return null;
-    return doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', user.uid);
-  }, [firestore, meetingData?.seriesId, user]);
-
-  const { data: myCumulativeStats } = useDoc<CumulativeStats>(seriesAttendanceRef);
+    return activeParticipants[0];
+  }, [activeParticipants]);
 
   const updatePresence = useCallback((updates: Partial<Participant>) => {
     if (!user || !firestore || !meetingId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
-    updateDoc(pRef, {
+    // Use non-blocking to prevent "Write stream exhausted"
+    setDocumentNonBlocking(pRef, {
       ...updates,
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
-    }).catch(() => {
-      setDoc(pRef, {
-        id: user.uid,
-        name: user.displayName || user.email?.split('@')[0],
-        joinedAt: serverTimestamp(),
-        activeSegmentStart: serverTimestamp(),
-        role: user.uid === meetingData?.hostId ? 'host' : 'participant',
-        isMuted: isAudioMuted,
-        isVideoOff: isVideoOff,
-        hasRaisedHand: hasHandRaised,
-        totalDuration: 0,
-        ...updates
-      }, { merge: true });
-    });
+      joinedAt: serverTimestamp(),
+      role: user.uid === meetingData?.hostId ? 'host' : 'participant',
+      isMuted: isAudioMuted,
+      isVideoOff: isVideoOff,
+      hasRaisedHand: hasHandRaised,
+    }, { merge: true });
   }, [user, firestore, meetingId, meetingData?.hostId, isAudioMuted, isVideoOff, hasHandRaised]);
 
   useEffect(() => {
-    if (!user || !meetingId || !firestore || isMeetingLoading) return;
-    // Only update presence once on mount when loading finishes
+    if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData) return;
     updatePresence({});
-  }, [user?.uid, meetingId, firestore, isMeetingLoading]);
+  }, [user?.uid, meetingId, firestore, isMeetingLoading, !!meetingData]);
 
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
@@ -268,7 +231,6 @@ export default function RoomPage() {
     return () => {
       isMounted = false;
       localStreamRef.current?.getTracks().forEach(t => t.stop());
-      screenStreamRef.current?.getTracks().forEach(t => t.stop());
       pcs.current.forEach(pc => pc.close());
       signalingUnsubs.current.forEach(unsub => unsub());
     };
@@ -361,20 +323,27 @@ export default function RoomPage() {
       };
 
       pc.onicegatheringstatechange = () => {
-        // QUOTA OPTIMIZATION: Send all candidates in a single write per peer
+        // ATOMIC SIGNALING: Wait for 3s or complete to send all candidates in ONE write
         if (pc.iceGatheringState === 'complete') {
-          updateDoc(channelRef, { 
+           updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
-          }).catch(() => setDoc(channelRef, { 
-            candidates: iceCandidates.map(c => ({ candidate: c, from: user.uid })) 
-          }, { merge: true }));
+          });
         }
       };
+
+      // Fallback: Send after 3s if not complete to avoid hanging
+      setTimeout(() => {
+        if (pc.iceGatheringState !== 'complete' && iceCandidates.length > 0) {
+           updateDocumentNonBlocking(channelRef, { 
+            candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
+          });
+        }
+      }, 3000);
 
       if (user.uid < participantId) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await setDoc(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
+        setDocumentNonBlocking(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
 
         const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
           const data = snapshot.data();
@@ -395,7 +364,7 @@ export default function RoomPage() {
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
+            updateDocumentNonBlocking(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
           }
           if (data?.candidates && pc.remoteDescription) {
             data.candidates.forEach((cand: any) => {
@@ -407,11 +376,6 @@ export default function RoomPage() {
       }
     });
   }, [user?.uid, firestore, meetingId, activeParticipantIds, hasMediaPermission]);
-
-  useEffect(() => {
-    const interval = setInterval(() => setCurrentTime(Date.now() / 1000), 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') {
@@ -428,23 +392,13 @@ export default function RoomPage() {
   const endMeetingForAll = async () => {
     if (!isHost || !meetingRef || !firestore || !participants) return;
     setIsProcessingAttendance(true);
-    const totalSessionSeconds = Math.max(1, currentTime - (meetingData.createdAt?.seconds || currentTime));
     const batch = writeBatch(firestore);
     batch.update(meetingRef, { status: 'finished', endedAt: serverTimestamp() });
-    
-    for (const p of participants) {
-      const ratio = totalSessionSeconds > 0 ? (p.totalDuration || 0) / totalSessionSeconds : 0;
-      if ((p.id === meetingData.hostId || ratio >= 0.7) && meetingData.seriesId) {
-        const seriesUserRef = doc(firestore, 'seriesAttendance', meetingData.seriesId, 'users', p.id);
-        batch.set(seriesUserRef, { userId: p.id, seriesId: meetingData.seriesId, attendedHours: increment(meetingData.fixedDurationHours || 0), sessionsAttended: increment(1) }, { merge: true });
-      }
-    }
     await batch.commit();
     setIsProcessingAttendance(false);
-    setShowSummary(true);
   };
 
-  if (isMeetingLoading) {
+  if (isMeetingLoading || (meetingId && !meetingData && !isMeetingLoading && !meetingRef)) {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-8">
         <div className="space-y-4 w-full max-w-sm">
@@ -456,8 +410,7 @@ export default function RoomPage() {
     );
   }
 
-  // Handle meeting not found
-  if (!meetingData && !isMeetingLoading) {
+  if (!meetingData && !isMeetingLoading && meetingRef) {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
         <h1 className="text-4xl font-black mb-3 tracking-tight text-zinc-900">Meeting Not Found</h1>
@@ -467,57 +420,14 @@ export default function RoomPage() {
     );
   }
 
-  if (currentUserParticipant?.role === 'waiting') {
-    return (
-      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
-        <div className="bg-primary/10 w-32 h-32 rounded-[2.5rem] flex items-center justify-center mb-8 animate-pulse shadow-inner border border-white/5"><Lock className="h-12 w-12 text-primary" /></div>
-        <h1 className="text-4xl font-black mb-3 tracking-tight">Meeting Restricted</h1>
-        <p className="text-zinc-500 max-w-sm font-bold text-sm leading-relaxed">The host has been notified. Please wait until you are admitted to the session.</p>
-        <Button variant="ghost" className="mt-12 text-zinc-400 font-black uppercase tracking-widest text-[11px]" onClick={() => router.push('/dashboard')}>Leave Waiting Room</Button>
-      </div>
-    );
-  }
-
-  if (showSummary || (meetingData?.status === 'finished' && user)) {
-    const totalExpectedHours = (meetingData?.totalSessionsInSeries || 1) * (meetingData?.fixedDurationHours || 0);
-    const attendedHours = myCumulativeStats?.attendedHours || 0;
-    const isPresentOverall = isHost || (attendedHours / (totalExpectedHours || 1)) >= 0.7;
-
+  if (meetingData?.status === 'finished') {
     return (
       <div className="flex h-screen items-center justify-center bg-[#F8F9FB] p-6">
-        <Card className="w-full max-w-2xl shadow-[0_50px_100px_-20px_rgba(0,0,0,0.15)] rounded-[3rem] overflow-hidden border-none bg-white">
-          <CardHeader className="text-center border-b pb-10 pt-16 bg-zinc-50/50">
-            <div className="mx-auto bg-primary/5 w-24 h-24 rounded-[2rem] flex items-center justify-center mb-6 shadow-inner border border-white/5"><BookOpen className="h-12 w-12 text-primary" /></div>
-            <CardTitle className="text-5xl font-black tracking-tighter">Attendance Report</CardTitle>
-            <CardDescription className="text-zinc-400 font-bold uppercase tracking-[0.2em] mt-2 text-[11px]">Series: {meetingData?.name}</CardDescription>
-          </CardHeader>
-          <CardContent className="pt-12 space-y-12 px-12">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              <div className="bg-zinc-50 p-10 rounded-[2rem] border border-zinc-100 text-center shadow-sm">
-                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-4">Total Hours</p>
-                <div className="text-5xl font-black tracking-tighter">{attendedHours}<span className="text-zinc-300 text-2xl">/{totalExpectedHours}</span></div>
-              </div>
-              <div className="bg-zinc-50 p-10 rounded-[2rem] border border-zinc-100 text-center shadow-sm">
-                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-4">Completion</p>
-                <div className="text-5xl font-black tracking-tighter">{((attendedHours / (totalExpectedHours || 1)) * 100).toFixed(0)}%</div>
-              </div>
-              <div className="bg-zinc-50 p-10 rounded-[2rem] border border-zinc-100 text-center shadow-sm">
-                <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mb-4">Sessions</p>
-                <div className="text-5xl font-black tracking-tighter">{myCumulativeStats?.sessionsAttended || 0}<span className="text-zinc-300 text-2xl">/{meetingData?.totalSessionsInSeries || 1}</span></div>
-              </div>
-            </div>
-            <div className={cn("p-12 rounded-[2.5rem] flex flex-col items-center gap-8 text-center border-4 transition-all", isPresentOverall ? "bg-green-50/30 border-green-100 text-green-900 shadow-green-100/50" : "bg-red-50/30 border-red-100 text-red-900 shadow-red-100/50")}>
-              {isPresentOverall ? <Trophy className="h-20 w-20 animate-bounce" /> : <Frown className="h-20 w-20" />}
-              <div>
-                <h3 className="text-4xl font-black tracking-tighter uppercase">Status: {isPresentOverall ? 'PRESENT' : 'ABSENT'}</h3>
-                <p className="text-[11px] font-black uppercase tracking-[0.2em] mt-2 opacity-60">{isPresentOverall ? 'Attendance Credit Granted' : 'Attendance Requirement Not Met'}</p>
-              </div>
-            </div>
-          </CardContent>
-          <CardFooter className="bg-zinc-50/80 p-12 gap-6 border-t">
-            <Button variant="outline" className="flex-1 h-16 rounded-[1.5rem] font-black uppercase tracking-widest text-[11px] border-zinc-200" onClick={() => window.print()}><Download className="mr-3 h-5 w-5" /> Export PDF</Button>
-            <Button className="flex-1 h-16 rounded-[1.5rem] font-black uppercase tracking-widest text-[11px] shadow-xl" onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
-          </CardFooter>
+        <Card className="w-full max-w-md shadow-xl rounded-[3rem] text-center p-12">
+          <Trophy className="h-20 w-20 mx-auto text-primary mb-6" />
+          <h2 className="text-3xl font-black mb-4">Meeting Finished</h2>
+          <p className="text-zinc-500 mb-8 font-medium">The host has ended this session.</p>
+          <Button className="w-full h-14 rounded-2xl" onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
         </Card>
       </div>
     );
@@ -529,55 +439,40 @@ export default function RoomPage() {
         <header className="flex h-20 items-center justify-between px-10 bg-white border-b z-10 shadow-sm">
           <div className="flex items-center gap-8">
             <div className="bg-zinc-900 flex items-center justify-center h-12 w-12 rounded-[1.25rem] text-white font-black text-xl shadow-lg ring-4 ring-zinc-50">CV</div>
-            <div className="flex items-center gap-6">
-               <div className="flex flex-col">
-                  <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Loading session...'}</h1>
-                  <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">{meetingData?.isLocked ? 'Restricted Session' : 'Public Session'}</p>
-               </div>
+            <div className="flex flex-col">
+               <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Loading session...'}</h1>
+               <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">{meetingData?.isLocked ? 'Restricted' : 'Public Session'}</p>
             </div>
           </div>
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-3 bg-zinc-50 border border-zinc-100 rounded-[1.25rem] px-5 py-3 text-xs font-black text-zinc-600 shadow-sm"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
             {isHost ? (
-              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest shadow-[0_15px_30px_-10px_rgba(255,69,69,0.4)] bg-[#FF4545] hover:bg-red-600 transition-all border-none">
+              <Button onClick={endMeetingForAll} variant="destructive" disabled={isProcessingAttendance} className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest shadow-lg bg-[#FF4545] hover:bg-red-600 border-none">
                 {isProcessingAttendance ? 'Syncing...' : 'End Session'}
               </Button>
             ) : (
-              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest border-zinc-200 hover:bg-zinc-50 transition-all active:scale-95">Leave</Button>
+              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest border-zinc-200">Leave</Button>
             )}
           </div>
         </header>
 
         <main className="flex-1 flex overflow-hidden p-8 gap-8 relative">
           <div className="flex-1 flex flex-col gap-8 overflow-hidden">
-            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)] border border-white/5">
-               <div className="w-full h-full">
-                 {meetingData?.screenSharerId ? (
-                   <div className="w-full h-full relative">
-                      <RemoteStream 
-                        stream={meetingData.screenSharerId === user?.uid ? screenStreamRef.current : remoteStreams.get(meetingData.screenSharerId) || null} 
-                        name={featuredParticipant?.name || 'Screen Share'} 
-                        isMe={meetingData.screenSharerId === user?.uid} 
-                        isFeatured={true}
-                      />
+            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-2xl border border-white/5">
+               <div className="w-full h-full flex items-center justify-center p-8">
+                 {featuredParticipant ? (
+                   <div className="w-full h-full max-w-[1400px] mx-auto">
+                     <RemoteStream 
+                       stream={featuredParticipant.id === user?.uid ? localStreamRef.current : remoteStreams.get(featuredParticipant.id) || null} 
+                       name={featuredParticipant.name} 
+                       isMe={featuredParticipant.id === user?.uid} 
+                       isMuted={featuredParticipant.isMuted} 
+                       isVideoOff={featuredParticipant.isVideoOff}
+                       isFeatured={true}
+                     />
                    </div>
                  ) : (
-                   <div className="h-full w-full flex items-center justify-center p-8">
-                      {featuredParticipant ? (
-                        <div className="w-full h-full max-w-[1400px] mx-auto">
-                          <RemoteStream 
-                            stream={featuredParticipant.id === user?.uid ? localStreamRef.current : remoteStreams.get(featuredParticipant.id) || null} 
-                            name={featuredParticipant.name} 
-                            isMe={featuredParticipant.id === user?.uid} 
-                            isMuted={featuredParticipant.isMuted} 
-                            isVideoOff={featuredParticipant.isVideoOff}
-                            isFeatured={true}
-                          />
-                        </div>
-                      ) : (
-                        <div className="text-zinc-700 font-black uppercase tracking-[1em] animate-pulse text-[10px]">Connecting...</div>
-                      )}
-                   </div>
+                   <div className="text-zinc-700 font-black uppercase tracking-[1em] animate-pulse text-[10px]">Connecting...</div>
                  )}
                </div>
               {hasMediaPermission === false && (
@@ -593,7 +488,7 @@ export default function RoomPage() {
               )}
             </div>
 
-            <div className="h-28 mx-auto w-fit bg-white rounded-[3rem] border border-zinc-100 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.15)] flex items-center px-12 gap-6 shrink-0 -mt-14 z-20">
+            <div className="h-28 mx-auto w-fit bg-white rounded-[3rem] border border-zinc-100 shadow-xl flex items-center px-12 gap-6 shrink-0 -mt-14 z-20">
                <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg", isAudioMuted ? "bg-[#FF4545]" : "bg-zinc-100")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
                <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-2xl h-16 w-16 shadow-lg", isVideoOff ? "bg-[#FF4545]" : "bg-zinc-100")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
                <Separator orientation="vertical" className="h-12 mx-4" />
@@ -601,11 +496,11 @@ export default function RoomPage() {
             </div>
           </div>
 
-          <Card className="w-[420px] flex flex-col overflow-hidden border-zinc-100 shadow-[0_50px_100px_-20px_rgba(0,0,0,0.1)] shrink-0 rounded-[3.5rem] bg-white border-none">
+          <Card className="w-[420px] flex flex-col overflow-hidden border-zinc-100 shadow-xl shrink-0 rounded-[3.5rem] bg-white border-none">
              <Tabs defaultValue="participants" className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-8 pt-10 pb-4 border-b">
                    <TabsList className="w-full h-16 grid grid-cols-2 rounded-[1.5rem] bg-zinc-100/80 p-1.5 shadow-inner">
-                      <TabsTrigger value="participants" className="rounded-2xl font-black text-[11px] uppercase tracking-widest"><Users className="h-4 w-4 mr-2" /> Students</TabsTrigger>
+                      <TabsTrigger value="participants" className="rounded-2xl font-black text-[11px] uppercase tracking-widest"><Users className="h-4 w-4 mr-2" /> Members</TabsTrigger>
                       <TabsTrigger value="chat" className="rounded-2xl font-black text-[11px] uppercase tracking-widest"><MessageSquare className="h-4 w-4 mr-2" /> Chat</TabsTrigger>
                    </TabsList>
                 </div>

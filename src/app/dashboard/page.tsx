@@ -61,11 +61,11 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // ULTRA FRUGAL: Limited to 3 sessions to minimize document reads
+    // QUOTA EFFICIENCY: Limited to 5 meetings for Spark plan
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      limit(3)
+      limit(5)
     );
   }, [user?.uid, firestore]);
 
@@ -101,7 +101,7 @@ export default function DashboardPage() {
     try {
       const batch = writeBatch(firestore);
       const seriesId = Math.random().toString(36).substr(2, 9);
-      // Frugal limit: Max 2 recurring sessions per action
+      // Frugal limit: Max 2 recurring sessions to stay under free tier write limits
       const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 2) : 1;
       const duration = parseFloat(fixedDurationHours);
 
