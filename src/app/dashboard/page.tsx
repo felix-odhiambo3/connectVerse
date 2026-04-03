@@ -269,7 +269,7 @@ export default function DashboardPage() {
                           {form.watch('isRecurring') && (
                             <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-2">
                               <FormField control={form.control} name="repeatInterval" render={({ field }) => (
-                                <FormItem><FormLabel>Pattern</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value}><FormControl><SelectTrigger><SelectTrigger><SelectValue placeholder="Select interval" /></SelectTrigger></SelectTrigger></FormControl><SelectContent><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem></SelectContent></Select></FormItem>
+                                <FormItem><FormLabel>Pattern</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select interval" /></SelectTrigger></FormControl><SelectContent><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem></SelectContent></Select></FormItem>
                               )} />
                               <FormField control={form.control} name="occurrences" render={({ field }) => (
                                 <FormItem><FormLabel>Total Sessions</FormLabel><FormControl><Input type="number" min="2" max="2" {...field} /></FormControl></FormItem>
