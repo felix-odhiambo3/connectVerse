@@ -61,7 +61,7 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA EFFICIENCY: Ultra-strict limit of 3 sessions to minimize read overhead
+    // QUOTA EFFICIENCY: Ultra-strict limit of 3 sessions for history
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
@@ -101,7 +101,7 @@ export default function DashboardPage() {
     try {
       const batch = writeBatch(firestore);
       const seriesId = Math.random().toString(36).substr(2, 9);
-      // Frugal limit: Max 2 recurring sessions to stay under free tier write limits
+      // Frugal limit: Max 2 sessions to stay under tier write limits
       const count = isRecurring ? Math.min(parseInt(occurrences || "1", 10), 2) : 1;
       const duration = parseFloat(fixedDurationHours);
 
@@ -154,7 +154,7 @@ export default function DashboardPage() {
         name: 'Instant Meeting',
         hostId: user.uid,
         createdAt: serverTimestamp(),
-        status: 'active', // Set to active immediately
+        status: 'active',
         isLocked: false,
         isRecording: false,
         fixedDurationHours: 1, 

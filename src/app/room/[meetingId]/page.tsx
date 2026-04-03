@@ -131,8 +131,9 @@ export default function RoomPage() {
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
   
-  // QUOTA PROTECTION: Ref to track last sync to prevent redundant writes
+  // QUOTA PROTECTION: Track last sync state and time to prevent "write storms"
   const lastSyncRef = useRef<string>("");
+  const lastSyncTimeRef = useRef<number>(0);
 
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -145,15 +146,15 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Ultra-strict limit of 3 participants to minimize signaling read/write overhead
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
+    // QUOTA EFFICIENCY: Ultra-strict limit of 2 participants for active signaling
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Limit chat to 3 most recent messages
+    // QUOTA EFFICIENCY: Limit chat to 3 messages
     return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
@@ -175,10 +176,14 @@ export default function RoomPage() {
   const updatePresence = useCallback((updates: Partial<Participant>) => {
     if (!user || !firestore || !meetingId) return;
     
-    // QUOTA EFFICIENCY: Throttled sync - only write if state actually changed
+    const now = Date.now();
     const currentSyncKey = `${isAudioMuted}_${isVideoOff}_${hasHandRaised}`;
-    if (lastSyncRef.current === currentSyncKey && Object.keys(updates).length === 0) return;
+    
+    // QUOTA EFFICIENCY: Throttled sync (10s cooldown) + Change detection
+    if (lastSyncRef.current === currentSyncKey && now - lastSyncTimeRef.current < 10000) return;
+    
     lastSyncRef.current = currentSyncKey;
+    lastSyncTimeRef.current = now;
 
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     setDocumentNonBlocking(pRef, {
@@ -325,7 +330,7 @@ export default function RoomPage() {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
       };
 
-      // QUOTA PROTECTION: Atomic Signaling - Buffer candidates for 8s to send ONCE
+      // QUOTA PROTECTION: Atomic Signaling - Batch all candidates and send ONCE per session
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === 'complete') {
            updateDocumentNonBlocking(channelRef, { 
@@ -333,14 +338,6 @@ export default function RoomPage() {
           });
         }
       };
-
-      setTimeout(() => {
-        if (pc.iceGatheringState !== 'complete' && iceCandidates.length > 0) {
-           updateDocumentNonBlocking(channelRef, { 
-            candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
-          });
-        }
-      }, 8000);
 
       if (user.uid < participantId) {
         const offer = await pc.createOffer();
