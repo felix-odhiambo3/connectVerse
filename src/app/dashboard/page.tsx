@@ -4,7 +4,7 @@
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
-import { addDoc, collection, serverTimestamp, query, where, doc, writeBatch, limit } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, query, where, doc, writeBatch, limit, orderBy } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -61,10 +61,11 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA EFFICIENCY: Ultra-strict limit of 3 sessions for history
+    console.log("Fetching Dashboard Firestore...");
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
+      orderBy('createdAt', 'desc'),
       limit(3)
     );
   }, [user?.uid, firestore]);

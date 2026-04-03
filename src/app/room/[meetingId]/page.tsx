@@ -12,7 +12,6 @@ import {
   query,
   orderBy,
   updateDoc,
-  increment,
   writeBatch,
   setDoc,
   Timestamp,
@@ -20,20 +19,15 @@ import {
   limit,
   arrayUnion,
 } from 'firebase/firestore';
-import { format } from 'date-fns';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, ScreenShare, ScreenShareOff, Timer, Send, Hand, Share2, Shield, User as UserIcon, Smile, BarChart3, Trophy, Frown, AlertCircle, RefreshCcw, Lock, MessageSquare, Users, BookOpen, Download, UserMinus, Star } from 'lucide-react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, Timer, Send, Hand, User as UserIcon, AlertCircle, RefreshCcw, MessageSquare, Users, Trophy } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Input } from '@/components/ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
@@ -131,10 +125,6 @@ export default function RoomPage() {
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
   
-  // QUOTA PROTECTION: Track last sync state and time to prevent "write storms"
-  const lastSyncRef = useRef<string>("");
-  const lastSyncTimeRef = useRef<number>(0);
-
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
     return doc(firestore, 'meetings', meetingId);
@@ -146,8 +136,8 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Ultra-strict limit of 2 participants for active signaling
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
+    // QUOTA EFFICIENCY: Ultra-strict limit of 3 participants for signaling
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
@@ -173,18 +163,10 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  const updatePresence = useCallback((updates: Partial<Participant>) => {
+  // EVENT-DRIVEN SYNC: No more reactive useEffect for state sync.
+  const syncPresence = useCallback((updates: Partial<Participant>) => {
     if (!user || !firestore || !meetingId) return;
-    
-    const now = Date.now();
-    const currentSyncKey = `${isAudioMuted}_${isVideoOff}_${hasHandRaised}`;
-    
-    // QUOTA EFFICIENCY: Throttled sync (10s cooldown) + Change detection
-    if (lastSyncRef.current === currentSyncKey && now - lastSyncTimeRef.current < 10000) return;
-    
-    lastSyncRef.current = currentSyncKey;
-    lastSyncTimeRef.current = now;
-
+    console.log("Syncing Firestore presence...");
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     setDocumentNonBlocking(pRef, {
       ...updates,
@@ -192,16 +174,14 @@ export default function RoomPage() {
       name: user.displayName || user.email?.split('@')[0],
       joinedAt: serverTimestamp(),
       role: user.uid === meetingData?.hostId ? 'host' : 'participant',
-      isMuted: isAudioMuted,
-      isVideoOff: isVideoOff,
-      hasRaisedHand: hasHandRaised,
     }, { merge: true });
-  }, [user, firestore, meetingId, meetingData?.hostId, isAudioMuted, isVideoOff, hasHandRaised]);
+  }, [user, firestore, meetingId, meetingData?.hostId]);
 
+  // Initial presence on mount
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData) return;
-    updatePresence({});
-  }, [user?.uid, meetingId, firestore, isMeetingLoading, !!meetingData, isAudioMuted, isVideoOff, hasHandRaised]);
+    syncPresence({ isMuted: isAudioMuted, isVideoOff: isVideoOff, hasRaisedHand: hasHandRaised });
+  }, [user?.uid, meetingId, !!meetingData, isMeetingLoading]);
 
   const initMedia = useCallback(async (isMounted: boolean) => {
     if (isInitializingRef.current || localStreamRef.current) return;
@@ -264,12 +244,14 @@ export default function RoomPage() {
           if (sender) sender.replaceTrack(newTrack);
         });
         setIsVideoOff(false);
+        syncPresence({ isVideoOff: false });
       } catch (err) {
         toast({ variant: 'destructive', title: 'Camera Error' });
       }
     } else {
       localStreamRef.current.getVideoTracks().forEach(track => { track.enabled = false; track.stop(); });
       setIsVideoOff(true);
+      syncPresence({ isVideoOff: true });
     }
     setIsTogglingVideo(false);
   };
@@ -279,8 +261,16 @@ export default function RoomPage() {
     const newState = !isAudioMuted;
     setIsAudioMuted(newState);
     localStreamRef.current.getAudioTracks().forEach(t => t.enabled = !newState);
+    syncPresence({ isMuted: newState });
   };
 
+  const handleToggleHand = () => {
+    const newState = !hasHandRaised;
+    setHasHandRaised(newState);
+    syncPresence({ hasRaisedHand: newState });
+  };
+
+  // SIGNALING: Atomic ICE Handshake
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
@@ -330,9 +320,10 @@ export default function RoomPage() {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
       };
 
-      // QUOTA PROTECTION: Atomic Signaling - Batch all candidates and send ONCE per session
+      // ATOMIC SIGNALING: Batch candidates once gathering is complete
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === 'complete') {
+           console.log("Signaling: Sending batch candidates...");
            updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
           });
@@ -489,7 +480,7 @@ export default function RoomPage() {
                <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg", isAudioMuted ? "bg-[#FF4545]" : "bg-zinc-100")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
                <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isTogglingVideo} className={cn("rounded-2xl h-16 w-16 shadow-lg", isVideoOff ? "bg-[#FF4545]" : "bg-zinc-100")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
                <Separator orientation="vertical" className="h-12 mx-4" />
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => setHasHandRaised(!hasHandRaised)} className={cn("rounded-2xl h-16 w-16 shadow-lg", hasHandRaised ? "bg-yellow-400" : "bg-zinc-50")}><Hand className="h-7 w-7" /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={handleToggleHand} className={cn("rounded-2xl h-16 w-16 shadow-lg", hasHandRaised ? "bg-yellow-400" : "bg-zinc-50")}><Hand className="h-7 w-7" /></Button>
             </div>
           </div>
 
