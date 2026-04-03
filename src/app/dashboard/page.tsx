@@ -61,11 +61,11 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // ULTRA FRUGAL: Limit to 3 most recent to strictly preserve quota
+    // FRUGAL: Limit to 10 sessions to strictly preserve quota
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      limit(3)
+      limit(10)
     );
   }, [user?.uid, firestore]);
 
@@ -74,7 +74,7 @@ export default function DashboardPage() {
   const upcomingMeetings = useMemo(() => {
     if (!allUserMeetings) return [];
     return allUserMeetings
-      .filter(meeting => meeting.status === 'scheduled')
+      .filter(meeting => meeting.status === 'scheduled' || meeting.status === 'active')
       .sort((a, b) => {
         const dateA = a.scheduledAt?.seconds || 0;
         const dateB = b.scheduledAt?.seconds || 0;
@@ -151,9 +151,10 @@ export default function DashboardPage() {
     setIsCreating(true);
     try {
       const newMeetingRef = await addDoc(collection(firestore, 'meetings'), {
+        name: 'Instant Meeting',
         hostId: user.uid,
         createdAt: serverTimestamp(),
-        status: 'pending',
+        status: 'active',
         isLocked: false,
         isRecording: false,
         fixedDurationHours: 1, 

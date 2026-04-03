@@ -36,6 +36,7 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface Participant {
   id: string;
@@ -160,20 +161,20 @@ export default function RoomPage() {
     return doc(firestore, 'meetings', meetingId);
   }, [firestore, meetingId, user]);
 
-  const { data: meetingData } = useDoc<any>(meetingRef);
+  const { data: meetingData, isLoading: isMeetingLoading } = useDoc<any>(meetingRef);
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Limit participants to strictly preserve quota
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(5));
+    // FRUGAL: Limit participants window for mesh efficiency
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ULTRA FRUGAL: Limit chat to 3 most recent to strictly preserve quota
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
+    // FRUGAL: Limit chat to preserve quota while remaining usable
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(15));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -395,7 +396,7 @@ export default function RoomPage() {
         if (event.candidate && pc.signalingState !== 'closed') {
           iceBuffer.push(event.candidate.toJSON());
           if (iceTimeout) clearTimeout(iceTimeout);
-          // ULTRA FRUGAL: Wait 2.5s to batch all candidates into one write
+          // FRUGAL: Wait to batch all candidates into one write
           iceTimeout = setTimeout(() => {
             if (iceBuffer.length > 0) {
               updateDoc(channelRef, { candidates: arrayUnion(...iceBuffer.map(c => ({ candidate: c, from: user.uid }))) })
@@ -416,7 +417,6 @@ export default function RoomPage() {
           const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
             const data = snapshot.data();
             if (pc.signalingState === 'closed') return;
-            // STRICT SIGNALING GUARD
             if (data?.answer && pc.signalingState === 'have-local-offer') {
               try { await pc.setRemoteDescription(new RTCSessionDescription(data.answer)); } catch (e) {}
             }
@@ -505,7 +505,7 @@ export default function RoomPage() {
     if (!user || !meetingId || !firestore || !meetingData || meetingData.status === 'finished') return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
 
-    // ULTRA FRUGAL: 30-minute credit heartbeat to strictly preserve quota
+    // FRUGAL: High-interval credit heartbeat
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUserParticipant?.role !== 'waiting' && currentUserParticipant?.role !== 'left') {
         const now = Date.now() / 1000;
@@ -641,6 +641,18 @@ export default function RoomPage() {
     setIsProcessingAttendance(false);
     setShowSummary(true);
   };
+
+  if (isMeetingLoading) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-8">
+        <div className="space-y-4 w-full max-w-sm">
+          <Skeleton className="h-12 w-3/4 mx-auto rounded-xl" />
+          <Skeleton className="h-4 w-1/2 mx-auto rounded-xl" />
+          <Skeleton className="h-64 w-full rounded-[3rem] mt-8" />
+        </div>
+      </div>
+    );
+  }
 
   if (currentUserParticipant?.role === 'waiting') {
     return (
