@@ -154,16 +154,16 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ABSOLUTE FRUGAL: Reduced participant window to 2 members to minimize signaling complexity
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
+    // ULTRA FRUGAL: Restrict signaling mesh to the 3 most active participants to save quota
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // ABSOLUTE FRUGAL: Reduced chat history window to 2 messages
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(2));
+    // ULTRA FRUGAL: Restricted chat history to 5 messages
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -171,8 +171,6 @@ export default function RoomPage() {
 
   const currentUserParticipant = participants?.find(p => p.id === user?.uid);
   const isHost = user?.uid === meetingData?.hostId;
-  const isCoHost = currentUserParticipant?.role === 'co-host';
-  const hasAdminPrivileges = isHost || isCoHost;
   
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
@@ -194,8 +192,6 @@ export default function RoomPage() {
     }
     return sortedParticipants[0];
   }, [activeParticipants, sortedParticipants, meetingData?.screenSharerId]);
-
-  const waitingParticipants = participants?.filter(p => p.role === 'waiting') || [];
 
   const seriesAttendanceRef = useMemoFirebase(() => {
     if (!firestore || !meetingData?.seriesId || !user) return null;
@@ -358,6 +354,7 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
+      // QUOTA OPTIMIZATION: Buffer ICE candidates for 3 seconds to send as one atomic write
       const iceCandidates: RTCIceCandidateInit[] = [];
       pc.onicecandidate = (event) => {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
@@ -648,4 +645,3 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
-
