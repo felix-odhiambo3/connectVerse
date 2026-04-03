@@ -7,23 +7,15 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-
     match /users/{userId} {
       allow get: if isSignedIn();
-      allow list: if false;
-      allow create: if isOwner(userId);
-      allow update: if isOwner(userId);
-      allow delete: if false;
+      allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
     match /meetings/{meetingId} {
-      // Allow any signed-in user to read and create meetings
+      // Allow any signed-in user to read, create, and update meetings
       // This includes list operations for the dashboard
-      allow read, create, update: if isSignedIn();
-      allow delete: if isSignedIn() && (resource == null || resource.data.hostId == request.auth.uid);
+      allow read, write: if isSignedIn();
 
       // Recursive match for all sub-collections (participants, chat, webrtc signaling)
       match /{allSubcollections=**} {

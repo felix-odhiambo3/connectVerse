@@ -135,16 +135,16 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Ultra-strict limit of 3 participants for signaling on Spark plan
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
+    // QUOTA: Extreme limits for Spark plan (2 for signaling)
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Limit chat to 5 most recent messages
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
+    // QUOTA: Limit chat to 3 messages
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -152,8 +152,8 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    // QUOTA EFFICIENCY: Strictly limit signaling to the 3 most active participants
-    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 3);
+    // QUOTA: Only signaling for the top 2
+    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 2);
   }, [participants]);
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
@@ -163,10 +163,9 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // PRESENCE: Synchronize state to Firestore only when explicit changes occur (Event-Driven)
+  // ATOMIC PRESENCE: Event-driven only. No reactive useEffect loop.
   const syncPresence = useCallback((updates: Partial<Participant>) => {
     if (!user || !firestore || !meetingId || isMeetingLoading || !meetingData) return;
-    
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     setDocumentNonBlocking(pRef, {
       ...updates,
@@ -175,12 +174,12 @@ export default function RoomPage() {
       joinedAt: serverTimestamp(),
       role: user.uid === meetingData?.hostId ? 'host' : 'participant',
     }, { merge: true });
-  }, [user, firestore, meetingId, meetingData?.hostId, isMeetingLoading]);
+  }, [user, firestore, meetingId, meetingData, isMeetingLoading]);
 
-  // Initial presence on mount
+  // Join Presence
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData) return;
-    syncPresence({ isMuted: isAudioMuted, isVideoOff: isVideoOff, hasRaisedHand: hasHandRaised });
+    syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false });
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 
   const initMedia = useCallback(async (isMounted: boolean) => {
@@ -212,7 +211,6 @@ export default function RoomPage() {
       localStreamRef.current = stream;
       setHasMediaPermission(true);
     }
-    
     isInitializingRef.current = false;
   }, []);
 
@@ -270,7 +268,7 @@ export default function RoomPage() {
     syncPresence({ hasRaisedHand: newState });
   };
 
-  // SIGNALING: Atomic ICE Handshake using Array Union to batch writes
+  // ATOMIC SIGNALING: Zero-chatter mode. Wait for ICE complete before one-shot write.
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
@@ -320,7 +318,7 @@ export default function RoomPage() {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
       };
 
-      // ATOMIC SIGNALING: Batch candidates once gathering is complete to save write quota
+      // QUOTA EFFICIENCY: Wait for entire gathering to complete.
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === 'complete') {
            updateDocumentNonBlocking(channelRef, { 
@@ -401,7 +399,6 @@ export default function RoomPage() {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
         <h1 className="text-4xl font-black mb-3 tracking-tight text-zinc-900">Meeting Not Found</h1>
-        <p className="text-zinc-500 max-sm font-bold text-sm leading-relaxed mb-8">This session may have ended or the link is incorrect.</p>
         <Button onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
       </div>
     );
@@ -410,10 +407,9 @@ export default function RoomPage() {
   if (meetingData?.status === 'finished') {
     return (
       <div className="flex h-screen items-center justify-center bg-[#F8F9FB] p-6">
-        <Card className="w-full max-w-md shadow-xl rounded-[3rem] text-center p-12">
+        <Card className="w-full max-w-md shadow-xl rounded-[3rem] text-center p-12 bg-white">
           <Trophy className="h-20 w-20 mx-auto text-primary mb-6" />
           <h2 className="text-3xl font-black mb-4">Meeting Finished</h2>
-          <p className="text-zinc-500 mb-8 font-medium">The host has ended this session.</p>
           <Button className="w-full h-14 rounded-2xl" onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
         </Card>
       </div>
@@ -428,7 +424,7 @@ export default function RoomPage() {
             <div className="bg-zinc-900 flex items-center justify-center h-12 w-12 rounded-[1.25rem] text-white font-black text-xl shadow-lg ring-4 ring-zinc-50">CV</div>
             <div className="flex flex-col">
                <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Session'}</h1>
-               <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">{meetingData?.isLocked ? 'Restricted' : 'Public Session'}</p>
+               <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">Live Room</p>
             </div>
           </div>
           <div className="flex items-center gap-6">
@@ -464,12 +460,10 @@ export default function RoomPage() {
                </div>
               {hasMediaPermission === false && (
                 <div className="absolute inset-0 flex items-center justify-center bg-[#121212]/98 z-30 px-10">
-                  <div className="max-w-md w-full text-center">
-                    <div className="bg-[#FF4545]/10 w-32 h-32 rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 shadow-inner border border-white/5">
-                      <AlertCircle className="h-14 w-14 text-[#FF4545]" />
-                    </div>
-                    <h2 className="text-white text-3xl font-black mb-4 tracking-tight">Access Required</h2>
-                    <Button variant="secondary" className="w-full h-16 rounded-[1.5rem] font-black uppercase tracking-widest text-[11px] bg-white text-zinc-900" onClick={() => window.location.reload()}><RefreshCcw className="mr-4 h-5 w-5" /> Retry</Button>
+                  <div className="max-w-md w-full text-center text-white">
+                    <AlertCircle className="h-14 w-14 text-[#FF4545] mx-auto mb-6" />
+                    <h2 className="text-3xl font-black mb-4">Access Required</h2>
+                    <Button variant="secondary" className="w-full h-16 rounded-[1.5rem]" onClick={() => window.location.reload()}><RefreshCcw className="mr-4 h-5 w-5" /> Retry</Button>
                   </div>
                 </div>
               )}
