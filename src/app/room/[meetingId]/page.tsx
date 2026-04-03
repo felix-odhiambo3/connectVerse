@@ -123,6 +123,7 @@ export default function RoomPage() {
   const isInitializingRef = useRef(false);
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
+  const initialPresenceSynced = useRef(false);
   
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -132,6 +133,7 @@ export default function RoomPage() {
   const { data: meetingData, isLoading: isMeetingLoading } = useDoc<any>(meetingRef);
 
   const isHost = user?.uid === meetingData?.hostId;
+  const hostId = meetingData?.hostId;
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -143,7 +145,6 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Limit chat to 3 messages
     return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
@@ -152,7 +153,6 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    // QUOTA: Only signaling for the top 2
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 2);
   }, [participants]);
 
@@ -163,23 +163,24 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // ATOMIC PRESENCE: Event-driven only. No reactive useEffect loop.
+  // ATOMIC PRESENCE: Event-driven only. No reactive loop.
   const syncPresence = useCallback((updates: Partial<Participant>) => {
-    if (!user || !firestore || !meetingId || isMeetingLoading || !meetingData) return;
+    if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     setDocumentNonBlocking(pRef, {
       ...updates,
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
       joinedAt: serverTimestamp(),
-      role: user.uid === meetingData?.hostId ? 'host' : 'participant',
+      role: user.uid === hostId ? 'host' : 'participant',
     }, { merge: true });
-  }, [user, firestore, meetingId, meetingData, isMeetingLoading]);
+  }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading]);
 
-  // Join Presence
+  // Join Presence (Run once)
   useEffect(() => {
-    if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData) return;
+    if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
     syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false });
+    initialPresenceSynced.current = true;
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 
   const initMedia = useCallback(async (isMounted: boolean) => {
@@ -313,19 +314,28 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
-      const iceCandidates: RTCIceCandidateInit[] = [];
+      let iceCandidates: RTCIceCandidateInit[] = [];
       pc.onicecandidate = (event) => {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
       };
 
-      // QUOTA EFFICIENCY: Wait for entire gathering to complete.
-      pc.onicegatheringstatechange = () => {
-        if (pc.iceGatheringState === 'complete') {
-           updateDocumentNonBlocking(channelRef, { 
+      const sendCandidates = () => {
+        if (iceCandidates.length > 0) {
+          updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
           });
+          iceCandidates = [];
         }
       };
+
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') {
+          sendCandidates();
+        }
+      };
+
+      // Fallback if gathering takes too long
+      const gatheringTimeout = setTimeout(sendCandidates, 5000);
 
       if (user.uid < participantId) {
         const offer = await pc.createOffer();
@@ -361,6 +371,8 @@ export default function RoomPage() {
         });
         signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
       }
+      
+      return () => clearTimeout(gatheringTimeout);
     });
   }, [user?.uid, firestore, meetingId, activeParticipantIds, hasMediaPermission]);
 
