@@ -152,7 +152,8 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
+    // QUOTA EFFICIENCY: Strictly limit signaling to the 3 most active participants
+    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 3);
   }, [participants]);
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
@@ -162,7 +163,7 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // PRESENCE: Synchronize state to Firestore only when explicit changes occur
+  // PRESENCE: Synchronize state to Firestore only when explicit changes occur (Event-Driven)
   const syncPresence = useCallback((updates: Partial<Participant>) => {
     if (!user || !firestore || !meetingId || isMeetingLoading || !meetingData) return;
     
@@ -400,7 +401,7 @@ export default function RoomPage() {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
         <h1 className="text-4xl font-black mb-3 tracking-tight text-zinc-900">Meeting Not Found</h1>
-        <p className="text-zinc-500 max-w-sm font-bold text-sm leading-relaxed mb-8">This session may have ended or the link is incorrect.</p>
+        <p className="text-zinc-500 max-sm font-bold text-sm leading-relaxed mb-8">This session may have ended or the link is incorrect.</p>
         <Button onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
       </div>
     );
@@ -409,7 +410,7 @@ export default function RoomPage() {
   if (meetingData?.status === 'finished') {
     return (
       <div className="flex h-screen items-center justify-center bg-[#F8F9FB] p-6">
-        <Card className="w-full max-md shadow-xl rounded-[3rem] text-center p-12">
+        <Card className="w-full max-w-md shadow-xl rounded-[3rem] text-center p-12">
           <Trophy className="h-20 w-20 mx-auto text-primary mb-6" />
           <h2 className="text-3xl font-black mb-4">Meeting Finished</h2>
           <p className="text-zinc-500 mb-8 font-medium">The host has ended this session.</p>
