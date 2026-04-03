@@ -61,7 +61,7 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA EFFICIENCY: Limited to 5 meetings for Spark plan
+    // QUOTA EFFICIENCY: Stricter limit of 5 sessions for Spark plan
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),

@@ -123,7 +123,6 @@ export default function RoomPage() {
   const [chatInput, setChatInput] = useState('');
   const [isProcessingAttendance, setIsProcessingAttendance] = useState(false);
   const [isTogglingVideo, setIsTogglingVideo] = useState(false);
-  const [currentTime, setCurrentTime] = useState(Date.now() / 1000);
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
 
@@ -141,24 +140,21 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Limit real-time mesh to 5 active participants
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(5));
+    // QUOTA EFFICIENCY: Limit real-time mesh to 4 active participants to reduce signaling pairs from 10 to 6
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(4));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA EFFICIENCY: Limit chat history to 10 messages
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
+    // QUOTA EFFICIENCY: Limit chat history to 5 messages to reduce read overhead
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
   const chatMessages = useMemo(() => rawChatMessages ? [...rawChatMessages].reverse() : [], [rawChatMessages]);
 
-  const currentUserParticipant = participants?.find(p => p.id === user?.uid);
-  const isHost = user?.uid === meetingData?.hostId;
-  
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
@@ -174,7 +170,7 @@ export default function RoomPage() {
   const updatePresence = useCallback((updates: Partial<Participant>) => {
     if (!user || !firestore || !meetingId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
-    // Use non-blocking to prevent "Write stream exhausted"
+    // Use surgical non-blocking updates to reduce write-stream exhaustion
     setDocumentNonBlocking(pRef, {
       ...updates,
       id: user.uid,
@@ -323,7 +319,7 @@ export default function RoomPage() {
       };
 
       pc.onicegatheringstatechange = () => {
-        // ATOMIC SIGNALING: Wait for 3s or complete to send all candidates in ONE write
+        // ATOMIC SIGNALING: Wait for completion or 5s to send all candidates in ONE write
         if (pc.iceGatheringState === 'complete') {
            updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
@@ -331,14 +327,14 @@ export default function RoomPage() {
         }
       };
 
-      // Fallback: Send after 3s if not complete to avoid hanging
+      // Fallback: Send after 5s if not complete to avoid hanging peer connection
       setTimeout(() => {
         if (pc.iceGatheringState !== 'complete' && iceCandidates.length > 0) {
            updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
           });
         }
-      }, 3000);
+      }, 5000);
 
       if (user.uid < participantId) {
         const offer = await pc.createOffer();
