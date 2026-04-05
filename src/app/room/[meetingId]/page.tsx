@@ -36,7 +36,9 @@ import {
   ScreenShare,
   StopCircle,
   Monitor,
-  MoreVertical
+  MoreVertical,
+  Link as LinkIcon,
+  Copy
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -286,6 +288,12 @@ export default function RoomPage() {
     setIsSharingScreen(false);
   };
 
+  const copyInviteLink = () => {
+    const link = window.location.href;
+    navigator.clipboard.writeText(link);
+    toast({ title: "Link copied!", description: "Meeting invitation link is ready to share." });
+  };
+
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds) return;
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
@@ -373,7 +381,6 @@ export default function RoomPage() {
     );
   }
 
-  // Determine whose camera to show in the spotlight (if no screen sharing)
   const spotlightParticipantId = activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid;
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
@@ -395,7 +402,10 @@ export default function RoomPage() {
           <div className="flex items-center gap-8">
             <div className="bg-zinc-900 flex items-center justify-center h-12 w-12 rounded-[1.25rem] text-white font-black text-xl shadow-lg ring-4 ring-zinc-50">CV</div>
             <div className="flex flex-col">
-               <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Session'}</h1>
+               <div className="flex items-center gap-3">
+                 <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Session'}</h1>
+                 <Button variant="ghost" size="icon" onClick={copyInviteLink} className="h-8 w-8 rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/5"><LinkIcon className="h-4 w-4" /></Button>
+               </div>
                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">{screenSharerId ? 'Presentation Active' : 'Live Room'}</p>
             </div>
           </div>
@@ -411,7 +421,6 @@ export default function RoomPage() {
 
         <main className="flex-1 flex overflow-hidden p-8 gap-8 relative">
           <div className="flex-1 flex flex-col gap-8 overflow-hidden relative">
-            {/* Spotlight Stage */}
             <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-2xl border border-white/5 p-4">
                <div className="w-full h-full flex items-center justify-center">
                  {screenSharerId ? (
@@ -432,7 +441,6 @@ export default function RoomPage() {
                  )}
                </div>
 
-              {/* PiP Camera Overlay (Reduced video when screen sharing) */}
               {screenSharerId && (
                 <div className="absolute bottom-12 right-12 w-64 aspect-video rounded-3xl overflow-hidden border-4 border-white shadow-2xl z-40 bg-zinc-900 ring-1 ring-black/10 transition-all duration-500 hover:scale-110">
                    <StreamView 
@@ -446,7 +454,6 @@ export default function RoomPage() {
               )}
             </div>
 
-            {/* Media Controls Bar */}
             <div className="h-28 mx-auto w-fit bg-white rounded-[3rem] border border-zinc-100 shadow-xl flex items-center px-10 gap-4 shrink-0 -mt-14 z-20">
                <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", isAudioMuted ? "bg-[#FF4545] scale-110" : "bg-zinc-100")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
                <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", isVideoOff ? "bg-[#FF4545] scale-110" : "bg-zinc-100")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
@@ -457,7 +464,6 @@ export default function RoomPage() {
             </div>
           </div>
 
-          {/* Sidebar (Chat & Members list only, no videos) */}
           <Card className="w-[400px] flex flex-col overflow-hidden border-zinc-100 shadow-xl shrink-0 rounded-[3.5rem] bg-white border-none">
              <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-8 pt-10 pb-4 border-b">

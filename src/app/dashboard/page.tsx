@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat } from 'lucide-react';
+import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat, Copy, Link as LinkIcon } from 'lucide-react';
 import Link from 'next/link';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
@@ -58,7 +58,6 @@ export default function DashboardPage() {
     },
   });
 
-  // QUOTA: Removing orderBy to avoid composite index requirement which often triggers permission errors if missing
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
     return query(
@@ -72,7 +71,6 @@ export default function DashboardPage() {
 
   const upcomingMeetings = useMemo(() => {
     if (!rawUserMeetings) return [];
-    // QUOTA: Sorting client-side to keep Firestore queries simple and index-free
     return [...rawUserMeetings]
       .filter(meeting => meeting.status === 'scheduled' || meeting.status === 'active')
       .sort((a, b) => {
@@ -80,7 +78,7 @@ export default function DashboardPage() {
         const dateB = b.scheduledAt?.seconds || (b.createdAt?.seconds + 300) || 0;
         return dateA - dateB;
       })
-      .slice(0, 3);
+      .slice(0, 10);
   }, [rawUserMeetings]);
 
   const handleScheduleSubmit = async (values: z.infer<typeof scheduleMeetingSchema>) => {
@@ -181,6 +179,12 @@ export default function DashboardPage() {
     }
     if (id) router.push(`/room/${id}`);
     else toast({ variant: 'destructive', title: 'Invalid ID' });
+  };
+
+  const copyMeetingLink = (meetingId: string) => {
+    const link = `${window.location.origin}/room/${meetingId}`;
+    navigator.clipboard.writeText(link);
+    toast({ title: "Link copied!", description: "Meeting invitation link is ready to share." });
   };
 
   const deleteMeeting = (meetingId: string) => {
@@ -304,7 +308,10 @@ export default function DashboardPage() {
                       <CardHeader className="p-8 pb-4">
                         <div className="flex justify-between items-start mb-4">
                            <div className="bg-zinc-50 p-3 rounded-2xl"><Video className="h-5 w-5 text-zinc-900" /></div>
-                          {meeting.seriesId && <Repeat className="h-4 w-4 text-zinc-300" />}
+                          <div className="flex gap-2">
+                             {meeting.seriesId && <Repeat className="h-4 w-4 text-zinc-300" />}
+                             <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/5" onClick={() => copyMeetingLink(meeting.id)}><Copy className="h-4 w-4" /></Button>
+                          </div>
                         </div>
                         <CardTitle className="text-xl font-black truncate">{meeting.name}</CardTitle>
                         <CardDescription className="font-bold text-zinc-400 text-xs mt-2 uppercase tracking-widest">
