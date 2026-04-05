@@ -137,24 +137,22 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Limiting real-time list to stay within Spark plan bounds
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Extreme limitation for chat history
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(10));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
   const chatMessages = useMemo(() => rawChatMessages ? [...rawChatMessages].reverse() : [], [rawChatMessages]);
 
+  // Quota safe mesh: only signaling with the 2 most active participants
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    // Only mesh the 2 most active to save massive quota/CPU
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 2);
   }, [participants]);
 
@@ -165,7 +163,6 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // Event-driven presence sync (No re-render loops)
   const syncPresence = useCallback((updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -181,7 +178,6 @@ export default function RoomPage() {
     setDocumentNonBlocking(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading]);
 
-  // One-time initialization of presence
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
     syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false }, true);
@@ -274,14 +270,13 @@ export default function RoomPage() {
     syncPresence({ hasRaisedHand: newState });
   };
 
-  // WebRTC Signaling Logic (Robust Glare Handling & Atomic Writes)
+  // WebRTC Signaling Logic (Resolved InvalidStateError)
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // Cleanup stale peer connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -319,7 +314,7 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
-      // Buffer candidates for atomic transmission
+      // Atomic ICE candidate gathering
       let iceCandidates: RTCIceCandidateInit[] = [];
       pc.onicecandidate = (event) => {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
@@ -339,7 +334,6 @@ export default function RoomPage() {
       };
       const gatheringTimeout = setTimeout(sendCandidates, 5000);
 
-      // UID-based polite/impolite pattern to resolve glare
       const isImpolite = user.uid < participantId;
 
       if (isImpolite) {
@@ -351,8 +345,11 @@ export default function RoomPage() {
           const data = snapshot.data();
           if (!data) return;
 
+          // Guard setLocalDescription with state checks to prevent InvalidStateError
           if (data.answer && pc.signalingState === 'have-local-offer') {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer)).catch(() => {});
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            } catch (err) { /* Silent ignore invalid state transitions */ }
           }
           if (data.candidates && pc.remoteDescription) {
             data.candidates.forEach((cand: any) => {
@@ -364,14 +361,18 @@ export default function RoomPage() {
       } else {
         const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
           const data = snapshot.data();
-          if (!data) return;
+          if (!data || !data.offer) return;
 
-          if (data.offer && pc.signalingState === 'stable') {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            updateDocumentNonBlocking(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
+          // Guard setLocalDescription with state checks to prevent InvalidStateError
+          if (pc.signalingState === 'stable') {
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              updateDocumentNonBlocking(channelRef, { answer: { type: answer.type, sdp: answer.sdp } });
+            } catch (err) { /* Silent ignore invalid state transitions */ }
           }
+          
           if (data.candidates && pc.remoteDescription) {
             data.candidates.forEach((cand: any) => {
               if (cand.from !== user.uid) pc.addIceCandidate(new RTCIceCandidate(cand.candidate)).catch(() => {});

@@ -11,10 +11,13 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Broadly allow all signed-in users to access meetings and sub-collections
-    // This resolves permission issues with collection-level listing (dashboard)
-    match /meetings/{allPaths=**} {
+    // Explicitly allow list/get/write for meetings and all nested sub-collections
+    // This resolves the permission error Elizabeth encountered on the dashboard
+    match /meetings/{meetingId} {
       allow read, write: if isSignedIn();
+      match /{allPaths=**} {
+        allow read, write: if isSignedIn();
+      }
     }
 
     match /seriesAttendance/{allPaths=**} {
