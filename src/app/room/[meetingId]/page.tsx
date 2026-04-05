@@ -21,6 +21,7 @@ import AuthGuard from '@/components/auth/AuthGuard';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import { Mic, MicOff, Video as VideoIcon, VideoOff, Timer, Send, Hand, User as UserIcon, AlertCircle, RefreshCcw, MessageSquare, Users, Trophy } from 'lucide-react';
@@ -136,7 +137,7 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Extreme limitation for signaling (Max 2 participants for P2P-focused Spark trial)
+    // QUOTA: Extreme limitation for signaling (Max 2 participants for P2P-focused trial)
     return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
   }, [firestore, meetingId, user]);
 
@@ -163,7 +164,7 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // Event-driven presence sync (Only called on manual actions or initial join)
+  // Event-driven presence sync
   const syncPresence = useCallback((updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -339,7 +340,6 @@ export default function RoomPage() {
         }
       };
 
-      // Safety timeout for candidate transmission
       const gatheringTimeout = setTimeout(sendCandidates, 5000);
 
       if (user.uid < participantId) {
