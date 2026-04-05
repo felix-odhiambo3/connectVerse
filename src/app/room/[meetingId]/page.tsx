@@ -137,7 +137,7 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Standard signaling limit for point-to-point mesh on Spark plan
+    // QUOTA: Extreme limitation for signaling (Max 3 participants for Spark-tier WebRTC efficiency)
     return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
   }, [firestore, meetingId, user]);
 
@@ -145,7 +145,8 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
+    // QUOTA: Limit chat to prevent excessive reads/renders
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -153,7 +154,8 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 3);
+    // QUOTA: Limit real-time mesh to 2 active signaling participants for extreme quota efficiency
+    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 2);
   }, [participants]);
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
@@ -163,7 +165,6 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // ATOMIC PRESENCE: Event-driven updates to minimize database operations
   const syncPresence = useCallback((updates: Partial<Participant>) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -268,13 +269,13 @@ export default function RoomPage() {
     syncPresence({ hasRaisedHand: newState });
   };
 
-  // ATOMIC SIGNALING: Buffering candidates to transmit in single atomic updates
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
+    // Clean up connections that are no longer in the active list
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -320,6 +321,7 @@ export default function RoomPage() {
 
       const sendCandidates = () => {
         if (iceCandidates.length > 0) {
+          // QUOTA: Consolidate candidates into single atomic write to prevent exhaustion
           updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
           });
@@ -370,8 +372,18 @@ export default function RoomPage() {
         signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
       }
       
-      return () => clearTimeout(gatheringTimeout);
+      return () => {
+        clearTimeout(gatheringTimeout);
+      };
     });
+
+    return () => {
+      // QUOTA: Ensure all signaling listeners are explicitly detached during effect cleanup
+      signalingUnsubs.current.forEach(unsub => unsub());
+      signalingUnsubs.current.clear();
+      pcs.current.forEach(pc => pc.close());
+      pcs.current.clear();
+    };
   }, [user?.uid, firestore, meetingId, activeParticipantIds, hasMediaPermission]);
 
   useEffect(() => {

@@ -8,18 +8,14 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if isSignedIn();
+      allow read: if isSignedIn();
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
     // Standardized rules for meetings and their sub-collections
-    match /meetings/{meetingId} {
+    // Using {document=**} to ensure 'list' operations (collection queries) are permitted
+    match /meetings/{document=**} {
       allow read, write: if isSignedIn();
-      
-      // Recursive wildcard for chat, participants, and signaling
-      match /{allPaths=**} {
-        allow read, write: if isSignedIn();
-      }
     }
 
     match /seriesAttendance/{seriesId}/users/{userId} {

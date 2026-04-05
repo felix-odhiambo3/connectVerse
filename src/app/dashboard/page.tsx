@@ -61,12 +61,12 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA: Increased limit slightly for better UX while remaining frugal
+    // QUOTA: Limiting to 3 sessions for extreme efficiency during backoff/trial
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
       orderBy('createdAt', 'desc'),
-      limit(5) 
+      limit(3) 
     );
   }, [user?.uid, firestore]);
 
