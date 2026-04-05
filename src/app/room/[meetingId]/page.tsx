@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -16,6 +17,7 @@ import {
   limit,
   setDoc,
   where,
+  deleteDoc,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card } from '@/components/ui/card';
@@ -41,6 +43,7 @@ import {
   MoreVertical,
   Link as LinkIcon,
   Smile,
+  Captions,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -74,6 +77,13 @@ interface Reaction {
   senderId: string;
   senderName: string;
   createdAt: Timestamp;
+}
+
+interface Caption {
+  id: string;
+  text: string;
+  updatedAt: Timestamp;
+  username: string;
 }
 
 const ICE_SERVERS = {
@@ -184,12 +194,15 @@ export default function RoomPage() {
   const [isVideoOff, setIsVideoOff] = useState(true);
   const [isSharingScreen, setIsSharingScreen] = useState(false);
   const [hasHandRaised, setHasHandRaised] = useState(false);
+  const [isCaptionsEnabled, setIsCaptionsEnabled] = useState(false);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeReactions, setActiveReactions] = useState<Reaction[]>([]);
-  const lastReactionTime = useRef<number>(0);
-
+  
+  const recognitionRef = useRef<any>(null);
+  const lastCaptionRef = useRef<string>('');
+  
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
   
@@ -240,6 +253,13 @@ export default function RoomPage() {
 
   const { data: remoteReactions } = useCollection<Reaction>(reactionsRef);
 
+  const captionsRef = useMemoFirebase(() => {
+    if (!firestore || !meetingId || !user) return null;
+    return query(collection(firestore, 'meetings', meetingId, 'captions'));
+  }, [firestore, meetingId, user]);
+
+  const { data: remoteCaptions } = useCollection<Caption>(captionsRef);
+
   useEffect(() => {
     if (!remoteReactions) return;
     setActiveReactions(prev => {
@@ -278,6 +298,62 @@ export default function RoomPage() {
     initialPresenceSynced.current = true;
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 
+  // Captions Logic
+  useEffect(() => {
+    if (!isCaptionsEnabled) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+      if (user && firestore) {
+        deleteDoc(doc(firestore, 'meetings', meetingId, 'captions', user.uid));
+      }
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast({ variant: 'destructive', title: 'Captions Not Supported', description: 'Your browser does not support Web Speech API.' });
+      setIsCaptionsEnabled(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: any) => {
+      let finalTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        }
+      }
+      
+      const currentTranscript = event.results[event.results.length - 1][0].transcript;
+      if (currentTranscript !== lastCaptionRef.current && user && firestore) {
+        lastCaptionRef.current = currentTranscript;
+        setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
+          text: currentTranscript,
+          updatedAt: serverTimestamp(),
+          username: user.displayName || user.email?.split('@')[0],
+        }, { merge: true });
+      }
+    };
+
+    recognition.onend = () => {
+      if (isCaptionsEnabled) recognition.start();
+    };
+
+    recognition.start();
+    recognitionRef.current = recognition;
+
+    return () => {
+      if (recognitionRef.current) recognitionRef.current.stop();
+    };
+  }, [isCaptionsEnabled, user, firestore, meetingId]);
+
   const updateTracksForPeers = (stream: MediaStream | null, type: 'camera' | 'screen') => {
     pcs.current.forEach((pc, id) => {
       const existingSenders = type === 'camera' ? cameraSenders.current.get(id) : screenSenders.current.get(id);
@@ -300,8 +376,7 @@ export default function RoomPage() {
     setIsProcessing(true);
     try {
       if (isVideoOff) {
-        const constraints = { video: true, audio: true };
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = stream;
@@ -378,10 +453,6 @@ export default function RoomPage() {
   };
 
   const sendReaction = useCallback((emoji: string) => {
-    const now = Date.now();
-    if (now - lastReactionTime.current < 300) return; 
-    lastReactionTime.current = now;
-
     if (!user || !firestore || !meetingId) return;
     const reactionRef = collection(firestore, 'meetings', meetingId, 'reactions');
     addDocumentNonBlocking(reactionRef, {
@@ -391,19 +462,6 @@ export default function RoomPage() {
       createdAt: serverTimestamp(),
     });
   }, [user, firestore, meetingId]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
-      const key = e.key;
-      if (key >= '1' && key <= '6') {
-        const index = parseInt(key) - 1;
-        sendReaction(EMOJIS[index]);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [sendReaction]);
 
   const copyInviteLink = () => {
     const link = window.location.href;
@@ -599,6 +657,26 @@ export default function RoomPage() {
                 ))}
               </div>
 
+              {/* Captions Overlay */}
+              {isCaptionsEnabled && (
+                <div className="absolute bottom-32 left-0 right-0 flex justify-center pointer-events-none z-50">
+                  <div className="bg-black/80 backdrop-blur-xl px-10 py-6 rounded-[2.5rem] border border-white/10 max-w-[80%] shadow-2xl animate-in slide-in-from-bottom duration-500">
+                    <div className="space-y-4 max-h-[120px] overflow-hidden">
+                      {remoteCaptions && remoteCaptions.length > 0 ? (
+                        remoteCaptions.map((caption) => (
+                          <div key={caption.id} className="flex gap-4 items-start">
+                            <span className="font-black text-[10px] uppercase tracking-widest text-primary shrink-0 mt-1">{caption.username}:</span>
+                            <p className="text-white text-lg font-bold leading-tight">{caption.text}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-zinc-500 font-black uppercase text-xs tracking-widest animate-pulse">Captions active • Listening...</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {(screenSharerId || !isVideoOff) && (
                 <div className={cn(
                   "absolute bottom-16 right-16 w-80 aspect-video rounded-[2.5rem] overflow-hidden border-[6px] border-white/10 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)] z-40 bg-zinc-900 backdrop-blur-3xl transition-all duration-700 hover:scale-105",
@@ -628,20 +706,20 @@ export default function RoomPage() {
                   </PopoverTrigger>
                   <PopoverContent side="top" align="center" className="w-fit p-4 bg-white/80 backdrop-blur-2xl border-white rounded-[2.5rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] mb-8 animate-in fade-in zoom-in slide-in-from-bottom-4 duration-300">
                     <div className="flex gap-4">
-                      {EMOJIS.map((emoji, i) => (
-                        <div key={emoji} className="flex flex-col items-center gap-2">
-                          <button 
-                            onClick={() => sendReaction(emoji)}
-                            className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl hover:bg-zinc-100/50 active:scale-90"
-                          >
-                            {emoji}
-                          </button>
-                          <span className="text-[10px] font-black text-zinc-300 uppercase">{i + 1}</span>
-                        </div>
+                      {EMOJIS.map((emoji) => (
+                        <button 
+                          key={emoji}
+                          onClick={() => sendReaction(emoji)}
+                          className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl hover:bg-zinc-100/50 active:scale-90"
+                        >
+                          {emoji}
+                        </button>
                       ))}
                     </div>
                   </PopoverContent>
                </Popover>
+
+               <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
 
                <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>

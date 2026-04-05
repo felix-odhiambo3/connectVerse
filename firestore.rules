@@ -30,8 +30,12 @@ service cloud.firestore {
       match /reactions/{reactionId} {
         allow read: if isSignedIn();
         allow create: if isSignedIn();
-        // Reactions are immutable for performance and audit
         allow update, delete: if false;
+      }
+
+      match /captions/{userId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && request.auth.uid == userId;
       }
     }
 
