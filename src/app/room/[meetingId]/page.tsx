@@ -15,7 +15,6 @@ import {
   onSnapshot,
   limit,
   setDoc,
-  deleteDoc,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card } from '@/components/ui/card';
@@ -40,8 +39,6 @@ import {
   Monitor,
   MoreVertical,
   Link as LinkIcon,
-  Copy,
-  AlertCircle
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -244,16 +241,32 @@ export default function RoomPage() {
     
     try {
       if (isVideoOff) {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        // Need to start video
+        const constraints = { video: true, audio: true };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        // Ensure audio track follows current mute state
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
+        
+        // Stop old tracks if we had an audio-only stream
+        localCameraStream.current?.getTracks().forEach(t => t.stop());
+        
         localCameraStream.current = stream;
         updateTracksForPeers(stream, 'camera');
         setIsVideoOff(false);
         syncPresence({ isVideoOff: false });
       } else {
-        localCameraStream.current?.getTracks().forEach(t => t.stop());
-        localCameraStream.current = null;
-        updateTracksForPeers(null, 'camera');
+        // Turning video off. If mic is on, we should keep audio stream alive
+        if (!isAudioMuted) {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          localCameraStream.current?.getTracks().forEach(t => t.stop());
+          localCameraStream.current = stream;
+          updateTracksForPeers(stream, 'camera');
+        } else {
+          localCameraStream.current?.getTracks().forEach(t => t.stop());
+          localCameraStream.current = null;
+          updateTracksForPeers(null, 'camera');
+        }
         setIsVideoOff(true);
         syncPresence({ isVideoOff: true });
       }
@@ -264,13 +277,31 @@ export default function RoomPage() {
     }
   };
 
-  const handleToggleAudio = () => {
-    const newState = !isAudioMuted;
-    setIsAudioMuted(newState);
-    if (localCameraStream.current) {
-      localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !newState);
+  const handleToggleAudio = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    
+    try {
+      const newState = !isAudioMuted;
+      
+      if (!newState && !localCameraStream.current) {
+        // User is unmuting but we have no stream yet
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
+        localCameraStream.current = stream;
+        updateTracksForPeers(stream, 'camera');
+      }
+      
+      if (localCameraStream.current) {
+        localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !newState);
+      }
+      
+      setIsAudioMuted(newState);
+      syncPresence({ isMuted: newState });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Mic Access Denied', description: 'Please check browser permissions.' });
+    } finally {
+      setIsProcessing(false);
     }
-    syncPresence({ isMuted: newState });
   };
 
   const startScreenShare = async () => {

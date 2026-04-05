@@ -11,7 +11,7 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Unified meetings rule for collection listing and sub-resource access
+    // Explicit permissions for meetings collection and sub-resources
     match /meetings/{meetingId} {
       allow read, write, list: if isSignedIn();
       
