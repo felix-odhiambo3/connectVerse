@@ -146,7 +146,7 @@ export default function RoomPage() {
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
     // QUOTA: Limit chat to prevent excessive reads/renders
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);

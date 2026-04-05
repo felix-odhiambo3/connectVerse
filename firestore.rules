@@ -12,21 +12,13 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Explicitly handle collection and document levels for meetings
-    match /meetings {
-      allow list, create: if isSignedIn();
-      
-      match /{meetingId} {
-        allow get, update, delete: if isSignedIn();
-        
-        // Match all subcollections (chat, participants, webrtc)
-        match /{allSubcollections=**} {
-          allow read, write: if isSignedIn();
-        }
-      }
+    // Robust recursive match for meetings and all sub-resources
+    match /meetings/{allPaths=**} {
+      allow read, write: if isSignedIn();
     }
 
-    match /seriesAttendance/{seriesId}/users/{userId} {
+    // Robust recursive match for series attendance
+    match /seriesAttendance/{allPaths=**} {
       allow read, write: if isSignedIn();
     }
   }
