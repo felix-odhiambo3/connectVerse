@@ -11,14 +11,10 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Explicitly allow listing and creating meetings at the collection level
-    match /meetings {
-      allow list, create: if isSignedIn();
-    }
-
-    // Robust match for specific meetings and all sub-resources (chat, signaling, etc)
+    // Robust match for meetings and all sub-resources (chat, signaling, etc)
+    // Adding 'list' here ensures collection-level queries are authorized
     match /meetings/{meetingId} {
-      allow read, update, delete: if isSignedIn();
+      allow read, list, create, update, delete: if isSignedIn();
       
       // Sub-collections like chat, participants, and webrtc signaling
       match /{allSubcollections=**} {

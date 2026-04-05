@@ -136,15 +136,15 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Extreme limitation for signaling (Max 3 participants for Spark-tier efficiency)
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
+    // QUOTA: Extreme limitation for signaling (Max 2 participants for P2P-focused Spark trial)
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Limit chat to prevent excessive reads/renders
+    // QUOTA: Extreme limitation for chat
     return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
@@ -153,7 +153,6 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    // QUOTA: Limit real-time mesh to 2 participants for point-to-point focus on Spark tier
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 2);
   }, [participants]);
 
@@ -164,6 +163,7 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
+  // Event-driven presence sync (Only called on manual actions)
   const syncPresence = useCallback((updates: Partial<Participant>) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -176,6 +176,7 @@ export default function RoomPage() {
     }, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading]);
 
+  // One-time initialization of presence
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
     syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false });
@@ -268,12 +269,14 @@ export default function RoomPage() {
     syncPresence({ hasRaisedHand: newState });
   };
 
+  // WebRTC Signaling Logic (Atomic/Batch Candidate Writing)
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
+    // Cleanup stale peer connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -312,6 +315,7 @@ export default function RoomPage() {
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
 
+      // Buffer candidates for a single atomic write
       let iceCandidates: RTCIceCandidateInit[] = [];
       pc.onicecandidate = (event) => {
         if (event.candidate) iceCandidates.push(event.candidate.toJSON());
@@ -332,6 +336,7 @@ export default function RoomPage() {
         }
       };
 
+      // Safety timeout for candidate transmission
       const gatheringTimeout = setTimeout(sendCandidates, 5000);
 
       if (user.uid < participantId) {
