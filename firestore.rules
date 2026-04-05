@@ -11,8 +11,8 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Explicitly allow list/get/write for meetings and all nested sub-collections
-    // This resolves the permission error Elizabeth encountered on the dashboard
+    // Explicitly allow recursive access to meetings and all sub-collections
+    // This resolves the 'method: list' and 'insufficient permissions' errors
     match /meetings/{meetingId} {
       allow read, write: if isSignedIn();
       match /{allPaths=**} {
