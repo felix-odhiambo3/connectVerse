@@ -11,15 +11,12 @@ import {
   query,
   orderBy,
   updateDoc,
-  setDoc,
   Timestamp,
   onSnapshot,
   limit,
-  arrayUnion,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -33,16 +30,12 @@ import {
   Send, 
   Hand, 
   User as UserIcon, 
-  AlertCircle, 
-  RefreshCcw, 
   MessageSquare, 
   Users, 
   Trophy,
   ScreenShare,
   StopCircle,
   Monitor,
-  Layout,
-  Maximize2,
   MoreVertical
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
@@ -51,7 +44,6 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
 import { updateDocumentNonBlocking, setDocumentNonBlocking } from '@/firebase/non-blocking-updates';
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface Participant {
   id: string;
@@ -106,7 +98,6 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, cla
   return (
     <div className={cn(
       "relative w-full h-full bg-[#1A1A1A] rounded-[2rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500",
-      isPresenting && "ring-2 ring-primary/50",
       className
     )}>
       <video
@@ -147,7 +138,6 @@ export default function RoomPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  // Independent Media States
   const [isAudioMuted, setIsAudioMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(true);
   const [isSharingScreen, setIsSharingScreen] = useState(false);
@@ -155,17 +145,13 @@ export default function RoomPage() {
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
 
-  // Local Tracks and Streams
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
   
-  // Remote Streams Maps
   const [remoteCameraStreams, setRemoteCameraStreams] = useState<Map<string, MediaStream>>(new Map());
   const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
 
-  // WebRTC Refs
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
   const screenSenders = useRef<Map<string, RTCRtpSender>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
@@ -219,51 +205,37 @@ export default function RoomPage() {
     setDocumentNonBlocking(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading]);
 
-  // Initial Presence
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
     syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false }, true);
     initialPresenceSynced.current = true;
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 
-  // Camera Management
   const handleToggleVideo = async () => {
     if (isProcessing || !user) return;
     setIsProcessing(true);
     
     try {
       if (isVideoOff) {
-        // Turning ON
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         const videoTrack = stream.getVideoTracks()[0];
         const audioTrack = stream.getAudioTracks()[0];
-        
-        // Ensure initial audio state matches button
         audioTrack.enabled = !isAudioMuted;
-
         localCameraStream.current = stream;
-        
-        // Add tracks to all PCs
         pcs.current.forEach(pc => {
           pc.addTrack(videoTrack, stream);
           pc.addTrack(audioTrack, stream);
         });
-
         setIsVideoOff(false);
         syncPresence({ isVideoOff: false });
       } else {
-        // Turning OFF
-        localCameraStream.current?.getTracks().forEach(t => {
-          t.stop();
-          // Find sender for this track in PCs and remove it? 
-          // Simplest for now: just stop the track, the remote will see black/paused
-        });
+        localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = null;
         setIsVideoOff(true);
         syncPresence({ isVideoOff: true });
       }
     } catch (err) {
-      toast({ variant: 'destructive', title: 'Camera Access Denied', description: 'Please check browser permissions.' });
+      toast({ variant: 'destructive', title: 'Camera Access Denied' });
     } finally {
       setIsProcessing(false);
     }
@@ -278,29 +250,22 @@ export default function RoomPage() {
     syncPresence({ isMuted: newState });
   };
 
-  // Screen Share Management
   const startScreenShare = async () => {
     if (!user || !firestore || screenSharerId) {
       if (screenSharerId) toast({ title: "Someone is already presenting" });
       return;
     }
-
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       localScreenStream.current = stream;
       const screenTrack = stream.getVideoTracks()[0];
-
-      // Add track to all existing connections
       pcs.current.forEach((pc, id) => {
         const sender = pc.addTrack(screenTrack, stream);
         screenSenders.current.set(id, sender);
       });
-
       await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
       setIsSharingScreen(true);
-      
       screenTrack.onended = stopScreenShare;
-      toast({ title: "You are presenting" });
     } catch (err) {
       toast({ variant: 'destructive', title: 'Presentation Cancelled' });
     }
@@ -308,11 +273,8 @@ export default function RoomPage() {
 
   const stopScreenShare = async () => {
     if (!user || !firestore) return;
-    
     localScreenStream.current?.getTracks().forEach(t => t.stop());
     localScreenStream.current = null;
-
-    // Remove tracks from all connections
     pcs.current.forEach((pc, id) => {
       const sender = screenSenders.current.get(id);
       if (sender) {
@@ -320,19 +282,15 @@ export default function RoomPage() {
         screenSenders.current.delete(id);
       }
     });
-
     await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
     setIsSharingScreen(false);
   };
 
-  // WebRTC Signaling Logic (Atomic & Polite Peer Pattern)
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds) return;
-
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // Cleanup old connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -346,65 +304,40 @@ export default function RoomPage() {
 
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
-
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
-
-      // Add camera/audio tracks if they exist
       if (localCameraStream.current) {
         localCameraStream.current.getTracks().forEach(t => pc.addTrack(t, localCameraStream.current!));
       }
-
-      // Add screen tracks if they exist
       if (localScreenStream.current) {
         const screenTrack = localScreenStream.current.getVideoTracks()[0];
         const sender = pc.addTrack(screenTrack, localScreenStream.current);
         screenSenders.current.set(participantId, sender);
       }
-
       pc.ontrack = (event) => {
         const stream = event.streams[0];
-        // Distinguish between camera and screen share by checking track metadata or stream IDs
-        // Simplest: if participantId is screenSharerId, the newest video track is likely the screen
         if (participantId === screenSharerId) {
           setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         } else {
           setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
         }
       };
-
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
-
-      // Atomic ICE Gathering
-      pc.onicecandidate = (event) => {
-        if (!event.candidate) {
-          // All candidates gathered - send atomized offer/answer
+      const isImpolite = user.uid < participantId;
+      pc.onnegotiationneeded = async () => {
+        if (isImpolite) {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          setDocumentNonBlocking(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
         }
       };
-
-      // Handle Re-negotiation (Glare prevention)
-      const isImpolite = user.uid < participantId; // Lower UID is impolite (always offers)
-
-      pc.onnegotiationneeded = async () => {
-        try {
-          if (isImpolite) {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            setDocumentNonBlocking(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
-          }
-        } catch (err) { console.error("Negotiation error:", err); }
-      };
-
       const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
         const data = snapshot.data();
         if (!data) return;
-
         try {
           if (data.offer && data.from !== user.uid) {
-            const offerCollision = pc.signalingState !== 'stable';
-            if (offerCollision && !isImpolite) return; // Polite peer ignores offer during collision
-
+            if (pc.signalingState !== 'stable' && !isImpolite) return;
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -412,20 +345,13 @@ export default function RoomPage() {
           } else if (data.answer && data.from !== user.uid) {
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
-        } catch (err) {
-          // Fail silently if state is already advanced
-        }
+        } catch (err) {}
       });
-
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-
-    return () => {
-      signalingUnsubs.current.forEach(unsub => unsub());
-    };
+    return () => signalingUnsubs.current.forEach(unsub => unsub());
   }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId]);
 
-  // Duration Timer
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') return;
     const interval = setInterval(() => {
@@ -435,9 +361,7 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  if (isMeetingLoading) {
-    return <div className="h-screen flex items-center justify-center"><Skeleton className="h-12 w-48 rounded-xl" /></div>;
-  }
+  if (isMeetingLoading) return <div className="h-screen flex items-center justify-center"><Skeleton className="h-12 w-48 rounded-xl" /></div>;
 
   if (!meetingData || meetingData?.status === 'finished') {
     return (
@@ -449,12 +373,16 @@ export default function RoomPage() {
     );
   }
 
+  // Determine whose camera to show in the spotlight (if no screen sharing)
+  const spotlightParticipantId = activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid;
+  const isSpotlightMe = spotlightParticipantId === user?.uid;
+  const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
+
   return (
     <AuthGuard>
       <div className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
-        {/* Presenting Banner */}
         {isSharingScreen && (
-          <div className="bg-primary px-8 py-3 flex items-center justify-between text-white animate-in slide-in-from-top duration-300">
+          <div className="bg-primary px-8 py-3 flex items-center justify-between text-white animate-in slide-in-from-top duration-300 z-50">
              <div className="flex items-center gap-3">
                 <Monitor className="h-4 w-4" />
                 <span className="font-black text-[11px] uppercase tracking-widest">You are presenting to everyone</span>
@@ -463,7 +391,6 @@ export default function RoomPage() {
           </div>
         )}
 
-        {/* Header */}
         <header className="flex h-20 items-center justify-between px-10 bg-white border-b z-10 shrink-0">
           <div className="flex items-center gap-8">
             <div className="bg-zinc-900 flex items-center justify-center h-12 w-12 rounded-[1.25rem] text-white font-black text-xl shadow-lg ring-4 ring-zinc-50">CV</div>
@@ -482,14 +409,12 @@ export default function RoomPage() {
           </div>
         </header>
 
-        {/* Main Content Area */}
         <main className="flex-1 flex overflow-hidden p-8 gap-8 relative">
-          <div className="flex-1 flex flex-col gap-8 overflow-hidden">
+          <div className="flex-1 flex flex-col gap-8 overflow-hidden relative">
             {/* Spotlight Stage */}
-            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-2xl border border-white/5 p-8">
+            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-2xl border border-white/5 p-4">
                <div className="w-full h-full flex items-center justify-center">
                  {screenSharerId ? (
-                   // Show Presentation
                    <StreamView 
                      stream={screenSharerId === user?.uid ? localScreenStream.current : remoteScreenStreams.get(screenSharerId) || null}
                      name={participants?.find(p => p.id === screenSharerId)?.name || 'Presentation'}
@@ -497,24 +422,25 @@ export default function RoomPage() {
                      isMe={screenSharerId === user?.uid}
                    />
                  ) : (
-                   // Show active speaker or placeholder
-                   <div className="flex flex-col items-center gap-6">
-                      <div className="w-24 h-24 rounded-full bg-zinc-800 animate-pulse flex items-center justify-center">
-                        <Users className="h-10 w-10 text-zinc-600" />
-                      </div>
-                      <div className="text-zinc-700 font-black uppercase tracking-[0.5em] text-[10px]">No Presentation Active</div>
-                   </div>
+                   <StreamView 
+                     stream={isSpotlightMe ? localCameraStream.current : remoteCameraStreams.get(spotlightParticipantId!) || null}
+                     name={isSpotlightMe ? 'You' : spotlightParticipant?.name || 'Participant'}
+                     isVideoOff={isSpotlightMe ? isVideoOff : spotlightParticipant?.isVideoOff}
+                     isMuted={isSpotlightMe ? isAudioMuted : spotlightParticipant?.isMuted}
+                     isMe={isSpotlightMe}
+                   />
                  )}
                </div>
 
-              {/* Presenter Self-Preview Overlay */}
-              {isSharingScreen && (
-                <div className="absolute bottom-12 right-12 w-64 aspect-video rounded-3xl overflow-hidden border-4 border-white shadow-2xl z-40 bg-zinc-900 ring-1 ring-black/10">
+              {/* PiP Camera Overlay (Reduced video when screen sharing) */}
+              {screenSharerId && (
+                <div className="absolute bottom-12 right-12 w-64 aspect-video rounded-3xl overflow-hidden border-4 border-white shadow-2xl z-40 bg-zinc-900 ring-1 ring-black/10 transition-all duration-500 hover:scale-110">
                    <StreamView 
                      stream={localCameraStream.current} 
-                     name="Your Camera" 
+                     name="You" 
                      isMe={true} 
                      isVideoOff={isVideoOff}
+                     isMuted={isAudioMuted}
                    />
                 </div>
               )}
@@ -531,44 +457,15 @@ export default function RoomPage() {
             </div>
           </div>
 
-          {/* Sidebar (Participants & Chat) */}
+          {/* Sidebar (Chat & Members list only, no videos) */}
           <Card className="w-[400px] flex flex-col overflow-hidden border-zinc-100 shadow-xl shrink-0 rounded-[3.5rem] bg-white border-none">
-             <Tabs defaultValue="participants" className="flex-1 flex flex-col overflow-hidden">
+             <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-8 pt-10 pb-4 border-b">
                    <TabsList className="w-full h-14 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1">
-                      <TabsTrigger value="participants" className="rounded-xl font-black text-[10px] uppercase tracking-widest"><Users className="h-4 w-4 mr-2" /> Members</TabsTrigger>
                       <TabsTrigger value="chat" className="rounded-xl font-black text-[10px] uppercase tracking-widest"><MessageSquare className="h-4 w-4 mr-2" /> Chat</TabsTrigger>
+                      <TabsTrigger value="participants" className="rounded-xl font-black text-[10px] uppercase tracking-widest"><Users className="h-4 w-4 mr-2" /> People</TabsTrigger>
                    </TabsList>
                 </div>
-
-                <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-6">
-                      <div className="grid grid-cols-1 gap-4">
-                        {/* Local Member Tile */}
-                        <div className="relative aspect-video rounded-3xl overflow-hidden bg-zinc-900 group shadow-md border border-zinc-100">
-                           <StreamView 
-                             stream={localCameraStream.current} 
-                             name="You" 
-                             isMe={true} 
-                             isVideoOff={isVideoOff}
-                             isMuted={isAudioMuted}
-                           />
-                        </div>
-                        {/* Remote Members */}
-                        {activeParticipants.filter(p => p.id !== user?.uid).map(p => (
-                          <div key={p.id} className="relative aspect-video rounded-3xl overflow-hidden bg-zinc-900 group shadow-md border border-zinc-100">
-                             <StreamView 
-                               stream={remoteCameraStreams.get(p.id) || null} 
-                               name={p.name} 
-                               isVideoOff={p.isVideoOff}
-                               isMuted={p.isMuted}
-                             />
-                             {p.hasRaisedHand && <div className="absolute top-4 right-4 bg-yellow-400 p-2 rounded-xl shadow-lg animate-bounce"><Hand className="h-4 w-4 text-white" /></div>}
-                          </div>
-                        ))}
-                      </div>
-                   </ScrollArea>
-                </TabsContent>
 
                 <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
                    <ScrollArea className="flex-1 p-8">
@@ -613,6 +510,28 @@ export default function RoomPage() {
                         }}><Send className="h-4 w-4 text-zinc-400" /></Button>
                       </div>
                    </div>
+                </TabsContent>
+
+                <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
+                   <ScrollArea className="flex-1 p-6">
+                      <div className="space-y-3">
+                        {activeParticipants.map(p => (
+                          <div key={p.id} className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                             <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-full bg-zinc-200 flex items-center justify-center text-[10px] font-black uppercase">
+                                  {p.name.substring(0, 2)}
+                                </div>
+                                <span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span>
+                             </div>
+                             <div className="flex gap-2">
+                                {p.isMuted && <MicOff className="h-3 w-3 text-destructive" />}
+                                {p.isVideoOff && <VideoOff className="h-3 w-3 text-destructive" />}
+                                {p.hasRaisedHand && <Hand className="h-3 w-3 text-yellow-500 animate-bounce" />}
+                             </div>
+                          </div>
+                        ))}
+                      </div>
+                   </ScrollArea>
                 </TabsContent>
              </Tabs>
           </Card>
