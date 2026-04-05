@@ -11,12 +11,12 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Explicitly allow recursive access to meetings and all sub-collections
-    // This resolves the 'method: list' and 'insufficient permissions' errors
+    // Unified meetings rule for collection listing and sub-resource access
     match /meetings/{meetingId} {
-      allow read, write: if isSignedIn();
+      allow read, write, list: if isSignedIn();
+      
       match /{allPaths=**} {
-        allow read, write: if isSignedIn();
+        allow read, write, list: if isSignedIn();
       }
     }
 

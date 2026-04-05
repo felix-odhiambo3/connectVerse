@@ -14,6 +14,8 @@ import {
   Timestamp,
   onSnapshot,
   limit,
+  setDoc,
+  deleteDoc,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card } from '@/components/ui/card';
@@ -38,14 +40,15 @@ import {
   Monitor,
   MoreVertical,
   Link as LinkIcon,
-  Copy
+  Copy,
+  AlertCircle
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
-import { updateDocumentNonBlocking, setDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { setDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 
 interface Participant {
   id: string;
@@ -155,7 +158,8 @@ export default function RoomPage() {
   const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
 
   const pcs = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const screenSenders = useRef<Map<string, RTCRtpSender>>(new Map());
+  const cameraSenders = useRef<Map<string, RTCRtpSender[]>>(new Map());
+  const screenSenders = useRef<Map<string, RTCRtpSender[]>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
   const initialPresenceSynced = useRef(false);
   
@@ -213,6 +217,27 @@ export default function RoomPage() {
     initialPresenceSynced.current = true;
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 
+  const updateTracksForPeers = (stream: MediaStream | null, type: 'camera' | 'screen') => {
+    pcs.current.forEach((pc, id) => {
+      const existingSenders = type === 'camera' ? cameraSenders.current.get(id) : screenSenders.current.get(id);
+      
+      // Remove old tracks
+      if (existingSenders) {
+        existingSenders.forEach(s => pc.removeTrack(s));
+      }
+
+      // Add new tracks
+      if (stream) {
+        const senders = stream.getTracks().map(t => pc.addTrack(t, stream));
+        if (type === 'camera') cameraSenders.current.set(id, senders);
+        else screenSenders.current.set(id, senders);
+      } else {
+        if (type === 'camera') cameraSenders.current.delete(id);
+        else screenSenders.current.delete(id);
+      }
+    });
+  };
+
   const handleToggleVideo = async () => {
     if (isProcessing || !user) return;
     setIsProcessing(true);
@@ -220,24 +245,20 @@ export default function RoomPage() {
     try {
       if (isVideoOff) {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        const videoTrack = stream.getVideoTracks()[0];
-        const audioTrack = stream.getAudioTracks()[0];
-        audioTrack.enabled = !isAudioMuted;
+        stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current = stream;
-        pcs.current.forEach(pc => {
-          pc.addTrack(videoTrack, stream);
-          pc.addTrack(audioTrack, stream);
-        });
+        updateTracksForPeers(stream, 'camera');
         setIsVideoOff(false);
         syncPresence({ isVideoOff: false });
       } else {
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = null;
+        updateTracksForPeers(null, 'camera');
         setIsVideoOff(true);
         syncPresence({ isVideoOff: true });
       }
     } catch (err) {
-      toast({ variant: 'destructive', title: 'Camera Access Denied' });
+      toast({ variant: 'destructive', title: 'Camera Access Denied', description: 'Please check browser permissions.' });
     } finally {
       setIsProcessing(false);
     }
@@ -260,14 +281,10 @@ export default function RoomPage() {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       localScreenStream.current = stream;
-      const screenTrack = stream.getVideoTracks()[0];
-      pcs.current.forEach((pc, id) => {
-        const sender = pc.addTrack(screenTrack, stream);
-        screenSenders.current.set(id, sender);
-      });
+      updateTracksForPeers(stream, 'screen');
       await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
       setIsSharingScreen(true);
-      screenTrack.onended = stopScreenShare;
+      stream.getVideoTracks()[0].onended = stopScreenShare;
     } catch (err) {
       toast({ variant: 'destructive', title: 'Presentation Cancelled' });
     }
@@ -277,13 +294,7 @@ export default function RoomPage() {
     if (!user || !firestore) return;
     localScreenStream.current?.getTracks().forEach(t => t.stop());
     localScreenStream.current = null;
-    pcs.current.forEach((pc, id) => {
-      const sender = screenSenders.current.get(id);
-      if (sender) {
-        pc.removeTrack(sender);
-        screenSenders.current.delete(id);
-      }
-    });
+    updateTracksForPeers(null, 'screen');
     await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
     setIsSharingScreen(false);
   };
@@ -294,17 +305,21 @@ export default function RoomPage() {
     toast({ title: "Link copied!", description: "Meeting invitation link is ready to share." });
   };
 
+  // WebRTC Perfect Negotiation (Polite/Impolite Peer pattern)
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds) return;
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
+    // Cleanup disconnected peers
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
         signalingUnsubs.current.delete(`${id}_channel`);
         pc.close();
         pcs.current.delete(id);
+        cameraSenders.current.delete(id);
+        screenSenders.current.delete(id);
         setRemoteCameraStreams(prev => { const n = new Map(prev); n.delete(id); return n; });
         setRemoteScreenStreams(prev => { const n = new Map(prev); n.delete(id); return n; });
       }
@@ -312,52 +327,100 @@ export default function RoomPage() {
 
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
+      
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
+      
+      // Add existing tracks
       if (localCameraStream.current) {
-        localCameraStream.current.getTracks().forEach(t => pc.addTrack(t, localCameraStream.current!));
+        const senders = localCameraStream.current.getTracks().map(t => pc.addTrack(t, localCameraStream.current!));
+        cameraSenders.current.set(participantId, senders);
       }
       if (localScreenStream.current) {
-        const screenTrack = localScreenStream.current.getVideoTracks()[0];
-        const sender = pc.addTrack(screenTrack, localScreenStream.current);
-        screenSenders.current.set(participantId, sender);
+        const senders = localScreenStream.current.getTracks().map(t => pc.addTrack(t, localScreenStream.current!));
+        screenSenders.current.set(participantId, senders);
       }
+
       pc.ontrack = (event) => {
         const stream = event.streams[0];
+        // If this stream is from the current sharer, it's a screen share
         if (participantId === screenSharerId) {
           setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         } else {
           setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
         }
       };
+
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
-      const isImpolite = user.uid < participantId;
+      const isPolite = user.uid > participantId; // Lower UID is impolite (starts negotiation)
+
+      let makingOffer = false;
+      let ignoreOffer = false;
+
       pc.onnegotiationneeded = async () => {
-        if (isImpolite) {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          setDocumentNonBlocking(channelRef, { offer: { type: offer.type, sdp: offer.sdp }, from: user.uid }, { merge: true });
+        try {
+          makingOffer = true;
+          await pc.setLocalDescription();
+          const offer = pc.localDescription;
+          if (offer) {
+             await setDoc(channelRef, { 
+               [user.uid]: { type: offer.type, sdp: offer.sdp, timestamp: serverTimestamp() } 
+             }, { merge: true });
+          }
+        } catch (err) {
+          console.error("Negotiation error:", err);
+        } finally {
+          makingOffer = false;
         }
       };
+
+      pc.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+          setDoc(channelRef, {
+            [`candidates_${user.uid}`]: candidate.toJSON()
+          }, { merge: true });
+        }
+      };
+
       const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
         const data = snapshot.data();
         if (!data) return;
+
+        const remoteData = data[participantId];
+        const remoteCandidate = data[`candidates_${participantId}`];
+
         try {
-          if (data.offer && data.from !== user.uid) {
-            if (pc.signalingState !== 'stable' && !isImpolite) return;
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            updateDoc(channelRef, { answer: { type: answer.type, sdp: answer.sdp }, from: user.uid });
-          } else if (data.answer && data.from !== user.uid) {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          if (remoteData) {
+            const offerCollision = remoteData.type === 'offer' && (makingOffer || pc.signalingState !== 'stable');
+            ignoreOffer = !isPolite && offerCollision;
+            
+            if (ignoreOffer) return;
+
+            await pc.setRemoteDescription(remoteData);
+            if (remoteData.type === 'offer') {
+              await pc.setLocalDescription();
+              const answer = pc.localDescription;
+              if (answer) {
+                await setDoc(channelRef, { 
+                  [user.uid]: { type: answer.type, sdp: answer.sdp, timestamp: serverTimestamp() } 
+                }, { merge: true });
+              }
+            }
           }
-        } catch (err) {}
+          if (remoteCandidate) {
+            await pc.addIceCandidate(new RTCIceCandidate(remoteCandidate));
+          }
+        } catch (err) {
+          if (!ignoreOffer) console.error("Signaling error:", err);
+        }
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-    return () => signalingUnsubs.current.forEach(unsub => unsub());
+
+    return () => {
+       // Cleanup handled by the dependency array and effect logic
+    };
   }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId]);
 
   useEffect(() => {
@@ -441,7 +504,7 @@ export default function RoomPage() {
                  )}
                </div>
 
-              {screenSharerId && (
+              {(screenSharerId || !isVideoOff) && (
                 <div className="absolute bottom-12 right-12 w-64 aspect-video rounded-3xl overflow-hidden border-4 border-white shadow-2xl z-40 bg-zinc-900 ring-1 ring-black/10 transition-all duration-500 hover:scale-110">
                    <StreamView 
                      stream={localCameraStream.current} 
