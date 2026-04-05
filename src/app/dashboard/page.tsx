@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useMemo } from 'react';
@@ -61,7 +60,7 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA: Limiting to 3 sessions for extreme efficiency during backoff/trial
+    // QUOTA: Extreme limitation for Spark-tier efficiency
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),

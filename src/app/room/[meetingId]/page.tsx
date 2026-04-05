@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -146,7 +145,7 @@ export default function RoomPage() {
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
     // QUOTA: Limit chat to prevent excessive reads/renders
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -154,7 +153,7 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    // QUOTA: Limit real-time mesh to 2 active signaling participants for extreme quota efficiency
+    // QUOTA: Limit real-time mesh to 2 participants for point-to-point focus on Spark tier
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 2);
   }, [participants]);
 
