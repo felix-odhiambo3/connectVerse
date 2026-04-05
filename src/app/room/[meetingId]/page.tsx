@@ -163,23 +163,26 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // Event-driven presence sync (Only called on manual actions)
-  const syncPresence = useCallback((updates: Partial<Participant>) => {
+  // Event-driven presence sync (Only called on manual actions or initial join)
+  const syncPresence = useCallback((updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
-    setDocumentNonBlocking(pRef, {
+    const data: any = {
       ...updates,
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
-      joinedAt: serverTimestamp(),
       role: user.uid === hostId ? 'host' : 'participant',
-    }, { merge: true });
+    };
+    if (isInitial) {
+      data.joinedAt = serverTimestamp();
+    }
+    setDocumentNonBlocking(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading]);
 
   // One-time initialization of presence
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
-    syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false });
+    syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false }, true);
     initialPresenceSynced.current = true;
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 

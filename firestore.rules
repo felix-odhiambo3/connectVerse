@@ -12,9 +12,8 @@ service cloud.firestore {
     }
 
     // Robust match for meetings and all sub-resources (chat, signaling, etc)
-    // Adding 'list' here ensures collection-level queries are authorized
     match /meetings/{meetingId} {
-      allow read, list, create, update, delete: if isSignedIn();
+      allow read, write: if isSignedIn();
       
       // Sub-collections like chat, participants, and webrtc signaling
       match /{allSubcollections=**} {

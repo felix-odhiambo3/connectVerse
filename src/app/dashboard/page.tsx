@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
-import { addDoc, collection, serverTimestamp, query, where, doc, writeBatch, limit, orderBy } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, query, where, doc, writeBatch, limit } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -58,29 +58,30 @@ export default function DashboardPage() {
     },
   });
 
+  // QUOTA: Removing orderBy to avoid composite index requirement which often triggers permission errors if missing
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA: Extreme limitation for Spark-tier efficiency
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
-      orderBy('createdAt', 'desc'),
-      limit(3) 
+      limit(10) 
     );
   }, [user?.uid, firestore]);
 
-  const { data: allUserMeetings } = useCollection(allUserMeetingsQuery);
+  const { data: rawUserMeetings } = useCollection(allUserMeetingsQuery);
 
   const upcomingMeetings = useMemo(() => {
-    if (!allUserMeetings) return [];
-    return allUserMeetings
+    if (!rawUserMeetings) return [];
+    // QUOTA: Sorting client-side to keep Firestore queries simple and index-free
+    return [...rawUserMeetings]
       .filter(meeting => meeting.status === 'scheduled' || meeting.status === 'active')
       .sort((a, b) => {
-        const dateA = a.scheduledAt?.seconds || 0;
-        const dateB = b.scheduledAt?.seconds || 0;
+        const dateA = a.scheduledAt?.seconds || (a.createdAt?.seconds + 300) || 0;
+        const dateB = b.scheduledAt?.seconds || (b.createdAt?.seconds + 300) || 0;
         return dateA - dateB;
-      });
-  }, [allUserMeetings]);
+      })
+      .slice(0, 3);
+  }, [rawUserMeetings]);
 
   const handleScheduleSubmit = async (values: z.infer<typeof scheduleMeetingSchema>) => {
     if (!user || !firestore) return;
