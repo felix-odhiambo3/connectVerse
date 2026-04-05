@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -96,24 +95,25 @@ function formatDuration(seconds: number) {
 
 function FloatingReaction({ reaction, onComplete }: { reaction: Reaction, onComplete: (id: string) => void }) {
   useEffect(() => {
-    const timer = setTimeout(() => onComplete(reaction.id), 4000);
+    const timer = setTimeout(() => onComplete(reaction.id), 5000);
     return () => clearTimeout(timer);
   }, [reaction.id, onComplete]);
 
-  // Randomize horizontal position and animation duration slightly
-  const left = useMemo(() => Math.floor(Math.random() * 40) + 30, []); // 30-70%
-  const duration = useMemo(() => 3 + Math.random() * 2, []); // 3-5s
+  const left = useMemo(() => 20 + Math.random() * 60, []); 
+  const duration = useMemo(() => 4 + Math.random() * 2, []); 
+  const delay = useMemo(() => Math.random() * 0.5, []);
 
   return (
     <div 
       className="absolute bottom-0 pointer-events-none z-50 animate-float-up flex flex-col items-center gap-1"
       style={{ 
         left: `${left}%`,
-        animationDuration: `${duration}s`
+        animationDuration: `${duration}s`,
+        animationDelay: `${delay}s`
       }}
     >
-      <div className="text-4xl drop-shadow-2xl">{reaction.type}</div>
-      <div className="bg-black/40 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] text-white font-black uppercase tracking-widest whitespace-nowrap">
+      <div className="text-5xl drop-shadow-2xl filter saturate-150">{reaction.type}</div>
+      <div className="bg-black/40 backdrop-blur-md px-3 py-1 rounded-full text-[9px] text-white font-black uppercase tracking-widest whitespace-nowrap border border-white/10 shadow-lg">
         {reaction.senderName}
       </div>
     </div>
@@ -155,18 +155,18 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, cla
       />
       {(isVideoOff && !isPresenting) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#121212] z-10">
-           <div className="rounded-full bg-[#1E1E1E] flex items-center justify-center w-20 h-20 shadow-2xl border border-white/5 mb-4">
-              <UserIcon className="text-zinc-700 h-8 w-8" />
+           <div className="rounded-full bg-[#1E1E1E] flex items-center justify-center w-24 h-24 shadow-2xl border border-white/5 mb-4">
+              <UserIcon className="text-zinc-700 h-10 w-10" />
            </div>
-           <div className="text-zinc-500 font-black tracking-[0.3em] uppercase text-[9px] opacity-60">Camera Off</div>
+           <div className="text-zinc-500 font-black tracking-[0.4em] uppercase text-[10px] opacity-60">Camera Off</div>
         </div>
       )}
-      <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
-        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-xl border-white/10 px-3 py-1 font-black text-[10px] uppercase tracking-wider rounded-lg">
-          {isPresenting && <Monitor className="h-3 w-3 mr-2 text-primary" />}
+      <div className="absolute bottom-6 left-6 flex items-center gap-3 z-20">
+        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-2xl border-white/10 px-4 py-2 font-black text-[11px] uppercase tracking-widest rounded-xl shadow-xl">
+          {isPresenting && <Monitor className="h-3.5 w-3.5 mr-2.5 text-primary" />}
           {name} {isMe && "(You)"}
         </Badge>
-        {isMuted && !isPresenting && <div className="p-1.5 bg-[#FF4545] rounded-lg shadow-xl border border-white/20"><MicOff className="h-3 w-3 text-white" /></div>}
+        {isMuted && !isPresenting && <div className="p-2 bg-[#FF4545] rounded-xl shadow-2xl border border-white/20"><MicOff className="h-4 w-4 text-white" /></div>}
       </div>
     </div>
   );
@@ -188,6 +188,7 @@ export default function RoomPage() {
   const [chatInput, setChatInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeReactions, setActiveReactions] = useState<Reaction[]>([]);
+  const lastReactionTime = useRef<number>(0);
 
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -227,7 +228,6 @@ export default function RoomPage() {
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
   const chatMessages = useMemo(() => rawChatMessages ? [...rawChatMessages].reverse() : [], [rawChatMessages]);
 
-  // Reactions listener - only look for reactions created in the last 10 seconds to keep it performant
   const startTime = useRef(Timestamp.now());
   const reactionsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -242,7 +242,6 @@ export default function RoomPage() {
 
   useEffect(() => {
     if (!remoteReactions) return;
-    // Add new reactions to the visual queue if not already there
     setActiveReactions(prev => {
       const existingIds = new Set(prev.map(r => r.id));
       const newReactions = remoteReactions.filter(r => !existingIds.has(r.id));
@@ -282,13 +281,9 @@ export default function RoomPage() {
   const updateTracksForPeers = (stream: MediaStream | null, type: 'camera' | 'screen') => {
     pcs.current.forEach((pc, id) => {
       const existingSenders = type === 'camera' ? cameraSenders.current.get(id) : screenSenders.current.get(id);
-      
-      // Remove old tracks
       if (existingSenders) {
         existingSenders.forEach(s => pc.removeTrack(s));
       }
-
-      // Add new tracks
       if (stream) {
         const senders = stream.getTracks().map(t => pc.addTrack(t, stream));
         if (type === 'camera') cameraSenders.current.set(id, senders);
@@ -303,7 +298,6 @@ export default function RoomPage() {
   const handleToggleVideo = async () => {
     if (isProcessing || !user) return;
     setIsProcessing(true);
-    
     try {
       if (isVideoOff) {
         const constraints = { video: true, audio: true };
@@ -338,7 +332,6 @@ export default function RoomPage() {
   const handleToggleAudio = async () => {
     if (isProcessing) return;
     setIsProcessing(true);
-    
     try {
       const newState = !isAudioMuted;
       if (!newState && !localCameraStream.current) {
@@ -384,7 +377,11 @@ export default function RoomPage() {
     setIsSharingScreen(false);
   };
 
-  const sendReaction = async (emoji: string) => {
+  const sendReaction = useCallback((emoji: string) => {
+    const now = Date.now();
+    if (now - lastReactionTime.current < 300) return; 
+    lastReactionTime.current = now;
+
     if (!user || !firestore || !meetingId) return;
     const reactionRef = collection(firestore, 'meetings', meetingId, 'reactions');
     addDocumentNonBlocking(reactionRef, {
@@ -393,7 +390,20 @@ export default function RoomPage() {
       senderName: user.displayName || user.email?.split('@')[0],
       createdAt: serverTimestamp(),
     });
-  };
+  }, [user, firestore, meetingId]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      const key = e.key;
+      if (key >= '1' && key <= '6') {
+        const index = parseInt(key) - 1;
+        sendReaction(EMOJIS[index]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [sendReaction]);
 
   const copyInviteLink = () => {
     const link = window.location.href;
@@ -499,14 +509,17 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  if (isMeetingLoading) return <div className="h-screen flex items-center justify-center"><Skeleton className="h-12 w-48 rounded-xl" /></div>;
+  if (isMeetingLoading) return <div className="h-screen flex items-center justify-center bg-[#F8F9FB]"><Skeleton className="h-16 w-64 rounded-3xl" /></div>;
 
   if (!meetingData || meetingData?.status === 'finished') {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
-        <Trophy className="h-20 w-20 text-primary mb-6" />
-        <h1 className="text-4xl font-black mb-3 text-zinc-900">Session Completed</h1>
-        <Button onClick={() => router.push('/dashboard')} className="rounded-2xl h-14 px-10">Back to Dashboard</Button>
+        <div className="bg-zinc-900 p-8 rounded-[3rem] shadow-2xl mb-12 animate-in zoom-in duration-500">
+          <Trophy className="h-24 w-24 text-white" />
+        </div>
+        <h1 className="text-5xl font-black mb-4 text-zinc-900 tracking-tighter">Session Completed</h1>
+        <p className="text-zinc-500 font-bold uppercase tracking-[0.2em] mb-12 text-xs">Thank you for connecting with ConnectVerse</p>
+        <Button onClick={() => router.push('/dashboard')} className="rounded-[2rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-xl hover:scale-105 transition-all">Back to Dashboard</Button>
       </div>
     );
   }
@@ -519,40 +532,45 @@ export default function RoomPage() {
     <AuthGuard>
       <div className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
         {isSharingScreen && (
-          <div className="bg-primary px-8 py-3 flex items-center justify-between text-white animate-in slide-in-from-top duration-300 z-50">
-             <div className="flex items-center gap-3">
-                <Monitor className="h-4 w-4" />
-                <span className="font-black text-[11px] uppercase tracking-widest">You are presenting to everyone</span>
+          <div className="bg-zinc-900 px-10 py-4 flex items-center justify-between text-white animate-in slide-in-from-top duration-500 z-50 shadow-2xl">
+             <div className="flex items-center gap-4">
+                <div className="p-2 bg-primary/20 rounded-lg animate-pulse">
+                  <Monitor className="h-5 w-5 text-primary" />
+                </div>
+                <span className="font-black text-[11px] uppercase tracking-[0.25em]">You are presenting to everyone</span>
              </div>
-             <Button variant="ghost" size="sm" onClick={stopScreenShare} className="text-white hover:bg-white/20 font-black uppercase text-[10px] tracking-widest border border-white/30 rounded-lg">Stop Presenting</Button>
+             <Button variant="ghost" size="sm" onClick={stopScreenShare} className="text-white hover:bg-white/10 font-black uppercase text-[10px] tracking-[0.2em] border border-white/20 rounded-xl px-6 h-10">Stop Presenting</Button>
           </div>
         )}
 
-        <header className="flex h-20 items-center justify-between px-10 bg-white border-b z-10 shrink-0">
-          <div className="flex items-center gap-8">
-            <div className="bg-zinc-900 flex items-center justify-center h-12 w-12 rounded-[1.25rem] text-white font-black text-xl shadow-lg ring-4 ring-zinc-50">CV</div>
+        <header className="flex h-24 items-center justify-between px-12 bg-white border-b z-10 shrink-0 shadow-sm">
+          <div className="flex items-center gap-10">
+            <div className="bg-zinc-900 flex items-center justify-center h-14 w-14 rounded-[1.5rem] text-white font-black text-2xl shadow-2xl ring-4 ring-zinc-50 transition-transform hover:rotate-6">CV</div>
             <div className="flex flex-col">
-               <div className="flex items-center gap-3">
-                 <h1 className="text-base font-black truncate max-w-[300px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Session'}</h1>
-                 <Button variant="ghost" size="icon" onClick={copyInviteLink} className="h-8 w-8 rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/5"><LinkIcon className="h-4 w-4" /></Button>
+               <div className="flex items-center gap-4">
+                 <h1 className="text-xl font-black truncate max-w-[400px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Live Session'}</h1>
+                 <Button variant="secondary" size="icon" onClick={copyInviteLink} className="h-10 w-10 rounded-xl text-zinc-400 hover:text-primary hover:bg-primary/5 bg-zinc-50 shadow-sm"><LinkIcon className="h-4 w-4" /></Button>
                </div>
-               <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.25em] mt-1">{screenSharerId ? 'Presentation Active' : 'Live Room'}</p>
+               <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.3em] mt-1.5 flex items-center gap-2">
+                 <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                 {screenSharerId ? 'Presentation Active' : 'Live Meeting Room'}
+               </p>
             </div>
           </div>
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-3 bg-zinc-50 border border-zinc-100 rounded-[1.25rem] px-5 py-3 text-xs font-black text-zinc-600 shadow-sm"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
+          <div className="flex items-center gap-8">
+            <div className="flex items-center gap-4 bg-zinc-50 border border-zinc-100 rounded-[1.5rem] px-6 py-4 text-xs font-black text-zinc-600 shadow-inner"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
             {isHost ? (
-              <Button onClick={() => updateDoc(meetingRef!, { status: 'finished', endedAt: serverTimestamp() })} variant="destructive" className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest shadow-lg bg-[#FF4545] border-none">End Session</Button>
+              <Button onClick={() => updateDoc(meetingRef!, { status: 'finished', endedAt: serverTimestamp() })} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none hover:scale-105 transition-all">End Session</Button>
             ) : (
-              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-[1.25rem] h-14 px-10 font-black uppercase text-xs tracking-widest border-zinc-200">Leave</Button>
+              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200 shadow-sm hover:bg-zinc-50">Leave Room</Button>
             )}
           </div>
         </header>
 
-        <main className="flex-1 flex overflow-hidden p-8 gap-8 relative">
-          <div className="flex-1 flex flex-col gap-8 overflow-hidden relative">
-            <div className="flex-1 bg-[#121212] rounded-[3.5rem] relative overflow-hidden shadow-2xl border border-white/5 p-4">
-               <div className="w-full h-full flex items-center justify-center">
+        <main className="flex-1 flex overflow-hidden p-10 gap-10 relative">
+          <div className="flex-1 flex flex-col gap-10 overflow-hidden relative">
+            <div className="flex-1 bg-[#0F0F0F] rounded-[4rem] relative overflow-hidden shadow-[0_40px_100px_-20px_rgba(0,0,0,0.3)] border border-white/5 p-6">
+               <div className="w-full h-full flex items-center justify-center transition-all duration-700">
                  {screenSharerId ? (
                    <StreamView 
                      stream={screenSharerId === user?.uid ? localScreenStream.current : remoteScreenStreams.get(screenSharerId) || null}
@@ -571,8 +589,7 @@ export default function RoomPage() {
                  )}
                </div>
 
-              {/* Reaction Overlay */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[3.5rem]">
+              <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[4rem]">
                 {activeReactions.map(reaction => (
                   <FloatingReaction 
                     key={reaction.id} 
@@ -583,7 +600,10 @@ export default function RoomPage() {
               </div>
 
               {(screenSharerId || !isVideoOff) && (
-                <div className="absolute bottom-12 right-12 w-64 aspect-video rounded-3xl overflow-hidden border-4 border-white shadow-2xl z-40 bg-zinc-900 ring-1 ring-black/10 transition-all duration-500 hover:scale-110">
+                <div className={cn(
+                  "absolute bottom-16 right-16 w-80 aspect-video rounded-[2.5rem] overflow-hidden border-[6px] border-white/10 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)] z-40 bg-zinc-900 backdrop-blur-3xl transition-all duration-700 hover:scale-105",
+                  !screenSharerId && "opacity-0 scale-90 pointer-events-none"
+                )}>
                    <StreamView 
                      stream={localCameraStream.current} 
                      name="You" 
@@ -595,62 +615,64 @@ export default function RoomPage() {
               )}
             </div>
 
-            <div className="h-28 mx-auto w-fit bg-white rounded-[3rem] border border-zinc-100 shadow-xl flex items-center px-10 gap-4 shrink-0 -mt-14 z-20">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", isAudioMuted ? "bg-[#FF4545] scale-110" : "bg-zinc-100")}>{isAudioMuted ? <MicOff className="h-7 w-7 text-white" /> : <Mic className="h-7 w-7 text-zinc-700" />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", isVideoOff ? "bg-[#FF4545] scale-110" : "bg-zinc-100")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
-               <Separator orientation="vertical" className="h-12 mx-2" />
-               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", isSharingScreen ? "bg-primary" : "bg-zinc-50")}>{isSharingScreen ? <StopCircle className="h-7 w-7 text-white" /> : <ScreenShare className="h-7 w-7 text-zinc-700" />}</Button>
+            <div className="h-32 mx-auto w-fit bg-white/90 backdrop-blur-3xl rounded-[3.5rem] border border-white shadow-[0_20px_50px_rgba(0,0,0,0.1)] flex items-center px-12 gap-6 shrink-0 -mt-16 z-20 ring-1 ring-zinc-100">
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isAudioMuted ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isAudioMuted ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isVideoOff ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isVideoOff ? <VideoOff className="h-8 w-8" /> : <VideoIcon className="h-8 w-8" />}</Button>
+               <Separator orientation="vertical" className="h-14 mx-2 bg-zinc-100" />
                
                <Popover>
                   <PopoverTrigger asChild>
-                    <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 transition-all">
-                      <Smile className="h-7 w-7 text-zinc-700" />
+                    <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 transition-all shadow-xl hover:scale-110">
+                      <Smile className="h-8 w-8 text-zinc-700" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent side="top" align="center" className="w-fit p-3 bg-white/80 backdrop-blur-xl border-zinc-100 rounded-3xl shadow-2xl mb-4">
-                    <div className="flex gap-2">
-                      {EMOJIS.map(emoji => (
-                        <button 
-                          key={emoji} 
-                          onClick={() => sendReaction(emoji)}
-                          className="text-3xl hover:scale-125 transition-transform p-2 rounded-xl hover:bg-zinc-100"
-                        >
-                          {emoji}
-                        </button>
+                  <PopoverContent side="top" align="center" className="w-fit p-4 bg-white/80 backdrop-blur-2xl border-white rounded-[2.5rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] mb-8 animate-in fade-in zoom-in slide-in-from-bottom-4 duration-300">
+                    <div className="flex gap-4">
+                      {EMOJIS.map((emoji, i) => (
+                        <div key={emoji} className="flex flex-col items-center gap-2">
+                          <button 
+                            onClick={() => sendReaction(emoji)}
+                            className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl hover:bg-zinc-100/50 active:scale-90"
+                          >
+                            {emoji}
+                          </button>
+                          <span className="text-[10px] font-black text-zinc-300 uppercase">{i + 1}</span>
+                        </div>
                       ))}
                     </div>
                   </PopoverContent>
                </Popover>
 
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", hasHandRaised ? "bg-yellow-400 scale-110" : "bg-zinc-50")}><Hand className="h-7 w-7 text-zinc-700" /></Button>
-               <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50"><MoreVertical className="h-7 w-7 text-zinc-700" /></Button>
+               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
+               <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 shadow-xl transition-all hover:scale-110"><MoreVertical className="h-8 w-8 text-zinc-700" /></Button>
             </div>
           </div>
 
-          <Card className="w-[400px] flex flex-col overflow-hidden border-zinc-100 shadow-xl shrink-0 rounded-[3.5rem] bg-white border-none">
+          <Card className="w-[450px] flex flex-col overflow-hidden border-none shadow-[0_40px_80px_-20px_rgba(0,0,0,0.1)] shrink-0 rounded-[4rem] bg-white">
              <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
-                <div className="px-8 pt-10 pb-4 border-b">
-                   <TabsList className="w-full h-14 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1">
-                      <TabsTrigger value="chat" className="rounded-xl font-black text-[10px] uppercase tracking-widest"><MessageSquare className="h-4 w-4 mr-2" /> Chat</TabsTrigger>
-                      <TabsTrigger value="participants" className="rounded-xl font-black text-[10px] uppercase tracking-widest"><Users className="h-4 w-4 mr-2" /> People</TabsTrigger>
+                <div className="px-10 pt-12 pb-6 border-b">
+                   <TabsList className="w-full h-16 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1.5 ring-1 ring-zinc-50">
+                      <TabsTrigger value="chat" className="rounded-xl font-black text-[11px] uppercase tracking-widest data-[state=active]:shadow-lg"><MessageSquare className="h-4 w-4 mr-3" /> Chat</TabsTrigger>
+                      <TabsTrigger value="participants" className="rounded-xl font-black text-[11px] uppercase tracking-widest data-[state=active]:shadow-lg"><Users className="h-4 w-4 mr-3" /> People</TabsTrigger>
                    </TabsList>
                 </div>
 
                 <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-8">
-                      <div className="space-y-6">
+                   <ScrollArea className="flex-1 p-10">
+                      <div className="space-y-8">
                          {chatMessages?.map((msg) => (
-                           <div key={msg.id} className={cn("flex flex-col gap-1.5", msg.senderId === user?.uid ? "items-end" : "items-start")}>
-                              <div className="text-[9px] font-black text-zinc-400 px-2 uppercase tracking-widest">{msg.senderName}</div>
-                              <div className={cn("max-w-[85%] px-5 py-3.5 rounded-2xl text-[12px] font-bold shadow-sm", msg.senderId === user?.uid ? "bg-zinc-900 text-white" : "bg-zinc-50 text-zinc-800")}>{msg.text}</div>
+                           <div key={msg.id} className={cn("flex flex-col gap-2.5", msg.senderId === user?.uid ? "items-end" : "items-start")}>
+                              <div className="text-[10px] font-black text-zinc-400 px-3 uppercase tracking-widest">{msg.senderName}</div>
+                              <div className={cn("max-w-[85%] px-6 py-4 rounded-[1.75rem] text-[13px] font-bold shadow-sm leading-relaxed", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 rounded-tl-none")}>{msg.text}</div>
                            </div>
                          ))}
                       </div>
                    </ScrollArea>
-                   <div className="p-6 border-t">
+                   <div className="p-8 border-t bg-zinc-50/50">
                       <div className="relative flex items-center">
                         <Input 
-                          placeholder="Type message..." 
+                          placeholder="Type a message..." 
                           value={chatInput} 
                           onChange={(e) => setChatInput(e.target.value)} 
                           onKeyDown={(e) => {
@@ -664,9 +686,9 @@ export default function RoomPage() {
                               setChatInput('');
                             }
                           }} 
-                          className="pr-12 rounded-2xl h-12 bg-zinc-50 border-none font-medium text-sm" 
+                          className="pr-14 rounded-2xl h-14 bg-white border-zinc-100 shadow-sm font-bold text-sm" 
                         />
-                        <Button size="icon" variant="ghost" className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 rounded-xl" onClick={() => {
+                        <Button size="icon" variant="ghost" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-11 w-11 rounded-xl hover:bg-zinc-50" onClick={() => {
                           if (chatInput.trim() && firestore && user) {
                             addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
                               senderId: user.uid, 
@@ -676,26 +698,29 @@ export default function RoomPage() {
                             });
                             setChatInput('');
                           }
-                        }}><Send className="h-4 w-4 text-zinc-400" /></Button>
+                        }}><Send className="h-5 w-5 text-zinc-400" /></Button>
                       </div>
                    </div>
                 </TabsContent>
 
                 <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-6">
-                      <div className="space-y-3">
+                   <ScrollArea className="flex-1 p-8">
+                      <div className="space-y-4">
                         {activeParticipants.map(p => (
-                          <div key={p.id} className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
-                             <div className="flex items-center gap-3">
-                                <div className="h-8 w-8 rounded-full bg-zinc-200 flex items-center justify-center text-[10px] font-black uppercase">
+                          <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all hover:bg-zinc-100/50">
+                             <div className="flex items-center gap-4">
+                                <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black uppercase text-zinc-400 ring-1 ring-zinc-100">
                                   {p.name.substring(0, 2)}
                                 </div>
-                                <span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span>
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span>
+                                  <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
+                                </div>
                              </div>
-                             <div className="flex gap-2">
-                                {p.isMuted && <MicOff className="h-3 w-3 text-destructive" />}
-                                {p.isVideoOff && <VideoOff className="h-3 w-3 text-destructive" />}
-                                {p.hasRaisedHand && <Hand className="h-3 w-3 text-yellow-500 animate-bounce" />}
+                             <div className="flex gap-3">
+                                {p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}
+                                {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
+                                {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
                              </div>
                           </div>
                         ))}
