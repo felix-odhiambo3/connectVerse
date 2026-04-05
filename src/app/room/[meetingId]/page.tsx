@@ -228,7 +228,11 @@ export default function RoomPage() {
 
   const { data: meetingData, isLoading: isMeetingLoading } = useDoc<any>(meetingRef);
 
-  const isHost = user?.uid === meetingData?.hostId;
+  const isHost = useMemo(() => {
+    if (!user || !meetingData) return false;
+    return user.uid === meetingData.hostId;
+  }, [user?.uid, meetingData?.hostId]);
+
   const hostId = meetingData?.hostId;
   const screenSharerId = meetingData?.screenSharerId;
   const isMeetingLocked = meetingData?.isLocked;
@@ -300,9 +304,7 @@ export default function RoomPage() {
     let role: Participant['role'] = user.uid === hostId ? 'host' : 'participant';
 
     if (isInitial) {
-      // Check if meeting is locked and user is NOT the host
       if (isMeetingLocked && user.uid !== hostId) {
-        // Double check if user is already a participant (e.g. they were admitted before)
         const snap = await getDoc(pRef);
         if (snap.exists() && (snap.data().role === 'participant' || snap.data().role === 'host' || snap.data().role === 'co-host')) {
           role = snap.data().role;
@@ -330,7 +332,6 @@ export default function RoomPage() {
     initialPresenceSynced.current = true;
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
 
-  // Captions Logic
   useEffect(() => {
     if (!isCaptionsEnabled) {
       if (recognitionRef.current) {
@@ -626,7 +627,6 @@ export default function RoomPage() {
     );
   }
 
-  // Waiting Room View
   if (localParticipant?.role === 'waiting') {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
@@ -724,7 +724,6 @@ export default function RoomPage() {
                 ))}
               </div>
 
-              {/* Captions Overlay */}
               {isCaptionsEnabled && (
                 <div className="absolute bottom-32 left-0 right-0 flex justify-center pointer-events-none z-50">
                   <div className="bg-black/80 backdrop-blur-xl px-10 py-6 rounded-[2.5rem] border border-white/10 max-w-[80%] shadow-2xl animate-in slide-in-from-bottom duration-500">
