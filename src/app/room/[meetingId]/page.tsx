@@ -137,15 +137,15 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Extreme limits for Spark plan (2 for signaling)
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(2));
+    // QUOTA: Standard signaling limit for point-to-point mesh on Spark plan
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(3));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(5));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
@@ -153,7 +153,7 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 2);
+    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting').slice(0, 3);
   }, [participants]);
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
@@ -163,7 +163,7 @@ export default function RoomPage() {
     return activeParticipants[0];
   }, [activeParticipants]);
 
-  // ATOMIC PRESENCE: Event-driven only. No reactive loop.
+  // ATOMIC PRESENCE: Event-driven updates to minimize database operations
   const syncPresence = useCallback((updates: Partial<Participant>) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -176,7 +176,6 @@ export default function RoomPage() {
     }, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading]);
 
-  // Join Presence (Run once)
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
     syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false });
@@ -269,7 +268,7 @@ export default function RoomPage() {
     syncPresence({ hasRaisedHand: newState });
   };
 
-  // ATOMIC SIGNALING: Zero-chatter mode. Wait for ICE complete before one-shot write.
+  // ATOMIC SIGNALING: Buffering candidates to transmit in single atomic updates
   useEffect(() => {
     if (!user || !firestore || !meetingId || !hasMediaPermission || !activeParticipantIds) return;
 
@@ -334,7 +333,6 @@ export default function RoomPage() {
         }
       };
 
-      // Fallback if gathering takes too long
       const gatheringTimeout = setTimeout(sendCandidates, 5000);
 
       if (user.uid < participantId) {

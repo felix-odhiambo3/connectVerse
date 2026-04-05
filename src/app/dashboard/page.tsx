@@ -61,12 +61,12 @@ export default function DashboardPage() {
 
   const allUserMeetingsQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
-    // QUOTA: Extreme limits for Spark plan (3 documents)
+    // QUOTA: Increased limit slightly for better UX while remaining frugal
     return query(
       collection(firestore, 'meetings'), 
       where('hostId', '==', user.uid),
       orderBy('createdAt', 'desc'),
-      limit(3) 
+      limit(5) 
     );
   }, [user?.uid, firestore]);
 
