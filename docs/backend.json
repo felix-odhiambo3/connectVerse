@@ -136,22 +136,18 @@
         "remoteUnmuteRequestAt": { "type": "string", "format": "date-time" }
       }
     },
-    "SeriesAttendance": {
-      "title": "SeriesAttendance",
-      "description": "Tracks a user's cumulative attendance in a specific recurring series.",
+    "Reaction": {
+      "title": "Reaction",
+      "description": "A quick emoji reaction sent by a participant.",
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "seriesId": { "type": "string" },
-        "attendedHours": { "type": "number" },
-        "sessionsAttended": { "type": "integer" },
-        "completedSessionIds": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
-        "lastUpdated": { "type": "string", "format": "date-time" }
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["👍", "👏", "❤️", "😂", "😮", "👎"] },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["userId", "seriesId", "attendedHours", "sessionsAttended"]
+      "required": ["type", "senderId", "createdAt"]
     }
   },
   "auth": {
@@ -187,11 +183,11 @@
         }
       },
       {
-        "path": "/seriesAttendance/{seriesId}/users/{userId}",
+        "path": "/meetings/{meetingId}/reactions/{reactionId}",
         "definition": {
-          "entityName": "SeriesAttendance",
-          "schema": { "$ref": "#/backend/entities/SeriesAttendance" },
-          "description": "Cumulative attendance record for a user in a series."
+          "entityName": "Reaction",
+          "schema": { "$ref": "#/backend/entities/Reaction" },
+          "description": "Real-time emoji reactions sent during a meeting."
         }
       }
     ]

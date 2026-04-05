@@ -1,3 +1,4 @@
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -11,12 +12,26 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Explicit permissions for meetings collection and sub-resources
     match /meetings/{meetingId} {
-      allow read, write, list: if isSignedIn();
+      allow read, write: if isSignedIn();
       
-      match /{allPaths=**} {
-        allow read, write, list: if isSignedIn();
+      match /participants/{participantId} {
+        allow read, write: if isSignedIn();
+      }
+
+      match /chat/{messageId} {
+        allow read, write: if isSignedIn();
+      }
+
+      match /webrtc/{channelId} {
+        allow read, write: if isSignedIn();
+      }
+
+      match /reactions/{reactionId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn();
+        // Reactions are immutable for performance and audit
+        allow update, delete: if false;
       }
     }
 

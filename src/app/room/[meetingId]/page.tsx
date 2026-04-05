@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -15,6 +16,7 @@ import {
   onSnapshot,
   limit,
   setDoc,
+  where,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card } from '@/components/ui/card';
@@ -39,13 +41,15 @@ import {
   Monitor,
   MoreVertical,
   Link as LinkIcon,
+  Smile,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
-import { setDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { setDocumentNonBlocking, addDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface Participant {
   id: string;
@@ -65,6 +69,14 @@ interface ChatMessage {
   createdAt: Timestamp;
 }
 
+interface Reaction {
+  id: string;
+  type: string;
+  senderId: string;
+  senderName: string;
+  createdAt: Timestamp;
+}
+
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -72,12 +84,40 @@ const ICE_SERVERS = {
   ],
 };
 
+const EMOJIS = ["👍", "👏", "❤️", "😂", "😮", "👎"];
+
 function formatDuration(seconds: number) {
   if (isNaN(seconds) || seconds < 0) return '00:00:00';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+}
+
+function FloatingReaction({ reaction, onComplete }: { reaction: Reaction, onComplete: (id: string) => void }) {
+  useEffect(() => {
+    const timer = setTimeout(() => onComplete(reaction.id), 4000);
+    return () => clearTimeout(timer);
+  }, [reaction.id, onComplete]);
+
+  // Randomize horizontal position and animation duration slightly
+  const left = useMemo(() => Math.floor(Math.random() * 40) + 30, []); // 30-70%
+  const duration = useMemo(() => 3 + Math.random() * 2, []); // 3-5s
+
+  return (
+    <div 
+      className="absolute bottom-0 pointer-events-none z-50 animate-float-up flex flex-col items-center gap-1"
+      style={{ 
+        left: `${left}%`,
+        animationDuration: `${duration}s`
+      }}
+    >
+      <div className="text-4xl drop-shadow-2xl">{reaction.type}</div>
+      <div className="bg-black/40 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] text-white font-black uppercase tracking-widest whitespace-nowrap">
+        {reaction.senderName}
+      </div>
+    </div>
+  );
 }
 
 function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, className }: { 
@@ -147,6 +187,7 @@ export default function RoomPage() {
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [chatInput, setChatInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [activeReactions, setActiveReactions] = useState<Reaction[]>([]);
 
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -185,6 +226,30 @@ export default function RoomPage() {
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
   const chatMessages = useMemo(() => rawChatMessages ? [...rawChatMessages].reverse() : [], [rawChatMessages]);
+
+  // Reactions listener - only look for reactions created in the last 10 seconds to keep it performant
+  const startTime = useRef(Timestamp.now());
+  const reactionsRef = useMemoFirebase(() => {
+    if (!firestore || !meetingId || !user) return null;
+    return query(
+      collection(firestore, 'meetings', meetingId, 'reactions'), 
+      where('createdAt', '>', startTime.current),
+      limit(10)
+    );
+  }, [firestore, meetingId, user]);
+
+  const { data: remoteReactions } = useCollection<Reaction>(reactionsRef);
+
+  useEffect(() => {
+    if (!remoteReactions) return;
+    // Add new reactions to the visual queue if not already there
+    setActiveReactions(prev => {
+      const existingIds = new Set(prev.map(r => r.id));
+      const newReactions = remoteReactions.filter(r => !existingIds.has(r.id));
+      if (newReactions.length === 0) return prev;
+      return [...prev, ...newReactions];
+    });
+  }, [remoteReactions]);
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
@@ -241,22 +306,15 @@ export default function RoomPage() {
     
     try {
       if (isVideoOff) {
-        // Need to start video
         const constraints = { video: true, audio: true };
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        
-        // Ensure audio track follows current mute state
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
-        
-        // Stop old tracks if we had an audio-only stream
         localCameraStream.current?.getTracks().forEach(t => t.stop());
-        
         localCameraStream.current = stream;
         updateTracksForPeers(stream, 'camera');
         setIsVideoOff(false);
         syncPresence({ isVideoOff: false });
       } else {
-        // Turning video off. If mic is on, we should keep audio stream alive
         if (!isAudioMuted) {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           localCameraStream.current?.getTracks().forEach(t => t.stop());
@@ -271,7 +329,7 @@ export default function RoomPage() {
         syncPresence({ isVideoOff: true });
       }
     } catch (err) {
-      toast({ variant: 'destructive', title: 'Camera Access Denied', description: 'Please check browser permissions.' });
+      toast({ variant: 'destructive', title: 'Camera Access Denied' });
     } finally {
       setIsProcessing(false);
     }
@@ -283,22 +341,18 @@ export default function RoomPage() {
     
     try {
       const newState = !isAudioMuted;
-      
       if (!newState && !localCameraStream.current) {
-        // User is unmuting but we have no stream yet
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
         localCameraStream.current = stream;
         updateTracksForPeers(stream, 'camera');
       }
-      
       if (localCameraStream.current) {
         localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !newState);
       }
-      
       setIsAudioMuted(newState);
       syncPresence({ isMuted: newState });
     } catch (err) {
-      toast({ variant: 'destructive', title: 'Mic Access Denied', description: 'Please check browser permissions.' });
+      toast({ variant: 'destructive', title: 'Mic Access Denied' });
     } finally {
       setIsProcessing(false);
     }
@@ -330,19 +384,28 @@ export default function RoomPage() {
     setIsSharingScreen(false);
   };
 
+  const sendReaction = async (emoji: string) => {
+    if (!user || !firestore || !meetingId) return;
+    const reactionRef = collection(firestore, 'meetings', meetingId, 'reactions');
+    addDocumentNonBlocking(reactionRef, {
+      type: emoji,
+      senderId: user.uid,
+      senderName: user.displayName || user.email?.split('@')[0],
+      createdAt: serverTimestamp(),
+    });
+  };
+
   const copyInviteLink = () => {
     const link = window.location.href;
     navigator.clipboard.writeText(link);
-    toast({ title: "Link copied!", description: "Meeting invitation link is ready to share." });
+    toast({ title: "Link copied!" });
   };
 
-  // WebRTC Perfect Negotiation (Polite/Impolite Peer pattern)
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds) return;
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // Cleanup disconnected peers
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -358,11 +421,8 @@ export default function RoomPage() {
 
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
-      
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
-      
-      // Add existing tracks
       if (localCameraStream.current) {
         const senders = localCameraStream.current.getTracks().map(t => pc.addTrack(t, localCameraStream.current!));
         cameraSenders.current.set(participantId, senders);
@@ -371,21 +431,17 @@ export default function RoomPage() {
         const senders = localScreenStream.current.getTracks().map(t => pc.addTrack(t, localScreenStream.current!));
         screenSenders.current.set(participantId, senders);
       }
-
       pc.ontrack = (event) => {
         const stream = event.streams[0];
-        // If this stream is from the current sharer, it's a screen share
         if (participantId === screenSharerId) {
           setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         } else {
           setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
         }
       };
-
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
-      const isPolite = user.uid > participantId; // Lower UID is impolite (starts negotiation)
-
+      const isPolite = user.uid > participantId;
       let makingOffer = false;
       let ignoreOffer = false;
 
@@ -399,59 +455,39 @@ export default function RoomPage() {
                [user.uid]: { type: offer.type, sdp: offer.sdp, timestamp: serverTimestamp() } 
              }, { merge: true });
           }
-        } catch (err) {
-          console.error("Negotiation error:", err);
-        } finally {
-          makingOffer = false;
-        }
+        } catch (err) {} finally { makingOffer = false; }
       };
 
       pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
-          setDoc(channelRef, {
-            [`candidates_${user.uid}`]: candidate.toJSON()
-          }, { merge: true });
+          setDoc(channelRef, { [`candidates_${user.uid}`]: candidate.toJSON() }, { merge: true });
         }
       };
 
       const unsubChannel = onSnapshot(channelRef, async (snapshot) => {
         const data = snapshot.data();
         if (!data) return;
-
         const remoteData = data[participantId];
         const remoteCandidate = data[`candidates_${participantId}`];
-
         try {
           if (remoteData) {
             const offerCollision = remoteData.type === 'offer' && (makingOffer || pc.signalingState !== 'stable');
             ignoreOffer = !isPolite && offerCollision;
-            
             if (ignoreOffer) return;
-
             await pc.setRemoteDescription(remoteData);
             if (remoteData.type === 'offer') {
               await pc.setLocalDescription();
               const answer = pc.localDescription;
               if (answer) {
-                await setDoc(channelRef, { 
-                  [user.uid]: { type: answer.type, sdp: answer.sdp, timestamp: serverTimestamp() } 
-                }, { merge: true });
+                await setDoc(channelRef, { [user.uid]: { type: answer.type, sdp: answer.sdp, timestamp: serverTimestamp() } }, { merge: true });
               }
             }
           }
-          if (remoteCandidate) {
-            await pc.addIceCandidate(new RTCIceCandidate(remoteCandidate));
-          }
-        } catch (err) {
-          if (!ignoreOffer) console.error("Signaling error:", err);
-        }
+          if (remoteCandidate) await pc.addIceCandidate(new RTCIceCandidate(remoteCandidate));
+        } catch (err) {}
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-
-    return () => {
-       // Cleanup handled by the dependency array and effect logic
-    };
   }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId]);
 
   useEffect(() => {
@@ -535,6 +571,17 @@ export default function RoomPage() {
                  )}
                </div>
 
+              {/* Reaction Overlay */}
+              <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[3.5rem]">
+                {activeReactions.map(reaction => (
+                  <FloatingReaction 
+                    key={reaction.id} 
+                    reaction={reaction} 
+                    onComplete={(id) => setActiveReactions(prev => prev.filter(r => r.id !== id))} 
+                  />
+                ))}
+              </div>
+
               {(screenSharerId || !isVideoOff) && (
                 <div className="absolute bottom-12 right-12 w-64 aspect-video rounded-3xl overflow-hidden border-4 border-white shadow-2xl z-40 bg-zinc-900 ring-1 ring-black/10 transition-all duration-500 hover:scale-110">
                    <StreamView 
@@ -553,6 +600,28 @@ export default function RoomPage() {
                <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", isVideoOff ? "bg-[#FF4545] scale-110" : "bg-zinc-100")}>{isVideoOff ? <VideoOff className="h-7 w-7 text-white" /> : <VideoIcon className="h-7 w-7 text-zinc-700" />}</Button>
                <Separator orientation="vertical" className="h-12 mx-2" />
                <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", isSharingScreen ? "bg-primary" : "bg-zinc-50")}>{isSharingScreen ? <StopCircle className="h-7 w-7 text-white" /> : <ScreenShare className="h-7 w-7 text-zinc-700" />}</Button>
+               
+               <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 transition-all">
+                      <Smile className="h-7 w-7 text-zinc-700" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent side="top" align="center" className="w-fit p-3 bg-white/80 backdrop-blur-xl border-zinc-100 rounded-3xl shadow-2xl mb-4">
+                    <div className="flex gap-2">
+                      {EMOJIS.map(emoji => (
+                        <button 
+                          key={emoji} 
+                          onClick={() => sendReaction(emoji)}
+                          className="text-3xl hover:scale-125 transition-transform p-2 rounded-xl hover:bg-zinc-100"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </PopoverContent>
+               </Popover>
+
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-lg transition-all", hasHandRaised ? "bg-yellow-400 scale-110" : "bg-zinc-50")}><Hand className="h-7 w-7 text-zinc-700" /></Button>
                <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50"><MoreVertical className="h-7 w-7 text-zinc-700" /></Button>
             </div>
