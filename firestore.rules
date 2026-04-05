@@ -12,10 +12,18 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Standardized rules for meetings and their sub-collections
-    // Using {document=**} to ensure 'list' operations (collection queries) are permitted
-    match /meetings/{document=**} {
-      allow read, write: if isSignedIn();
+    // Explicitly handle collection and document levels for meetings
+    match /meetings {
+      allow list, create: if isSignedIn();
+      
+      match /{meetingId} {
+        allow get, update, delete: if isSignedIn();
+        
+        // Match all subcollections (chat, participants, webrtc)
+        match /{allSubcollections=**} {
+          allow read, write: if isSignedIn();
+        }
+      }
     }
 
     match /seriesAttendance/{seriesId}/users/{userId} {

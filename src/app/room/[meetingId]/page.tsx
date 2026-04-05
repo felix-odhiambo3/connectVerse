@@ -137,7 +137,7 @@ export default function RoomPage() {
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    // QUOTA: Extreme limitation for signaling (Max 3 participants for Spark-tier WebRTC efficiency)
+    // QUOTA: Extreme limitation for signaling (Max 3 participants for Spark-tier efficiency)
     return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(3));
   }, [firestore, meetingId, user]);
 
@@ -275,7 +275,6 @@ export default function RoomPage() {
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // Clean up connections that are no longer in the active list
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -321,7 +320,6 @@ export default function RoomPage() {
 
       const sendCandidates = () => {
         if (iceCandidates.length > 0) {
-          // QUOTA: Consolidate candidates into single atomic write to prevent exhaustion
           updateDocumentNonBlocking(channelRef, { 
             candidates: arrayUnion(...iceCandidates.map(c => ({ candidate: c, from: user.uid }))) 
           });
@@ -378,7 +376,6 @@ export default function RoomPage() {
     });
 
     return () => {
-      // QUOTA: Ensure all signaling listeners are explicitly detached during effect cleanup
       signalingUnsubs.current.forEach(unsub => unsub());
       signalingUnsubs.current.clear();
       pcs.current.forEach(pc => pc.close());
