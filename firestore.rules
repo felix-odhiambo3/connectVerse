@@ -11,12 +11,12 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Robust match for meetings and all sub-resources (chat, signaling, participants, webrtc)
+    // Broadly allow all signed-in users to access meetings and sub-collections
+    // This resolves permission issues with collection-level listing (dashboard)
     match /meetings/{allPaths=**} {
       allow read, write: if isSignedIn();
     }
 
-    // Robust recursive match for series attendance
     match /seriesAttendance/{allPaths=**} {
       allow read, write: if isSignedIn();
     }
