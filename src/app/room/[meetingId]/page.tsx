@@ -18,6 +18,7 @@ import {
   setDoc,
   where,
   deleteDoc,
+  getDoc,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { Card } from '@/components/ui/card';
@@ -44,13 +45,18 @@ import {
   Link as LinkIcon,
   Smile,
   Captions,
+  Lock,
+  Unlock,
+  ShieldCheck,
+  UserPlus,
+  UserX,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
-import { setDocumentNonBlocking, addDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { setDocumentNonBlocking, addDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface Participant {
@@ -225,13 +231,18 @@ export default function RoomPage() {
   const isHost = user?.uid === meetingData?.hostId;
   const hostId = meetingData?.hostId;
   const screenSharerId = meetingData?.screenSharerId;
+  const isMeetingLocked = meetingData?.isLocked;
 
   const participantsRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(20));
+    return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(50));
   }, [firestore, meetingId, user]);
 
   const { data: participants } = useCollection<Participant>(participantsRef);
+
+  const localParticipant = useMemo(() => {
+    return participants?.find(p => p.id === user?.uid);
+  }, [participants, user?.uid]);
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -275,22 +286,43 @@ export default function RoomPage() {
     return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
   }, [participants]);
 
+  const waitingParticipants = useMemo(() => {
+    if (!participants) return [];
+    return participants.filter(p => p.role === 'waiting');
+  }, [participants]);
+
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
 
-  const syncPresence = useCallback((updates: Partial<any>, isInitial = false) => {
+  const syncPresence = useCallback(async (updates: Partial<any>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
+    
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
+    let role: Participant['role'] = user.uid === hostId ? 'host' : 'participant';
+
+    if (isInitial) {
+      // Check if meeting is locked and user is NOT the host
+      if (isMeetingLocked && user.uid !== hostId) {
+        // Double check if user is already a participant (e.g. they were admitted before)
+        const snap = await getDoc(pRef);
+        if (snap.exists() && (snap.data().role === 'participant' || snap.data().role === 'host' || snap.data().role === 'co-host')) {
+          role = snap.data().role;
+        } else {
+          role = 'waiting';
+        }
+      }
+    }
+
     const data: any = {
       ...updates,
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
-      role: user.uid === hostId ? 'host' : 'participant',
+      role: isInitial ? role : (localParticipant?.role || role),
     };
     if (isInitial) {
       data.joinedAt = serverTimestamp();
     }
     setDocumentNonBlocking(pRef, data, { merge: true });
-  }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading]);
+  }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked, localParticipant?.role]);
 
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
@@ -324,13 +356,6 @@ export default function RoomPage() {
     recognition.lang = 'en-US';
 
     recognition.onresult = (event: any) => {
-      let finalTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
-        }
-      }
-      
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
       if (currentTranscript !== lastCaptionRef.current && user && firestore) {
         lastCaptionRef.current = currentTranscript;
@@ -464,13 +489,32 @@ export default function RoomPage() {
   }, [user, firestore, meetingId]);
 
   const copyInviteLink = () => {
-    const link = window.location.href;
+    const link = window.location.origin + `/room/${meetingId}`;
     navigator.clipboard.writeText(link);
     toast({ title: "Link copied!" });
   };
 
+  const toggleMeetingLock = () => {
+    if (!isHost || !meetingRef) return;
+    updateDoc(meetingRef, { isLocked: !isMeetingLocked });
+    toast({ 
+      title: !isMeetingLocked ? "Meeting Locked" : "Meeting Unlocked", 
+      description: !isMeetingLocked ? "New participants must be admitted by you." : "Anyone with the link can join." 
+    });
+  };
+
+  const admitParticipant = (participantId: string) => {
+    if (!isHost || !firestore || !meetingId) return;
+    updateDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'participants', participantId), { role: 'participant' });
+  };
+
+  const removeParticipant = (participantId: string) => {
+    if (!isHost || !firestore || !meetingId) return;
+    updateDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'participants', participantId), { role: 'left' });
+  };
+
   useEffect(() => {
-    if (!user || !firestore || !meetingId || !activeParticipantIds) return;
+    if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting') return;
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
@@ -556,7 +600,7 @@ export default function RoomPage() {
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-  }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId]);
+  }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId, localParticipant?.role]);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') return;
@@ -569,15 +613,37 @@ export default function RoomPage() {
 
   if (isMeetingLoading) return <div className="h-screen flex items-center justify-center bg-[#F8F9FB]"><Skeleton className="h-16 w-64 rounded-3xl" /></div>;
 
-  if (!meetingData || meetingData?.status === 'finished') {
+  if (!meetingData || meetingData?.status === 'finished' || localParticipant?.role === 'left') {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
         <div className="bg-zinc-900 p-8 rounded-[3rem] shadow-2xl mb-12 animate-in zoom-in duration-500">
           <Trophy className="h-24 w-24 text-white" />
         </div>
-        <h1 className="text-5xl font-black mb-4 text-zinc-900 tracking-tighter">Session Completed</h1>
+        <h1 className="text-5xl font-black mb-4 text-zinc-900 tracking-tighter">Session Ended</h1>
         <p className="text-zinc-500 font-bold uppercase tracking-[0.2em] mb-12 text-xs">Thank you for connecting with ConnectVerse</p>
         <Button onClick={() => router.push('/dashboard')} className="rounded-[2rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-xl hover:scale-105 transition-all">Back to Dashboard</Button>
+      </div>
+    );
+  }
+
+  // Waiting Room View
+  if (localParticipant?.role === 'waiting') {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
+        <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-zinc-100 max-w-lg w-full animate-in fade-in zoom-in duration-500">
+          <div className="h-20 w-20 bg-primary/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8">
+            <Lock className="h-10 w-10 text-primary" />
+          </div>
+          <h1 className="text-3xl font-black mb-4 text-zinc-900 tracking-tighter">Meeting Locked</h1>
+          <p className="text-zinc-500 font-medium mb-12">The host has restricted access to this session. Please wait for them to admit you.</p>
+          <div className="space-y-4">
+            <div className="flex items-center justify-center gap-3 py-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs font-black uppercase tracking-widest text-zinc-400">Waiting for host...</span>
+            </div>
+            <Button variant="outline" onClick={() => router.push('/dashboard')} className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] border-zinc-200">Cancel Request</Button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -607,7 +673,8 @@ export default function RoomPage() {
             <div className="flex flex-col">
                <div className="flex items-center gap-4">
                  <h1 className="text-xl font-black truncate max-w-[400px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Live Session'}</h1>
-                 <Button variant="secondary" size="icon" onClick={copyInviteLink} className="h-10 w-10 rounded-xl text-zinc-400 hover:text-primary hover:bg-primary/5 bg-zinc-50 shadow-sm"><LinkIcon className="h-4 w-4" /></Button>
+                 <Button variant="secondary" size="icon" onClick={copyInviteLink} title="Copy invitation link" className="h-10 w-10 rounded-xl text-zinc-400 hover:text-primary hover:bg-primary/5 bg-zinc-50 shadow-sm"><LinkIcon className="h-4 w-4" /></Button>
+                 {isMeetingLocked && <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 rounded-lg px-3 py-1 font-black text-[9px] uppercase tracking-widest"><Lock className="h-3 w-3 mr-1.5" /> Locked</Badge>}
                </div>
                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.3em] mt-1.5 flex items-center gap-2">
                  <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>
@@ -723,6 +790,40 @@ export default function RoomPage() {
 
                <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
+               
+               {isHost && (
+                 <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant={isMeetingLocked ? "default" : "secondary"} size="icon" className={cn("rounded-2xl h-16 w-16 transition-all shadow-xl hover:scale-110", isMeetingLocked ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
+                        <ShieldCheck className="h-8 w-8" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl border-white rounded-[3.5rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] mb-8 animate-in fade-in zoom-in slide-in-from-bottom-4 duration-300">
+                       <div className="space-y-6">
+                          <div className="flex flex-col gap-1.5">
+                             <h3 className="font-black text-sm text-zinc-900 flex items-center gap-2">Security Settings</h3>
+                             <p className="text-[10px] font-medium text-zinc-400 leading-relaxed">Control who can join and interact in this meeting.</p>
+                          </div>
+                          <Separator className="bg-zinc-100" />
+                          <div className="flex items-center justify-between">
+                             <div className="flex flex-col gap-1">
+                                <span className="text-[11px] font-black uppercase tracking-widest text-zinc-700">Lock Meeting</span>
+                                <span className="text-[9px] font-bold text-zinc-400">Prevent new people from joining.</span>
+                             </div>
+                             <Button 
+                              onClick={toggleMeetingLock} 
+                              variant={isMeetingLocked ? "destructive" : "secondary"} 
+                              size="sm" 
+                              className="rounded-xl h-10 w-10 p-0"
+                            >
+                               {isMeetingLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+                             </Button>
+                          </div>
+                       </div>
+                    </PopoverContent>
+                 </Popover>
+               )}
+               
                <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 shadow-xl transition-all hover:scale-110"><MoreVertical className="h-8 w-8 text-zinc-700" /></Button>
             </div>
           </div>
@@ -783,25 +884,59 @@ export default function RoomPage() {
 
                 <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
                    <ScrollArea className="flex-1 p-8">
-                      <div className="space-y-4">
-                        {activeParticipants.map(p => (
-                          <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all hover:bg-zinc-100/50">
-                             <div className="flex items-center gap-4">
-                                <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black uppercase text-zinc-400 ring-1 ring-zinc-100">
-                                  {p.name.substring(0, 2)}
-                                </div>
-                                <div className="flex flex-col">
-                                  <span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span>
-                                  <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
-                                </div>
+                      <div className="space-y-10">
+                        {isHost && waitingParticipants.length > 0 && (
+                          <div className="space-y-4">
+                             <div className="px-4 flex items-center justify-between">
+                                <span className="text-[11px] font-black uppercase tracking-widest text-primary">Waiting Room ({waitingParticipants.length})</span>
+                                <Badge variant="secondary" className="rounded-lg bg-primary/10 text-primary border-primary/20">Locked</Badge>
                              </div>
-                             <div className="flex gap-3">
-                                {p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}
-                                {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
-                                {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
-                             </div>
+                             {waitingParticipants.map(p => (
+                               <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl animate-in slide-in-from-right duration-300">
+                                  <div className="flex items-center gap-4">
+                                     <div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black uppercase text-zinc-400">
+                                       {p.name.substring(0, 2)}
+                                     </div>
+                                     <div className="flex flex-col">
+                                       <span className="text-xs font-black text-white">{p.name}</span>
+                                       <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Wants to join</span>
+                                     </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                     <Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive hover:bg-destructive/10"><UserX className="h-4 w-4" /></Button>
+                                     <Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white hover:bg-primary/90"><UserPlus className="h-4 w-4" /></Button>
+                                  </div>
+                               </div>
+                             ))}
                           </div>
-                        ))}
+                        )}
+
+                        <div className="space-y-4">
+                          <div className="px-4">
+                             <span className="text-[11px] font-black uppercase tracking-widest text-zinc-400">In Meeting ({activeParticipants.length})</span>
+                          </div>
+                          {activeParticipants.map(p => (
+                            <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all hover:bg-zinc-100/50">
+                               <div className="flex items-center gap-4">
+                                  <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black uppercase text-zinc-400 ring-1 ring-zinc-100">
+                                    {p.name.substring(0, 2)}
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span>
+                                    <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
+                                  </div>
+                               </div>
+                               <div className="flex gap-3">
+                                  {p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}
+                                  {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
+                                  {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
+                                  {isHost && p.id !== user?.uid && (
+                                    <Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive hover:bg-destructive/10"><UserX className="h-3.5 w-3.5" /></Button>
+                                  )}
+                               </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                    </ScrollArea>
                 </TabsContent>
