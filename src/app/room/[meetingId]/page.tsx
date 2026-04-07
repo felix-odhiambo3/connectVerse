@@ -332,8 +332,8 @@ export default function RoomPage() {
     if (isInitial) {
       data.joinedAt = serverTimestamp();
     }
-    // Use immediate updateDoc for presence to ensure metadata is available before WebRTC tracks
-    await updateDoc(pRef, data);
+    // Use setDoc with merge to ensure the document is created if it doesn't exist
+    await setDoc(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked, localParticipant?.role]);
 
   useEffect(() => {
@@ -391,12 +391,11 @@ export default function RoomPage() {
   }, [isCaptionsEnabled, user, firestore, meetingId]);
 
   const updateTracksForPeers = (stream: MediaStream | null, type: 'camera' | 'screen') => {
-    console.log(`[Media] Updating ${type} tracks for all peers. Stream active: ${!!stream}`);
     pcs.current.forEach((pc, id) => {
       const existingSenders = type === 'camera' ? cameraSenders.current.get(id) : screenSenders.current.get(id);
       if (existingSenders) {
         existingSenders.forEach(s => {
-          try { pc.removeTrack(s); } catch (e) { console.warn(`[WebRTC] Failed to remove track from peer ${id}:`, e); }
+          try { pc.removeTrack(s); } catch (e) {}
         });
       }
       if (stream) {
@@ -419,8 +418,6 @@ export default function RoomPage() {
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = stream;
-        
-        // Sync presence FIRST so peers have the ID before the tracks arrive
         await syncPresence({ isVideoOff: false });
         updateTracksForPeers(stream, 'camera');
         setIsVideoOff(false);
@@ -475,34 +472,24 @@ export default function RoomPage() {
       return;
     }
     try {
-      console.log("[ScreenShare] Requesting screen capture...");
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       localScreenStream.current = stream;
-      
-      // MANDATORY: Update metadata BEFORE tracks to ensure instant sync on remote side
       await syncPresence({ screenStreamId: stream.id });
       await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
-      
-      console.log("[ScreenShare] Updating tracks for all peers...");
       updateTracksForPeers(stream, 'screen');
       setIsSharingScreen(true);
-      
       stream.getVideoTracks()[0].onended = stopScreenShare;
     } catch (err) {
-      console.error("[ScreenShare] Failed to start sharing:", err);
       toast({ variant: 'destructive', title: 'Presentation Cancelled' });
     }
   };
 
   const stopScreenShare = async () => {
     if (!user || !firestore) return;
-    console.log("[ScreenShare] Stopping screen share...");
     localScreenStream.current?.getTracks().forEach(t => t.stop());
     localScreenStream.current = null;
-    
     await syncPresence({ screenStreamId: null });
     await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
-    
     updateTracksForPeers(null, 'screen');
     setIsSharingScreen(false);
   };
@@ -550,7 +537,6 @@ export default function RoomPage() {
 
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
-        console.log(`[WebRTC] Closing connection to peer ${id}`);
         signalingUnsubs.current.get(`${id}_channel`)?.();
         signalingUnsubs.current.delete(`${id}_channel`);
         pc.close();
@@ -564,7 +550,6 @@ export default function RoomPage() {
 
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
-      console.log(`[WebRTC] Setting up connection to peer ${participantId}`);
       
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
@@ -580,17 +565,12 @@ export default function RoomPage() {
 
       pc.ontrack = (event) => {
         const stream = event.streams[0];
-        console.log(`[WebRTC] Received track from ${participantId}, stream ID: ${stream.id}`);
-        
-        // Instant sync fallback: If stream ID matches a known screen share ID or presence isn't ready
         const p = participantsRef.current.find(p => p.id === participantId);
         const isScreenShare = (p && stream.id === p.screenStreamId) || stream.id === meetingData?.screenSharerId;
 
         if (isScreenShare) {
-          console.log(`[WebRTC] Identified as SCREEN stream for ${participantId}`);
           setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         } else {
-          console.log(`[WebRTC] Identified as CAMERA stream for ${participantId}`);
           setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
         }
       };
@@ -599,22 +579,20 @@ export default function RoomPage() {
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
       const isPolite = user.uid > participantId;
       let makingOffer = false;
-      let ignoreOffer = false;
 
       pc.onnegotiationneeded = async () => {
+        if (pc.signalingState !== 'stable') return;
         try {
-          console.log(`[WebRTC] Negotiation needed for peer ${participantId}`);
           makingOffer = true;
           await pc.setLocalDescription();
           const offer = pc.localDescription;
           if (offer) {
-             console.log(`[WebRTC] Sending offer to peer ${participantId}`);
              await setDoc(channelRef, { 
                [user.uid]: { type: offer.type, sdp: offer.sdp, timestamp: Date.now() } 
              }, { merge: true });
           }
         } catch (err) {
-          console.error(`[WebRTC] Negotiation error for peer ${participantId}:`, err);
+          console.error(`[WebRTC] Negotiation error:`, err);
         } finally { 
           makingOffer = false; 
         }
@@ -635,16 +613,10 @@ export default function RoomPage() {
         try {
           if (remoteData) {
             const offerCollision = remoteData.type === 'offer' && (makingOffer || pc.signalingState !== 'stable');
-            ignoreOffer = !isPolite && offerCollision;
-            if (ignoreOffer) {
-              console.log(`[WebRTC] Ignoring colliding offer from ${participantId} (I am impolite)`);
-              return;
-            }
+            if (offerCollision && !isPolite) return;
             
-            console.log(`[WebRTC] Applying remote ${remoteData.type} from ${participantId}`);
             await pc.setRemoteDescription(remoteData);
             if (remoteData.type === 'offer') {
-              console.log(`[WebRTC] Creating and sending answer to ${participantId}`);
               await pc.setLocalDescription();
               const answer = pc.localDescription;
               if (answer) {
@@ -659,7 +631,7 @@ export default function RoomPage() {
             }
           });
         } catch (err) {
-          console.error(`[WebRTC] Signaling channel error for ${participantId}:`, err);
+          console.error(`[WebRTC] Signaling channel error:`, err);
         }
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
