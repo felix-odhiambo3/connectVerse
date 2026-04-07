@@ -332,7 +332,8 @@ export default function RoomPage() {
     if (isInitial) {
       data.joinedAt = serverTimestamp();
     }
-    setDocumentNonBlocking(pRef, data, { merge: true });
+    // Use immediate updateDoc for presence to ensure metadata is available before WebRTC tracks
+    await updateDoc(pRef, data);
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked, localParticipant?.role]);
 
   useEffect(() => {
@@ -407,7 +408,6 @@ export default function RoomPage() {
         else screenSenders.current.delete(id);
       }
     });
-    syncPresence({});
   };
 
   const handleToggleVideo = async () => {
@@ -419,22 +419,25 @@ export default function RoomPage() {
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = stream;
+        
+        // Sync presence FIRST so peers have the ID before the tracks arrive
+        await syncPresence({ isVideoOff: false });
         updateTracksForPeers(stream, 'camera');
         setIsVideoOff(false);
-        syncPresence({ isVideoOff: false });
       } else {
         if (!isAudioMuted) {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           localCameraStream.current?.getTracks().forEach(t => t.stop());
           localCameraStream.current = stream;
+          await syncPresence({ isVideoOff: true });
           updateTracksForPeers(stream, 'camera');
         } else {
           localCameraStream.current?.getTracks().forEach(t => t.stop());
           localCameraStream.current = null;
+          await syncPresence({ isVideoOff: true });
           updateTracksForPeers(null, 'camera');
         }
         setIsVideoOff(true);
-        syncPresence({ isVideoOff: true });
       }
     } catch (err) {
       toast({ variant: 'destructive', title: 'Camera Access Denied' });
@@ -451,6 +454,7 @@ export default function RoomPage() {
       if (!newState && !localCameraStream.current) {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
         localCameraStream.current = stream;
+        await syncPresence({ isMuted: newState });
         updateTracksForPeers(stream, 'camera');
       }
       if (localCameraStream.current) {
@@ -475,14 +479,14 @@ export default function RoomPage() {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       localScreenStream.current = stream;
       
-      // Mandatory: Add track to peer connections and notify Firestore
+      // MANDATORY: Update metadata BEFORE tracks to ensure instant sync on remote side
+      await syncPresence({ screenStreamId: stream.id });
+      await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
+      
       console.log("[ScreenShare] Updating tracks for all peers...");
       updateTracksForPeers(stream, 'screen');
-      
-      await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
       setIsSharingScreen(true);
       
-      // Detect when user clicks "Stop sharing" from browser UI
       stream.getVideoTracks()[0].onended = stopScreenShare;
     } catch (err) {
       console.error("[ScreenShare] Failed to start sharing:", err);
@@ -496,10 +500,10 @@ export default function RoomPage() {
     localScreenStream.current?.getTracks().forEach(t => t.stop());
     localScreenStream.current = null;
     
-    // Mandatory: Remove tracks and re-negotiate
-    updateTracksForPeers(null, 'screen');
-    
+    await syncPresence({ screenStreamId: null });
     await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
+    
+    updateTracksForPeers(null, 'screen');
     setIsSharingScreen(false);
   };
 
@@ -544,7 +548,6 @@ export default function RoomPage() {
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // Cleanup stale peer connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         console.log(`[WebRTC] Closing connection to peer ${id}`);
@@ -559,7 +562,6 @@ export default function RoomPage() {
       }
     });
 
-    // Setup new peer connections
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
       console.log(`[WebRTC] Setting up connection to peer ${participantId}`);
@@ -580,9 +582,11 @@ export default function RoomPage() {
         const stream = event.streams[0];
         console.log(`[WebRTC] Received track from ${participantId}, stream ID: ${stream.id}`);
         
-        // Critical: Identify if this stream is screen or camera using the latest participant info
+        // Instant sync fallback: If stream ID matches a known screen share ID or presence isn't ready
         const p = participantsRef.current.find(p => p.id === participantId);
-        if (p && stream.id === p.screenStreamId) {
+        const isScreenShare = (p && stream.id === p.screenStreamId) || stream.id === meetingData?.screenSharerId;
+
+        if (isScreenShare) {
           console.log(`[WebRTC] Identified as SCREEN stream for ${participantId}`);
           setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         } else {
@@ -597,7 +601,6 @@ export default function RoomPage() {
       let makingOffer = false;
       let ignoreOffer = false;
 
-      // Force Renegotiation Logic
       pc.onnegotiationneeded = async () => {
         try {
           console.log(`[WebRTC] Negotiation needed for peer ${participantId}`);
@@ -617,7 +620,6 @@ export default function RoomPage() {
         }
       };
 
-      // ICE Candidate Handling
       pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
           const candKey = `candidates_${user.uid}_${candidate.candidate.substring(0, 10).replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -632,7 +634,6 @@ export default function RoomPage() {
         
         try {
           if (remoteData) {
-            // Perfect Negotiation Pattern (Polite/Impolite)
             const offerCollision = remoteData.type === 'offer' && (makingOffer || pc.signalingState !== 'stable');
             ignoreOffer = !isPolite && offerCollision;
             if (ignoreOffer) {
@@ -652,7 +653,6 @@ export default function RoomPage() {
             }
           }
 
-          // Process incoming ICE candidates
           Object.keys(data).forEach(async (key) => {
             if (key.startsWith(`candidates_${participantId}`)) {
               try { await pc.addIceCandidate(new RTCIceCandidate(data[key])); } catch (e) {}
@@ -664,7 +664,7 @@ export default function RoomPage() {
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-  }, [user?.uid, firestore, meetingId, activeParticipantIds, localParticipant?.role]);
+  }, [user?.uid, firestore, meetingId, activeParticipantIds, localParticipant?.role, meetingData?.screenSharerId]);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') return;
