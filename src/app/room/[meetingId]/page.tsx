@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -98,6 +97,7 @@ const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
   ],
 };
 
@@ -239,12 +239,17 @@ export default function RoomPage() {
   const screenSharerId = meetingData?.screenSharerId;
   const isMeetingLocked = meetingData?.isLocked;
 
-  const participantsRef = useMemoFirebase(() => {
+  const participantsRefQuery = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
     return query(collection(firestore, 'meetings', meetingId, 'participants'), limit(50));
   }, [firestore, meetingId, user]);
 
-  const { data: participants } = useCollection<Participant>(participantsRef);
+  const { data: participants } = useCollection<Participant>(participantsRefQuery);
+  const participantsRef = useRef<Participant[]>([]);
+  
+  useEffect(() => {
+    if (participants) participantsRef.current = participants;
+  }, [participants]);
 
   const localParticipant = useMemo(() => {
     return participants?.find(p => p.id === user?.uid);
@@ -385,11 +390,12 @@ export default function RoomPage() {
   }, [isCaptionsEnabled, user, firestore, meetingId]);
 
   const updateTracksForPeers = (stream: MediaStream | null, type: 'camera' | 'screen') => {
+    console.log(`[Media] Updating ${type} tracks for all peers. Stream active: ${!!stream}`);
     pcs.current.forEach((pc, id) => {
       const existingSenders = type === 'camera' ? cameraSenders.current.get(id) : screenSenders.current.get(id);
       if (existingSenders) {
         existingSenders.forEach(s => {
-          try { pc.removeTrack(s); } catch (e) {}
+          try { pc.removeTrack(s); } catch (e) { console.warn(`[WebRTC] Failed to remove track from peer ${id}:`, e); }
         });
       }
       if (stream) {
@@ -465,22 +471,34 @@ export default function RoomPage() {
       return;
     }
     try {
+      console.log("[ScreenShare] Requesting screen capture...");
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       localScreenStream.current = stream;
+      
+      // Mandatory: Add track to peer connections and notify Firestore
+      console.log("[ScreenShare] Updating tracks for all peers...");
       updateTracksForPeers(stream, 'screen');
+      
       await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
       setIsSharingScreen(true);
+      
+      // Detect when user clicks "Stop sharing" from browser UI
       stream.getVideoTracks()[0].onended = stopScreenShare;
     } catch (err) {
+      console.error("[ScreenShare] Failed to start sharing:", err);
       toast({ variant: 'destructive', title: 'Presentation Cancelled' });
     }
   };
 
   const stopScreenShare = async () => {
     if (!user || !firestore) return;
+    console.log("[ScreenShare] Stopping screen share...");
     localScreenStream.current?.getTracks().forEach(t => t.stop());
     localScreenStream.current = null;
+    
+    // Mandatory: Remove tracks and re-negotiate
     updateTracksForPeers(null, 'screen');
+    
     await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: null });
     setIsSharingScreen(false);
   };
@@ -526,8 +544,10 @@ export default function RoomPage() {
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
+    // Cleanup stale peer connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
+        console.log(`[WebRTC] Closing connection to peer ${id}`);
         signalingUnsubs.current.get(`${id}_channel`)?.();
         signalingUnsubs.current.delete(`${id}_channel`);
         pc.close();
@@ -539,8 +559,11 @@ export default function RoomPage() {
       }
     });
 
+    // Setup new peer connections
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
+      console.log(`[WebRTC] Setting up connection to peer ${participantId}`);
+      
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
 
@@ -555,10 +578,15 @@ export default function RoomPage() {
 
       pc.ontrack = (event) => {
         const stream = event.streams[0];
-        const participant = participants?.find(p => p.id === participantId);
-        if (participant && stream.id === participant.screenStreamId) {
+        console.log(`[WebRTC] Received track from ${participantId}, stream ID: ${stream.id}`);
+        
+        // Critical: Identify if this stream is screen or camera using the latest participant info
+        const p = participantsRef.current.find(p => p.id === participantId);
+        if (p && stream.id === p.screenStreamId) {
+          console.log(`[WebRTC] Identified as SCREEN stream for ${participantId}`);
           setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         } else {
+          console.log(`[WebRTC] Identified as CAMERA stream for ${participantId}`);
           setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
         }
       };
@@ -569,19 +597,27 @@ export default function RoomPage() {
       let makingOffer = false;
       let ignoreOffer = false;
 
+      // Force Renegotiation Logic
       pc.onnegotiationneeded = async () => {
         try {
+          console.log(`[WebRTC] Negotiation needed for peer ${participantId}`);
           makingOffer = true;
           await pc.setLocalDescription();
           const offer = pc.localDescription;
           if (offer) {
+             console.log(`[WebRTC] Sending offer to peer ${participantId}`);
              await setDoc(channelRef, { 
                [user.uid]: { type: offer.type, sdp: offer.sdp, timestamp: Date.now() } 
              }, { merge: true });
           }
-        } catch (err) {} finally { makingOffer = false; }
+        } catch (err) {
+          console.error(`[WebRTC] Negotiation error for peer ${participantId}:`, err);
+        } finally { 
+          makingOffer = false; 
+        }
       };
 
+      // ICE Candidate Handling
       pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
           const candKey = `candidates_${user.uid}_${candidate.candidate.substring(0, 10).replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -596,12 +632,18 @@ export default function RoomPage() {
         
         try {
           if (remoteData) {
+            // Perfect Negotiation Pattern (Polite/Impolite)
             const offerCollision = remoteData.type === 'offer' && (makingOffer || pc.signalingState !== 'stable');
             ignoreOffer = !isPolite && offerCollision;
-            if (ignoreOffer) return;
+            if (ignoreOffer) {
+              console.log(`[WebRTC] Ignoring colliding offer from ${participantId} (I am impolite)`);
+              return;
+            }
             
+            console.log(`[WebRTC] Applying remote ${remoteData.type} from ${participantId}`);
             await pc.setRemoteDescription(remoteData);
             if (remoteData.type === 'offer') {
+              console.log(`[WebRTC] Creating and sending answer to ${participantId}`);
               await pc.setLocalDescription();
               const answer = pc.localDescription;
               if (answer) {
@@ -610,16 +652,19 @@ export default function RoomPage() {
             }
           }
 
+          // Process incoming ICE candidates
           Object.keys(data).forEach(async (key) => {
             if (key.startsWith(`candidates_${participantId}`)) {
               try { await pc.addIceCandidate(new RTCIceCandidate(data[key])); } catch (e) {}
             }
           });
-        } catch (err) {}
+        } catch (err) {
+          console.error(`[WebRTC] Signaling channel error for ${participantId}:`, err);
+        }
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-  }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId, localParticipant?.role, participants]);
+  }, [user?.uid, firestore, meetingId, activeParticipantIds, localParticipant?.role]);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') return;
