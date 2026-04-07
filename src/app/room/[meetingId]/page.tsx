@@ -67,6 +67,8 @@ interface Participant {
   hasRaisedHand?: boolean;
   isMuted?: boolean;
   isVideoOff?: boolean;
+  cameraStreamId?: string;
+  screenStreamId?: string;
 }
 
 interface ChatMessage {
@@ -297,7 +299,7 @@ export default function RoomPage() {
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
 
-  const syncPresence = useCallback(async (updates: Partial<any>, isInitial = false) => {
+  const syncPresence = useCallback(async (updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
@@ -319,6 +321,8 @@ export default function RoomPage() {
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
       role: isInitial ? role : (localParticipant?.role || role),
+      cameraStreamId: localCameraStream.current?.id || null,
+      screenStreamId: localScreenStream.current?.id || null,
     };
     if (isInitial) {
       data.joinedAt = serverTimestamp();
@@ -384,7 +388,9 @@ export default function RoomPage() {
     pcs.current.forEach((pc, id) => {
       const existingSenders = type === 'camera' ? cameraSenders.current.get(id) : screenSenders.current.get(id);
       if (existingSenders) {
-        existingSenders.forEach(s => pc.removeTrack(s));
+        existingSenders.forEach(s => {
+          try { pc.removeTrack(s); } catch (e) {}
+        });
       }
       if (stream) {
         const senders = stream.getTracks().map(t => pc.addTrack(t, stream));
@@ -395,6 +401,7 @@ export default function RoomPage() {
         else screenSenders.current.delete(id);
       }
     });
+    syncPresence({});
   };
 
   const handleToggleVideo = async () => {
@@ -536,6 +543,7 @@ export default function RoomPage() {
       if (pcs.current.has(participantId)) return;
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
+
       if (localCameraStream.current) {
         const senders = localCameraStream.current.getTracks().map(t => pc.addTrack(t, localCameraStream.current!));
         cameraSenders.current.set(participantId, senders);
@@ -544,14 +552,17 @@ export default function RoomPage() {
         const senders = localScreenStream.current.getTracks().map(t => pc.addTrack(t, localScreenStream.current!));
         screenSenders.current.set(participantId, senders);
       }
+
       pc.ontrack = (event) => {
         const stream = event.streams[0];
-        if (participantId === screenSharerId) {
+        const participant = participants?.find(p => p.id === participantId);
+        if (participant && stream.id === participant.screenStreamId) {
           setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         } else {
           setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
         }
       };
+
       const channelId = [user.uid, participantId].sort().join('_');
       const channelRef = doc(firestore, 'meetings', meetingId, 'webrtc', channelId);
       const isPolite = user.uid > participantId;
@@ -565,7 +576,7 @@ export default function RoomPage() {
           const offer = pc.localDescription;
           if (offer) {
              await setDoc(channelRef, { 
-               [user.uid]: { type: offer.type, sdp: offer.sdp, timestamp: serverTimestamp() } 
+               [user.uid]: { type: offer.type, sdp: offer.sdp, timestamp: Date.now() } 
              }, { merge: true });
           }
         } catch (err) {} finally { makingOffer = false; }
@@ -573,7 +584,8 @@ export default function RoomPage() {
 
       pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
-          setDoc(channelRef, { [`candidates_${user.uid}`]: candidate.toJSON() }, { merge: true });
+          const candKey = `candidates_${user.uid}_${candidate.candidate.substring(0, 10).replace(/[^a-zA-Z0-9]/g, '')}`;
+          setDoc(channelRef, { [candKey]: candidate.toJSON() }, { merge: true });
         }
       };
 
@@ -581,27 +593,33 @@ export default function RoomPage() {
         const data = snapshot.data();
         if (!data) return;
         const remoteData = data[participantId];
-        const remoteCandidate = data[`candidates_${participantId}`];
+        
         try {
           if (remoteData) {
             const offerCollision = remoteData.type === 'offer' && (makingOffer || pc.signalingState !== 'stable');
             ignoreOffer = !isPolite && offerCollision;
             if (ignoreOffer) return;
+            
             await pc.setRemoteDescription(remoteData);
             if (remoteData.type === 'offer') {
               await pc.setLocalDescription();
               const answer = pc.localDescription;
               if (answer) {
-                await setDoc(channelRef, { [user.uid]: { type: answer.type, sdp: answer.sdp, timestamp: serverTimestamp() } }, { merge: true });
+                await setDoc(channelRef, { [user.uid]: { type: answer.type, sdp: answer.sdp, timestamp: Date.now() } }, { merge: true });
               }
             }
           }
-          if (remoteCandidate) await pc.addIceCandidate(new RTCIceCandidate(remoteCandidate));
+
+          Object.keys(data).forEach(async (key) => {
+            if (key.startsWith(`candidates_${participantId}`)) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(data[key])); } catch (e) {}
+            }
+          });
         } catch (err) {}
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-  }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId, localParticipant?.role]);
+  }, [user?.uid, firestore, meetingId, activeParticipantIds, screenSharerId, localParticipant?.role, participants]);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') return;
