@@ -158,7 +158,7 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, cla
 
   return (
     <div className={cn(
-      "relative w-full h-full bg-[#1A1A1A] rounded-[2rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500",
+      "relative w-full h-full bg-[#1A1A1A] rounded-[4rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500",
       className
     )}>
       <video
@@ -213,6 +213,7 @@ export default function RoomPage() {
   const lastCaptionRef = useRef<string>('');
   const captionDebounceTimer = useRef<NodeJS.Timeout | null>(null);
   const lastPresenceRef = useRef<string>('');
+  const lastPresenceUpdateAt = useRef<number>(0);
   
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -224,6 +225,7 @@ export default function RoomPage() {
   const cameraSenders = useRef<Map<string, RTCRtpSender[]>>(new Map());
   const screenSenders = useRef<Map<string, RTCRtpSender[]>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
+  const establishedPcs = useRef<Set<string>>(new Set());
   const initialPresenceSynced = useRef(false);
   const localRoleRef = useRef<Participant['role'] | null>(null);
   
@@ -322,6 +324,7 @@ export default function RoomPage() {
       try { pc.close(); } catch (e) {}
     });
     pcs.current.clear();
+    establishedPcs.current.clear();
     cameraSenders.current.clear();
     screenSenders.current.clear();
 
@@ -383,8 +386,18 @@ export default function RoomPage() {
       screenStreamId: data.screenStreamId
     });
 
-    if (presenceHash === lastPresenceRef.current && !isInitial) return;
+    const now = Date.now();
+    const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
+    
+    // Quota optimization: Only write if something changed AND it's been at least 5s (unless initial)
+    if (!isInitial && presenceHash === lastPresenceRef.current) return;
+    if (!isInitial && timeSinceLastUpdate < 5000) {
+       // Optional: queue the update? For simplicity, we just throttle
+       return;
+    }
+
     lastPresenceRef.current = presenceHash;
+    lastPresenceUpdateAt.current = now;
 
     await setDoc(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked]);
@@ -409,7 +422,7 @@ export default function RoomPage() {
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      toast({ variant: 'destructive', title: 'Captions Not Supported', description: 'Your browser does not support Web Speech API.' });
+      toast({ variant: 'destructive', title: 'Captions Not Supported' });
       setIsCaptionsEnabled(false);
       return;
     }
@@ -424,12 +437,12 @@ export default function RoomPage() {
       const charDiff = Math.abs(currentTranscript.length - lastCaptionRef.current.length);
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
 
+      // Quota Optimization: More aggressive debouncing and thresholding (5s / 20 chars)
       if ((charDiff > 20 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
-        lastCaptionRef.current = currentTranscript;
-        
         if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
         
         captionDebounceTimer.current = setTimeout(() => {
+          lastCaptionRef.current = currentTranscript;
           setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
             text: currentTranscript,
             updatedAt: serverTimestamp(),
@@ -578,7 +591,6 @@ export default function RoomPage() {
     updateDoc(meetingRef, { isLocked: !isMeetingLocked });
     toast({ 
       title: !isMeetingLocked ? "Meeting Locked" : "Meeting Unlocked", 
-      description: !isMeetingLocked ? "New participants must be admitted by you." : "Anyone with the link can join." 
     });
   };
 
@@ -600,7 +612,7 @@ export default function RoomPage() {
         endedAt: serverTimestamp() 
       });
     } catch (error) {
-      toast({ variant: 'destructive', title: "Error", description: "Could not end session." });
+      toast({ variant: 'destructive', title: "Error" });
     }
   };
 
@@ -609,9 +621,7 @@ export default function RoomPage() {
     router.push('/dashboard');
   };
 
-  // Optimization: Manage peer connections incrementally to save quota
-  const establishedPcs = useRef<Set<string>>(new Set());
-
+  // Quota Optimization: Incremental peer connection management
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting' || meetingData?.status === 'finished') return;
     
@@ -655,6 +665,7 @@ export default function RoomPage() {
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         const p = participantsRef.current.find(p => p.id === participantId);
+        // Fallback identification logic for instant visibility
         const isScreenShare = (p && stream.id === p.screenStreamId) || stream.id === meetingData?.screenSharerId;
 
         if (isScreenShare) {
@@ -681,7 +692,7 @@ export default function RoomPage() {
              }, { merge: true });
           }
         } catch (err) {
-          console.error(`[WebRTC] Negotiation error:`, err);
+          console.error(`Negotiation error:`, err);
         } finally { 
           makingOffer = false; 
         }
@@ -694,6 +705,7 @@ export default function RoomPage() {
         if (candidate) {
           candidateBuffer.push(candidate.toJSON());
           if (!candidateTimeout) {
+            // Quota Optimization: 15-second buffering window
             candidateTimeout = setTimeout(async () => {
               const updates: any = {};
               candidateBuffer.forEach((c, idx) => {
@@ -703,7 +715,7 @@ export default function RoomPage() {
               await setDoc(channelRef, updates, { merge: true });
               candidateBuffer.length = 0;
               candidateTimeout = null;
-            }, 10000); 
+            }, 15000); 
           }
         }
       };
@@ -735,7 +747,7 @@ export default function RoomPage() {
             }
           });
         } catch (err) {
-          console.error(`[WebRTC] Signaling channel error:`, err);
+          console.error(`Signaling error:`, err);
         }
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
@@ -760,7 +772,6 @@ export default function RoomPage() {
           <Trophy className="h-24 w-24 text-white" />
         </div>
         <h1 className="text-5xl font-black mb-4 text-zinc-900 tracking-tighter">Session Ended</h1>
-        <p className="text-zinc-500 font-bold uppercase tracking-[0.2em] mb-12 text-xs">Thank you for connecting with ConnectVerse</p>
         <Button onClick={() => router.push('/dashboard')} className="rounded-[2rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-xl hover:scale-105 transition-all">Back to Dashboard</Button>
       </div>
     );
@@ -769,18 +780,18 @@ export default function RoomPage() {
   if (localParticipant?.role === 'waiting') {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
-        <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-zinc-100 max-w-lg w-full animate-in fade-in zoom-in duration-500">
+        <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-zinc-100 max-w-lg w-full">
           <div className="h-20 w-20 bg-primary/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8">
             <Lock className="h-10 w-10 text-primary" />
           </div>
           <h1 className="text-3xl font-black mb-4 text-zinc-900 tracking-tighter">Meeting Locked</h1>
-          <p className="text-zinc-500 font-medium mb-12">The host has restricted access to this session. Please wait for them to admit you.</p>
+          <p className="text-zinc-500 font-medium mb-12">The host has restricted access. Please wait to be admitted.</p>
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-3 py-4 bg-zinc-50 rounded-2xl border border-zinc-100">
               <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
               <span className="text-xs font-black uppercase tracking-widest text-zinc-400">Waiting for host...</span>
             </div>
-            <Button variant="outline" onClick={() => router.push('/dashboard')} className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] border-zinc-200">Cancel Request</Button>
+            <Button variant="outline" onClick={() => router.push('/dashboard')} className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-[10px]">Cancel</Button>
           </div>
         </div>
       </div>
@@ -795,24 +806,22 @@ export default function RoomPage() {
     <AuthGuard>
       <div className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
         {isSharingScreen && (
-          <div className="bg-zinc-900 px-10 py-4 flex items-center justify-between text-white animate-in slide-in-from-top duration-500 z-50 shadow-2xl">
+          <div className="bg-zinc-900 px-10 py-4 flex items-center justify-between text-white z-50 shadow-2xl">
              <div className="flex items-center gap-4">
-                <div className="p-2 bg-primary/20 rounded-lg animate-pulse">
-                  <Monitor className="h-5 w-5 text-primary" />
-                </div>
-                <span className="font-black text-[11px] uppercase tracking-[0.25em]">You are presenting to everyone</span>
+                <Monitor className="h-5 w-5 text-primary animate-pulse" />
+                <span className="font-black text-[11px] uppercase tracking-[0.25em]">You are presenting</span>
              </div>
-             <Button variant="ghost" size="sm" onClick={stopScreenShare} className="text-white hover:bg-white/10 font-black uppercase text-[10px] tracking-[0.2em] border border-white/20 rounded-xl px-6 h-10">Stop Presenting</Button>
+             <Button variant="ghost" size="sm" onClick={stopScreenShare} className="text-white hover:bg-white/10 font-black uppercase text-[10px] tracking-[0.2em] border border-white/20 rounded-xl px-6 h-10">Stop</Button>
           </div>
         )}
 
         <header className="flex h-24 items-center justify-between px-12 bg-white border-b z-10 shrink-0 shadow-sm">
           <div className="flex items-center gap-10">
-            <div className="bg-zinc-900 flex items-center justify-center h-14 w-14 rounded-[1.5rem] text-white font-black text-2xl shadow-2xl ring-4 ring-zinc-50 transition-transform hover:rotate-6">CV</div>
+            <div className="bg-zinc-900 flex items-center justify-center h-14 w-14 rounded-[1.5rem] text-white font-black text-2xl shadow-2xl">CV</div>
             <div className="flex flex-col">
                <div className="flex items-center gap-4">
                  <h1 className="text-xl font-black truncate max-w-[400px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Live Session'}</h1>
-                 <Button variant="secondary" size="icon" onClick={copyInviteLink} title="Copy invitation link" className="h-10 w-10 rounded-xl text-zinc-400 hover:text-primary hover:bg-primary/5 bg-zinc-50 shadow-sm"><LinkIcon className="h-4 w-4" /></Button>
+                 <Button variant="secondary" size="icon" onClick={copyInviteLink} className="h-10 w-10 rounded-xl text-zinc-400 bg-zinc-50"><LinkIcon className="h-4 w-4" /></Button>
                  {isMeetingLocked && <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 rounded-lg px-3 py-1 font-black text-[9px] uppercase tracking-widest"><Lock className="h-3 w-3 mr-1.5" /> Locked</Badge>}
                </div>
                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.3em] mt-1.5 flex items-center gap-2">
@@ -822,19 +831,19 @@ export default function RoomPage() {
             </div>
           </div>
           <div className="flex items-center gap-8">
-            <div className="flex items-center gap-4 bg-zinc-50 border border-zinc-100 rounded-[1.5rem] px-6 py-4 text-xs font-black text-zinc-600 shadow-inner"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
+            <div className="flex items-center gap-4 bg-zinc-50 border border-zinc-100 rounded-[1.5rem] px-6 py-4 text-xs font-black text-zinc-600"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
             {isHost ? (
-              <Button onClick={handleEndSession} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none hover:scale-105 transition-all">End Session</Button>
+              <Button onClick={handleEndSession} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none">End Session</Button>
             ) : (
-              <Button onClick={handleLeaveRoom} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200 shadow-sm hover:bg-zinc-50">Leave Room</Button>
+              <Button onClick={handleLeaveRoom} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200">Leave Room</Button>
             )}
           </div>
         </header>
 
         <main className="flex-1 flex overflow-hidden p-10 gap-10 relative">
           <div className="flex-1 flex flex-col gap-10 overflow-hidden relative">
-            <div className="flex-1 bg-[#0F0F0F] rounded-[4rem] relative overflow-hidden shadow-[0_40px_100px_-20px_rgba(0,0,0,0.3)] border border-white/5 p-6">
-               <div className="w-full h-full flex items-center justify-center transition-all duration-700">
+            <div className="flex-1 bg-[#0F0F0F] rounded-[4rem] relative overflow-hidden shadow-2xl border border-white/5 p-6">
+               <div className="w-full h-full flex items-center justify-center">
                  {screenSharerId ? (
                    <StreamView 
                      stream={screenSharerId === user?.uid ? localScreenStream.current : remoteScreenStreams.get(screenSharerId) || null}
@@ -865,7 +874,7 @@ export default function RoomPage() {
 
               {isCaptionsEnabled && (
                 <div className="absolute bottom-32 left-0 right-0 flex justify-center pointer-events-none z-50">
-                  <div className="bg-black/80 backdrop-blur-xl px-10 py-6 rounded-[2.5rem] border border-white/10 max-w-[80%] shadow-2xl animate-in slide-in-from-bottom duration-500">
+                  <div className="bg-black/80 backdrop-blur-xl px-10 py-6 rounded-[2.5rem] border border-white/10 max-w-[80%] shadow-2xl">
                     <div className="space-y-4 max-h-[120px] overflow-hidden">
                       {remoteCaptions && remoteCaptions.length > 0 ? (
                         remoteCaptions.map((caption) => (
@@ -875,7 +884,7 @@ export default function RoomPage() {
                           </div>
                         ))
                       ) : (
-                        <p className="text-zinc-500 font-black uppercase text-xs tracking-widest animate-pulse">Captions active • Listening...</p>
+                        <p className="text-zinc-500 font-black uppercase text-xs tracking-widest animate-pulse">Listening...</p>
                       )}
                     </div>
                   </div>
@@ -884,7 +893,7 @@ export default function RoomPage() {
 
               {(screenSharerId || !isVideoOff) && (
                 <div className={cn(
-                  "absolute bottom-16 right-16 w-80 aspect-video rounded-[2.5rem] overflow-hidden border-[6px] border-white/10 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)] z-40 bg-zinc-900 backdrop-blur-3xl transition-all duration-700 hover:scale-105",
+                  "absolute bottom-16 right-16 w-80 aspect-video rounded-[2.5rem] overflow-hidden border-[6px] border-white/10 shadow-2xl z-40 bg-zinc-900 transition-all duration-700",
                   !screenSharerId && "opacity-0 scale-90 pointer-events-none"
                 )}>
                    <StreamView 
@@ -898,63 +907,55 @@ export default function RoomPage() {
               )}
             </div>
 
-            <div className="h-32 mx-auto w-fit bg-white/90 backdrop-blur-3xl rounded-[3.5rem] border border-white shadow-[0_20px_50px_rgba(0,0,0,0.1)] flex items-center px-12 gap-6 shrink-0 -mt-16 z-20 ring-1 ring-zinc-100">
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isAudioMuted ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isAudioMuted ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isVideoOff ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isVideoOff ? <VideoOff className="h-8 w-8" /> : <VideoIcon className="h-8 w-8" />}</Button>
+            <div className="h-32 mx-auto w-fit bg-white/90 backdrop-blur-3xl rounded-[3.5rem] border border-white shadow-2xl flex items-center px-12 gap-6 shrink-0 -mt-16 z-20">
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 transition-all", isAudioMuted ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isAudioMuted ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 transition-all", isVideoOff ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isVideoOff ? <VideoOff className="h-8 w-8" /> : <VideoIcon className="h-8 w-8" />}</Button>
                <Separator orientation="vertical" className="h-14 mx-2 bg-zinc-100" />
                
                <Popover>
                   <PopoverTrigger asChild>
-                    <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 transition-all shadow-xl hover:scale-110">
+                    <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all">
                       <Smile className="h-8 w-8 text-zinc-700" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent side="top" align="center" className="w-fit p-4 bg-white/80 backdrop-blur-2xl border-white rounded-[2.5rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] mb-8 animate-in fade-in zoom-in slide-in-from-bottom-4 duration-300">
+                  <PopoverContent side="top" align="center" className="w-fit p-4 bg-white/80 backdrop-blur-2xl rounded-[2.5rem] shadow-2xl mb-8">
                     <div className="flex gap-4">
                       {EMOJIS.map((emoji) => (
-                        <button 
-                          key={emoji}
-                          onClick={() => sendReaction(emoji)}
-                          className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl hover:bg-zinc-100/50 active:scale-90"
-                        >
-                          {emoji}
-                        </button>
+                        <button key={emoji} onClick={() => sendReaction(emoji)} className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl active:scale-90">{emoji}</button>
                       ))}
                     </div>
                   </PopoverContent>
                </Popover>
 
-               <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
+               <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 transition-all", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
 
-               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
+               <Button 
+                variant={isSharingScreen ? "default" : "secondary"} 
+                size="icon" 
+                onClick={isSharingScreen ? stopScreenShare : startScreenShare} 
+                className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}
+               >
+                 {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
+               </Button>
                
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
                
                {isHost && (
                  <Popover>
                     <PopoverTrigger asChild>
-                      <Button variant={isMeetingLocked ? "default" : "secondary"} size="icon" className={cn("rounded-2xl h-16 w-16 transition-all shadow-xl hover:scale-110", isMeetingLocked ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
+                      <Button variant={isMeetingLocked ? "default" : "secondary"} size="icon" className={cn("rounded-2xl h-16 w-16 transition-all", isMeetingLocked ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
                         <ShieldCheck className="h-8 w-8" />
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl border-white rounded-[3.5rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] mb-8 animate-in fade-in zoom-in slide-in-from-bottom-4 duration-300">
+                    <PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl rounded-[3.5rem] shadow-2xl mb-8">
                        <div className="space-y-6">
-                          <div className="flex flex-col gap-1.5">
-                             <h3 className="font-black text-sm text-zinc-900 flex items-center gap-2">Security Settings</h3>
-                             <p className="text-[10px] font-medium text-zinc-400 leading-relaxed">Control who can join and interact in this meeting.</p>
-                          </div>
+                          <h3 className="font-black text-sm text-zinc-900">Security</h3>
                           <Separator className="bg-zinc-100" />
                           <div className="flex items-center justify-between">
                              <div className="flex flex-col gap-1">
                                 <span className="text-[11px] font-black uppercase tracking-widest text-zinc-700">Lock Meeting</span>
-                                <span className="text-[9px] font-bold text-zinc-400">Prevent new people from joining.</span>
                              </div>
-                             <Button 
-                              onClick={toggleMeetingLock} 
-                              variant={isMeetingLocked ? "destructive" : "secondary"} 
-                              size="sm" 
-                              className="rounded-xl h-10 w-10 p-0"
-                            >
+                             <Button onClick={toggleMeetingLock} variant={isMeetingLocked ? "destructive" : "secondary"} size="sm" className="rounded-xl h-10 w-10 p-0">
                                {isMeetingLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
                              </Button>
                           </div>
@@ -963,16 +964,16 @@ export default function RoomPage() {
                  </Popover>
                )}
                
-               <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 shadow-xl transition-all hover:scale-110"><MoreVertical className="h-8 w-8 text-zinc-700" /></Button>
+               <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50"><MoreVertical className="h-8 w-8 text-zinc-700" /></Button>
             </div>
           </div>
 
-          <Card className="w-[450px] flex flex-col overflow-hidden border-none shadow-[0_40px_80px_-20px_rgba(0,0,0,0.1)] shrink-0 rounded-[4rem] bg-white">
+          <Card className="w-[450px] flex flex-col overflow-hidden border-none shadow-2xl shrink-0 rounded-[4rem] bg-white">
              <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-10 pt-12 pb-6 border-b">
-                   <TabsList className="w-full h-16 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1.5 ring-1 ring-zinc-50">
-                      <TabsTrigger value="chat" className="rounded-xl font-black text-[11px] uppercase tracking-widest data-[state=active]:shadow-lg"><MessageSquare className="h-4 w-4 mr-3" /> Chat</TabsTrigger>
-                      <TabsTrigger value="participants" className="rounded-xl font-black text-[11px] uppercase tracking-widest data-[state=active]:shadow-lg"><Users className="h-4 w-4 mr-3" /> People</TabsTrigger>
+                   <TabsList className="w-full h-16 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1.5">
+                      <TabsTrigger value="chat" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><MessageSquare className="h-4 w-4 mr-3" /> Chat</TabsTrigger>
+                      <TabsTrigger value="participants" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><Users className="h-4 w-4 mr-3" /> People</TabsTrigger>
                    </TabsList>
                 </div>
 
@@ -1004,9 +1005,9 @@ export default function RoomPage() {
                               setChatInput('');
                             }
                           }} 
-                          className="pr-14 rounded-2xl h-14 bg-white border-zinc-100 shadow-sm font-bold text-sm" 
+                          className="pr-14 rounded-2xl h-14 bg-white border-zinc-100" 
                         />
-                        <Button size="icon" variant="ghost" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-11 w-11 rounded-xl hover:bg-zinc-50" onClick={() => {
+                        <Button size="icon" variant="ghost" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-11 w-11 rounded-xl" onClick={() => {
                           if (chatInput.trim() && firestore && user) {
                             addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
                               senderId: user.uid, 
@@ -1026,24 +1027,20 @@ export default function RoomPage() {
                       <div className="space-y-10">
                         {isHost && waitingParticipants.length > 0 && (
                           <div className="space-y-4">
-                             <div className="px-4 flex items-center justify-between">
-                                <span className="text-[11px] font-black uppercase tracking-widest text-primary">Waiting Room ({waitingParticipants.length})</span>
-                                <Badge variant="secondary" className="rounded-lg bg-primary/10 text-primary border-primary/20">Locked</Badge>
-                             </div>
+                             <span className="text-[11px] font-black uppercase tracking-widest text-primary px-4">Waiting Room ({waitingParticipants.length})</span>
                              {waitingParticipants.map(p => (
-                               <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl animate-in slide-in-from-right duration-300">
+                               <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl">
                                   <div className="flex items-center gap-4">
-                                     <div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black uppercase text-zinc-400">
+                                     <div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black text-zinc-400">
                                        {p.name.substring(0, 2)}
                                      </div>
                                      <div className="flex flex-col">
                                        <span className="text-xs font-black text-white">{p.name}</span>
-                                       <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Wants to join</span>
                                      </div>
                                   </div>
                                   <div className="flex gap-2">
-                                     <Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive hover:bg-destructive/10"><UserX className="h-4 w-4" /></Button>
-                                     <Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white hover:bg-primary/90"><UserPlus className="h-4 w-4" /></Button>
+                                     <Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button>
+                                     <Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button>
                                   </div>
                                </div>
                              ))}
@@ -1051,13 +1048,11 @@ export default function RoomPage() {
                         )}
 
                         <div className="space-y-4">
-                          <div className="px-4">
-                             <span className="text-[11px] font-black uppercase tracking-widest text-zinc-400">In Meeting ({activeParticipants.length})</span>
-                          </div>
+                          <span className="text-[11px] font-black uppercase tracking-widest text-zinc-400 px-4">In Meeting ({activeParticipants.length})</span>
                           {activeParticipants.map(p => (
-                            <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all hover:bg-zinc-100/50">
+                            <div key={p.id} className="flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm">
                                <div className="flex items-center gap-4">
-                                  <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black uppercase text-zinc-400 ring-1 ring-zinc-100">
+                                  <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">
                                     {p.name.substring(0, 2)}
                                   </div>
                                   <div className="flex flex-col">
@@ -1070,7 +1065,7 @@ export default function RoomPage() {
                                   {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
                                   {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
                                   {isHost && p.id !== user?.uid && (
-                                    <Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive hover:bg-destructive/10"><UserX className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>
                                   )}
                                </div>
                             </div>
