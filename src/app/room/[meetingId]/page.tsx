@@ -304,6 +304,44 @@ export default function RoomPage() {
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
 
+  // Global cleanup logic when session ends
+  const cleanupAllResources = useCallback(() => {
+    // Stop local streams
+    localCameraStream.current?.getTracks().forEach(t => t.stop());
+    localCameraStream.current = null;
+    localScreenStream.current?.getTracks().forEach(t => t.stop());
+    localScreenStream.current = null;
+
+    // Close all peer connections
+    pcs.current.forEach(pc => {
+      try { pc.close(); } catch (e) {}
+    });
+    pcs.current.clear();
+    cameraSenders.current.clear();
+    screenSenders.current.clear();
+
+    // Stop signaling
+    signalingUnsubs.current.forEach(unsub => unsub());
+    signalingUnsubs.current.clear();
+
+    // Stop speech recognition
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+
+    setRemoteCameraStreams(new Map());
+    setRemoteScreenStreams(new Map());
+  }, []);
+
+  // Listen for meeting status change to trigger global end
+  useEffect(() => {
+    if (meetingData?.status === 'finished') {
+      cleanupAllResources();
+      toast({ title: "Session Ended", description: "The host has ended the meeting for everyone." });
+    }
+  }, [meetingData?.status, cleanupAllResources, toast]);
+
   const syncPresence = useCallback(async (updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     
@@ -332,7 +370,7 @@ export default function RoomPage() {
     if (isInitial) {
       data.joinedAt = serverTimestamp();
     }
-    // Use setDoc with merge to ensure the document is created if it doesn't exist
+    
     await setDoc(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked, localParticipant?.role]);
 
@@ -388,7 +426,7 @@ export default function RoomPage() {
     return () => {
       if (recognitionRef.current) recognitionRef.current.stop();
     };
-  }, [isCaptionsEnabled, user, firestore, meetingId]);
+  }, [isCaptionsEnabled, user, firestore, meetingId, toast]);
 
   const updateTracksForPeers = (stream: MediaStream | null, type: 'camera' | 'screen') => {
     pcs.current.forEach((pc, id) => {
@@ -530,8 +568,25 @@ export default function RoomPage() {
     updateDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'participants', participantId), { role: 'left' });
   };
 
+  const handleEndSession = async () => {
+    if (!isHost || !meetingRef) return;
+    try {
+      await updateDoc(meetingRef, { 
+        status: 'finished', 
+        endedAt: serverTimestamp() 
+      });
+    } catch (error) {
+      toast({ variant: 'destructive', title: "Error", description: "Could not end session." });
+    }
+  };
+
+  const handleLeaveRoom = () => {
+    cleanupAllResources();
+    router.push('/dashboard');
+  };
+
   useEffect(() => {
-    if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting') return;
+    if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting' || meetingData?.status === 'finished') return;
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
@@ -636,7 +691,7 @@ export default function RoomPage() {
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-  }, [user?.uid, firestore, meetingId, activeParticipantIds, localParticipant?.role, meetingData?.screenSharerId]);
+  }, [user?.uid, firestore, meetingId, activeParticipantIds, localParticipant?.role, meetingData?.screenSharerId, meetingData?.status]);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') return;
@@ -720,9 +775,9 @@ export default function RoomPage() {
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-4 bg-zinc-50 border border-zinc-100 rounded-[1.5rem] px-6 py-4 text-xs font-black text-zinc-600 shadow-inner"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
             {isHost ? (
-              <Button onClick={() => updateDoc(meetingRef!, { status: 'finished', endedAt: serverTimestamp() })} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none hover:scale-105 transition-all">End Session</Button>
+              <Button onClick={handleEndSession} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none hover:scale-105 transition-all">End Session</Button>
             ) : (
-              <Button onClick={() => router.push('/dashboard')} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200 shadow-sm hover:bg-zinc-50">Leave Room</Button>
+              <Button onClick={handleLeaveRoom} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200 shadow-sm hover:bg-zinc-50">Leave Room</Button>
             )}
           </div>
         </header>
