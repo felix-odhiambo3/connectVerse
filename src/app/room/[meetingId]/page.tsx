@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -389,10 +388,9 @@ export default function RoomPage() {
     const now = Date.now();
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
-    // Quota optimization: Only write if something changed AND it's been at least 5s (unless initial)
+    // Quota optimization: Only write if something changed AND it's been at least 15s (unless initial)
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 5000) {
-       // Optional: queue the update? For simplicity, we just throttle
+    if (!isInitial && timeSinceLastUpdate < 15000) {
        return;
     }
 
@@ -437,8 +435,8 @@ export default function RoomPage() {
       const charDiff = Math.abs(currentTranscript.length - lastCaptionRef.current.length);
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
 
-      // Quota Optimization: More aggressive debouncing and thresholding (5s / 20 chars)
-      if ((charDiff > 20 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
+      // Quota Optimization: 15s / 25 chars threshold
+      if ((charDiff > 25 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
         if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
         
         captionDebounceTimer.current = setTimeout(() => {
@@ -448,7 +446,7 @@ export default function RoomPage() {
             updatedAt: serverTimestamp(),
             username: user.displayName || user.email?.split('@')[0],
           }, { merge: true });
-        }, 5000); 
+        }, 15000); 
       }
     };
 
@@ -621,14 +619,12 @@ export default function RoomPage() {
     router.push('/dashboard');
   };
 
-  // Quota Optimization: Incremental peer connection management
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting' || meetingData?.status === 'finished') return;
     
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // Cleanup peers who left
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -643,7 +639,6 @@ export default function RoomPage() {
       }
     });
 
-    // Initialize only new peers
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId) && establishedPcs.current.has(participantId)) return;
       
@@ -665,7 +660,6 @@ export default function RoomPage() {
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         const p = participantsRef.current.find(p => p.id === participantId);
-        // Fallback identification logic for instant visibility
         const isScreenShare = (p && stream.id === p.screenStreamId) || stream.id === meetingData?.screenSharerId;
 
         if (isScreenShare) {
@@ -705,7 +699,7 @@ export default function RoomPage() {
         if (candidate) {
           candidateBuffer.push(candidate.toJSON());
           if (!candidateTimeout) {
-            // Quota Optimization: 15-second buffering window
+            // Quota Optimization: 20-second buffering window
             candidateTimeout = setTimeout(async () => {
               const updates: any = {};
               candidateBuffer.forEach((c, idx) => {
@@ -715,7 +709,7 @@ export default function RoomPage() {
               await setDoc(channelRef, updates, { merge: true });
               candidateBuffer.length = 0;
               candidateTimeout = null;
-            }, 15000); 
+            }, 20000); 
           }
         }
       };
@@ -929,12 +923,7 @@ export default function RoomPage() {
 
                <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 transition-all", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
 
-               <Button 
-                variant={isSharingScreen ? "default" : "secondary"} 
-                size="icon" 
-                onClick={isSharingScreen ? stopScreenShare : startScreenShare} 
-                className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}
-               >
+               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
                  {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
                </Button>
                
