@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -360,11 +361,12 @@ export default function RoomPage() {
       }
     }
 
+    const currentRole = localRoleRef.current || role;
     const data: any = {
       ...updates,
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
-      role: isInitial ? role : (localRoleRef.current || role),
+      role: isInitial ? role : currentRole,
       cameraStreamId: localCameraStream.current?.id || null,
       screenStreamId: localScreenStream.current?.id || null,
     };
@@ -419,7 +421,10 @@ export default function RoomPage() {
 
     recognition.onresult = (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
-      if (currentTranscript.length > 3 && currentTranscript !== lastCaptionRef.current && user && firestore) {
+      const charDiff = Math.abs(currentTranscript.length - lastCaptionRef.current.length);
+      const isSentenceEnd = /[.!?]$/.test(currentTranscript);
+
+      if ((charDiff > 15 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
         lastCaptionRef.current = currentTranscript;
         
         if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
@@ -430,7 +435,7 @@ export default function RoomPage() {
             updatedAt: serverTimestamp(),
             username: user.displayName || user.email?.split('@')[0],
           }, { merge: true });
-        }, 3000); 
+        }, 5000); 
       }
     };
 
@@ -656,7 +661,7 @@ export default function RoomPage() {
       let makingOffer = false;
 
       pc.onnegotiationneeded = async () => {
-        if (pc.signalingState !== 'stable') return;
+        if (pc.signalingState !== 'stable' || makingOffer) return;
         try {
           makingOffer = true;
           await pc.setLocalDescription();
@@ -689,7 +694,7 @@ export default function RoomPage() {
               await setDoc(channelRef, updates, { merge: true });
               candidateBuffer.length = 0;
               candidateTimeout = null;
-            }, 3000); 
+            }, 6000); 
           }
         }
       };
@@ -912,9 +917,8 @@ export default function RoomPage() {
 
                <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
 
-               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
-                {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
-               </Button>
+               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
+               
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
                
                {isHost && (
