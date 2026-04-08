@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -386,6 +385,7 @@ export default function RoomPage() {
     if (presenceHash === lastPresenceRef.current && !isInitial) return;
     lastPresenceRef.current = presenceHash;
 
+    // Use setDoc with merge: true to avoid "document not found" errors
     await setDoc(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked]);
 
@@ -424,7 +424,8 @@ export default function RoomPage() {
       const charDiff = Math.abs(currentTranscript.length - lastCaptionRef.current.length);
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
 
-      if ((charDiff > 15 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
+      // Increase threshold to 20 chars for better quota preservation
+      if ((charDiff > 20 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
         lastCaptionRef.current = currentTranscript;
         
         if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
@@ -685,6 +686,7 @@ export default function RoomPage() {
         if (candidate) {
           candidateBuffer.push(candidate.toJSON());
           if (!candidateTimeout) {
+            // Aggressive 10s buffer for ICE candidates to preserve quota
             candidateTimeout = setTimeout(async () => {
               const updates: any = {};
               candidateBuffer.forEach((c, idx) => {
@@ -694,7 +696,7 @@ export default function RoomPage() {
               await setDoc(channelRef, updates, { merge: true });
               candidateBuffer.length = 0;
               candidateTimeout = null;
-            }, 6000); 
+            }, 10000); 
           }
         }
       };
