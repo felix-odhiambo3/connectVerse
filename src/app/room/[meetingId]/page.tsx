@@ -213,6 +213,7 @@ export default function RoomPage() {
   const captionDebounceTimer = useRef<NodeJS.Timeout | null>(null);
   const lastPresenceRef = useRef<string>('');
   const lastPresenceUpdateAt = useRef<number>(0);
+  const lastReactionTime = useRef<number>(0);
   
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -353,13 +354,15 @@ export default function RoomPage() {
     let role: Participant['role'] = user.uid === hostId ? 'host' : 'participant';
 
     if (isInitial) {
+      const snap = await getDoc(pRef);
       if (isMeetingLocked && user.uid !== hostId) {
-        const snap = await getDoc(pRef);
         if (snap.exists() && (snap.data().role === 'participant' || snap.data().role === 'host' || snap.data().role === 'co-host')) {
           role = snap.data().role;
         } else {
           role = 'waiting';
         }
+      } else if (snap.exists()) {
+        role = snap.data().role;
       }
     }
 
@@ -388,15 +391,16 @@ export default function RoomPage() {
     const now = Date.now();
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
-    // Quota optimization: Only write if something changed AND it's been at least 15s (unless initial)
+    // Quota optimization: 20-second throttle for presence updates
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 15000) {
+    if (!isInitial && timeSinceLastUpdate < 20000) {
        return;
     }
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
 
+    // Use setDoc merge true to handle cases where doc might not exist yet
     await setDoc(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked]);
 
@@ -435,8 +439,8 @@ export default function RoomPage() {
       const charDiff = Math.abs(currentTranscript.length - lastCaptionRef.current.length);
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
 
-      // Quota Optimization: 15s / 25 chars threshold
-      if ((charDiff > 25 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
+      // Quota Optimization: 20s throttle and 40 char threshold for captions
+      if ((charDiff > 40 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
         if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
         
         captionDebounceTimer.current = setTimeout(() => {
@@ -446,7 +450,7 @@ export default function RoomPage() {
             updatedAt: serverTimestamp(),
             username: user.displayName || user.email?.split('@')[0],
           }, { merge: true });
-        }, 15000); 
+        }, 20000); 
       }
     };
 
@@ -569,6 +573,12 @@ export default function RoomPage() {
 
   const sendReaction = useCallback((emoji: string) => {
     if (!user || !firestore || !meetingId) return;
+    
+    // Quota optimization: 1-second reaction throttle
+    const now = Date.now();
+    if (now - lastReactionTime.current < 1000) return;
+    lastReactionTime.current = now;
+
     const reactionRef = collection(firestore, 'meetings', meetingId, 'reactions');
     addDocumentNonBlocking(reactionRef, {
       type: emoji,
@@ -699,17 +709,21 @@ export default function RoomPage() {
         if (candidate) {
           candidateBuffer.push(candidate.toJSON());
           if (!candidateTimeout) {
-            // Quota Optimization: 20-second buffering window
+            // Quota Optimization: 25-second buffering window
             candidateTimeout = setTimeout(async () => {
-              const updates: any = {};
-              candidateBuffer.forEach((c, idx) => {
-                const key = `candidates_${user.uid}_${Date.now()}_${idx}`;
-                updates[key] = c;
-              });
-              await setDoc(channelRef, updates, { merge: true });
+              const candidatesToSend = [...candidateBuffer];
               candidateBuffer.length = 0;
               candidateTimeout = null;
-            }, 20000); 
+
+              if (candidatesToSend.length > 0) {
+                const updates: any = {};
+                candidatesToSend.forEach((c, idx) => {
+                  const key = `candidates_${user.uid}_${Date.now()}_${idx}`;
+                  updates[key] = c;
+                });
+                await setDoc(channelRef, updates, { merge: true });
+              }
+            }, 25000); 
           }
         }
       };
@@ -921,13 +935,13 @@ export default function RoomPage() {
                   </PopoverContent>
                </Popover>
 
-               <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 transition-all", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
+               <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
 
                <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
                  {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
                </Button>
                
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
                
                {isHost && (
                  <Popover>
