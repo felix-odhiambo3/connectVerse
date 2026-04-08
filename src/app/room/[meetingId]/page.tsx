@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -210,6 +211,7 @@ export default function RoomPage() {
   
   const recognitionRef = useRef<any>(null);
   const lastCaptionRef = useRef<string>('');
+  const captionDebounceTimer = useRef<NodeJS.Timeout | null>(null);
   
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -222,6 +224,7 @@ export default function RoomPage() {
   const screenSenders = useRef<Map<string, RTCRtpSender[]>>(new Map());
   const signalingUnsubs = useRef<Map<string, () => void>>(new Map());
   const initialPresenceSynced = useRef(false);
+  const localRoleRef = useRef<Participant['role'] | null>(null);
   
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -248,8 +251,12 @@ export default function RoomPage() {
   const participantsRef = useRef<Participant[]>([]);
   
   useEffect(() => {
-    if (participants) participantsRef.current = participants;
-  }, [participants]);
+    if (participants) {
+      participantsRef.current = participants;
+      const me = participants.find(p => p.id === user?.uid);
+      if (me) localRoleRef.current = me.role;
+    }
+  }, [participants, user?.uid]);
 
   const localParticipant = useMemo(() => {
     return participants?.find(p => p.id === user?.uid);
@@ -304,15 +311,12 @@ export default function RoomPage() {
 
   const activeParticipantIds = useMemo(() => activeParticipants.map(p => p.id).sort().join(','), [activeParticipants]);
 
-  // Global cleanup logic when session ends
   const cleanupAllResources = useCallback(() => {
-    // Stop local streams
     localCameraStream.current?.getTracks().forEach(t => t.stop());
     localCameraStream.current = null;
     localScreenStream.current?.getTracks().forEach(t => t.stop());
     localScreenStream.current = null;
 
-    // Close all peer connections
     pcs.current.forEach(pc => {
       try { pc.close(); } catch (e) {}
     });
@@ -320,11 +324,9 @@ export default function RoomPage() {
     cameraSenders.current.clear();
     screenSenders.current.clear();
 
-    // Stop signaling
     signalingUnsubs.current.forEach(unsub => unsub());
     signalingUnsubs.current.clear();
 
-    // Stop speech recognition
     if (recognitionRef.current) {
       recognitionRef.current.stop();
       recognitionRef.current = null;
@@ -334,7 +336,6 @@ export default function RoomPage() {
     setRemoteScreenStreams(new Map());
   }, []);
 
-  // Listen for meeting status change to trigger global end
   useEffect(() => {
     if (meetingData?.status === 'finished') {
       cleanupAllResources();
@@ -363,7 +364,7 @@ export default function RoomPage() {
       ...updates,
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
-      role: isInitial ? role : (localParticipant?.role || role),
+      role: isInitial ? role : (localRoleRef.current || role),
       cameraStreamId: localCameraStream.current?.id || null,
       screenStreamId: localScreenStream.current?.id || null,
     };
@@ -372,7 +373,7 @@ export default function RoomPage() {
     }
     
     await setDoc(pRef, data, { merge: true });
-  }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked, localParticipant?.role]);
+  }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked]);
 
   useEffect(() => {
     if (!user || !meetingId || !firestore || isMeetingLoading || !meetingData || initialPresenceSynced.current) return;
@@ -408,11 +409,16 @@ export default function RoomPage() {
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
       if (currentTranscript !== lastCaptionRef.current && user && firestore) {
         lastCaptionRef.current = currentTranscript;
-        setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
-          text: currentTranscript,
-          updatedAt: serverTimestamp(),
-          username: user.displayName || user.email?.split('@')[0],
-        }, { merge: true });
+        
+        if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
+        
+        captionDebounceTimer.current = setTimeout(() => {
+          setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
+            text: currentTranscript,
+            updatedAt: serverTimestamp(),
+            username: user.displayName || user.email?.split('@')[0],
+          }, { merge: true });
+        }, 1000); 
       }
     };
 
@@ -425,6 +431,7 @@ export default function RoomPage() {
 
     return () => {
       if (recognitionRef.current) recognitionRef.current.stop();
+      if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
     };
   }, [isCaptionsEnabled, user, firestore, meetingId, toast]);
 
@@ -653,10 +660,24 @@ export default function RoomPage() {
         }
       };
 
+      const candidateBuffer: any[] = [];
+      let candidateTimeout: NodeJS.Timeout | null = null;
+
       pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
-          const candKey = `candidates_${user.uid}_${candidate.candidate.substring(0, 10).replace(/[^a-zA-Z0-9]/g, '')}`;
-          setDoc(channelRef, { [candKey]: candidate.toJSON() }, { merge: true });
+          candidateBuffer.push(candidate.toJSON());
+          if (!candidateTimeout) {
+            candidateTimeout = setTimeout(async () => {
+              const updates: any = {};
+              candidateBuffer.forEach((c, idx) => {
+                const key = `candidates_${user.uid}_${Date.now()}_${idx}`;
+                updates[key] = c;
+              });
+              await setDoc(channelRef, updates, { merge: true });
+              candidateBuffer.length = 0;
+              candidateTimeout = null;
+            }, 500);
+          }
         }
       };
 
