@@ -212,6 +212,7 @@ export default function RoomPage() {
   const recognitionRef = useRef<any>(null);
   const lastCaptionRef = useRef<string>('');
   const captionDebounceTimer = useRef<NodeJS.Timeout | null>(null);
+  const lastPresenceRef = useRef<string>('');
   
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -372,7 +373,11 @@ export default function RoomPage() {
       data.joinedAt = serverTimestamp();
     }
     
-    // Use setDoc with merge: true to avoid "No document to update" errors
+    // Quota Optimization: Only write if something has actually changed
+    const presenceHash = JSON.stringify({ ...data, joinedAt: null });
+    if (presenceHash === lastPresenceRef.current && !isInitial) return;
+    lastPresenceRef.current = presenceHash;
+
     await setDoc(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked]);
 
@@ -408,10 +413,10 @@ export default function RoomPage() {
 
     recognition.onresult = (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
-      if (currentTranscript !== lastCaptionRef.current && user && firestore) {
+      // Quota Optimization: Only write meaningful, changed captions with longer debounce
+      if (currentTranscript.length > 3 && currentTranscript !== lastCaptionRef.current && user && firestore) {
         lastCaptionRef.current = currentTranscript;
         
-        // Use debouncing to reduce Firestore writes for captions
         if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
         
         captionDebounceTimer.current = setTimeout(() => {
@@ -420,7 +425,7 @@ export default function RoomPage() {
             updatedAt: serverTimestamp(),
             username: user.displayName || user.email?.split('@')[0],
           }, { merge: true });
-        }, 1000); 
+        }, 3000); // 3 second debounce to drastically reduce writes
       }
     };
 
@@ -521,6 +526,7 @@ export default function RoomPage() {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       localScreenStream.current = stream;
+      // Pre-emptive presence sync to prep remote peers
       await syncPresence({ screenStreamId: stream.id });
       await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
       updateTracksForPeers(stream, 'screen');
@@ -630,6 +636,7 @@ export default function RoomPage() {
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         const p = participantsRef.current.find(p => p.id === participantId);
+        // Resilient identification: Use participant metadata or fallback to meeting presenter ID
         const isScreenShare = (p && stream.id === p.screenStreamId) || stream.id === meetingData?.screenSharerId;
 
         if (isScreenShare) {
@@ -662,7 +669,7 @@ export default function RoomPage() {
         }
       };
 
-      // Buffer ICE candidates to reduce Firestore writes
+      // Quota Optimization: 2-second buffer for ICE candidates
       const candidateBuffer: any[] = [];
       let candidateTimeout: NodeJS.Timeout | null = null;
 
@@ -673,14 +680,13 @@ export default function RoomPage() {
             candidateTimeout = setTimeout(async () => {
               const updates: any = {};
               candidateBuffer.forEach((c, idx) => {
-                // Use unique keys per batch to avoid overwriting and reduce total writes
                 const key = `candidates_${user.uid}_${Date.now()}_${idx}`;
                 updates[key] = c;
               });
               await setDoc(channelRef, updates, { merge: true });
               candidateBuffer.length = 0;
               candidateTimeout = null;
-            }, 500);
+            }, 2000); 
           }
         }
       };
@@ -705,7 +711,6 @@ export default function RoomPage() {
             }
           }
 
-          // Handle incoming buffered candidates
           Object.keys(data).forEach(async (key) => {
             if (key.startsWith(`candidates_${participantId}`)) {
               try { await pc.addIceCandidate(new RTCIceCandidate(data[key])); } catch (e) {}
@@ -764,7 +769,6 @@ export default function RoomPage() {
     );
   }
 
-  // Simplified Stage: Only show the spotlight or the presentation
   const spotlightParticipantId = activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid;
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
@@ -811,7 +815,6 @@ export default function RoomPage() {
 
         <main className="flex-1 flex overflow-hidden p-10 gap-10 relative">
           <div className="flex-1 flex flex-col gap-10 overflow-hidden relative">
-            {/* The Stage */}
             <div className="flex-1 bg-[#0F0F0F] rounded-[4rem] relative overflow-hidden shadow-[0_40px_100px_-20px_rgba(0,0,0,0.3)] border border-white/5 p-6">
                <div className="w-full h-full flex items-center justify-center transition-all duration-700">
                  {screenSharerId ? (
@@ -832,7 +835,6 @@ export default function RoomPage() {
                  )}
                </div>
 
-              {/* Reaction Layer */}
               <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[4rem]">
                 {activeReactions.map(reaction => (
                   <FloatingReaction 
@@ -843,7 +845,6 @@ export default function RoomPage() {
                 ))}
               </div>
 
-              {/* Captions Layer */}
               {isCaptionsEnabled && (
                 <div className="absolute bottom-32 left-0 right-0 flex justify-center pointer-events-none z-50">
                   <div className="bg-black/80 backdrop-blur-xl px-10 py-6 rounded-[2.5rem] border border-white/10 max-w-[80%] shadow-2xl animate-in slide-in-from-bottom duration-500">
@@ -863,7 +864,6 @@ export default function RoomPage() {
                 </div>
               )}
 
-              {/* Picture in Picture Camera (When presenting) */}
               {(screenSharerId || !isVideoOff) && (
                 <div className={cn(
                   "absolute bottom-16 right-16 w-80 aspect-video rounded-[2.5rem] overflow-hidden border-[6px] border-white/10 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)] z-40 bg-zinc-900 backdrop-blur-3xl transition-all duration-700 hover:scale-105",
@@ -880,13 +880,11 @@ export default function RoomPage() {
               )}
             </div>
 
-            {/* Control Bar */}
             <div className="h-32 mx-auto w-fit bg-white/90 backdrop-blur-3xl rounded-[3.5rem] border border-white shadow-[0_20px_50px_rgba(0,0,0,0.1)] flex items-center px-12 gap-6 shrink-0 -mt-16 z-20 ring-1 ring-zinc-100">
                <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isAudioMuted ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isAudioMuted ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}</Button>
                <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isVideoOff ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isVideoOff ? <VideoOff className="h-8 w-8" /> : <VideoIcon className="h-8 w-8" />}</Button>
                <Separator orientation="vertical" className="h-14 mx-2 bg-zinc-100" />
                
-               {/* Reactions Button */}
                <Popover>
                   <PopoverTrigger asChild>
                     <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 hover:bg-zinc-100 transition-all shadow-xl hover:scale-110">
@@ -913,7 +911,6 @@ export default function RoomPage() {
                <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
                
-               {/* Security Settings for Host */}
                {isHost && (
                  <Popover>
                     <PopoverTrigger asChild>
@@ -951,7 +948,6 @@ export default function RoomPage() {
             </div>
           </div>
 
-          {/* Right Sidebar: Chat and Participants */}
           <Card className="w-[450px] flex flex-col overflow-hidden border-none shadow-[0_40px_80px_-20px_rgba(0,0,0,0.1)] shrink-0 rounded-[4rem] bg-white">
              <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-10 pt-12 pb-6 border-b">
@@ -1009,7 +1005,6 @@ export default function RoomPage() {
                 <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
                    <ScrollArea className="flex-1 p-8">
                       <div className="space-y-10">
-                        {/* Waiting Room Section for Host */}
                         {isHost && waitingParticipants.length > 0 && (
                           <div className="space-y-4">
                              <div className="px-4 flex items-center justify-between">
@@ -1036,7 +1031,6 @@ export default function RoomPage() {
                           </div>
                         )}
 
-                        {/* Active Participants Section */}
                         <div className="space-y-4">
                           <div className="px-4">
                              <span className="text-[11px] font-black uppercase tracking-widest text-zinc-400">In Meeting ({activeParticipants.length})</span>
