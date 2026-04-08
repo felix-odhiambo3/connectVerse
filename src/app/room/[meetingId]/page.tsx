@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -373,8 +372,6 @@ export default function RoomPage() {
       data.joinedAt = serverTimestamp();
     }
     
-    // Quota Optimization: Only write if something has actually changed
-    // Deep comparison of properties to avoid redundant writes
     const presenceHash = JSON.stringify({ 
       role: data.role,
       hasRaisedHand: data.hasRaisedHand,
@@ -422,8 +419,7 @@ export default function RoomPage() {
 
     recognition.onresult = (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
-      // Quota Optimization: Only write meaningful, changed captions with longer debounce
-      if (currentTranscript.length > 5 && currentTranscript !== lastCaptionRef.current && user && firestore) {
+      if (currentTranscript.length > 3 && currentTranscript !== lastCaptionRef.current && user && firestore) {
         lastCaptionRef.current = currentTranscript;
         
         if (captionDebounceTimer.current) clearTimeout(captionDebounceTimer.current);
@@ -434,7 +430,7 @@ export default function RoomPage() {
             updatedAt: serverTimestamp(),
             username: user.displayName || user.email?.split('@')[0],
           }, { merge: true });
-        }, 5000); // Increased debounce to 5s for Spark plan safety
+        }, 3000); 
       }
     };
 
@@ -535,7 +531,6 @@ export default function RoomPage() {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       localScreenStream.current = stream;
-      // Pre-emptive presence sync to prep remote peers
       await syncPresence({ screenStreamId: stream.id });
       await updateDoc(doc(firestore, 'meetings', meetingId), { screenSharerId: user.uid });
       updateTracksForPeers(stream, 'screen');
@@ -646,7 +641,6 @@ export default function RoomPage() {
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         const p = participantsRef.current.find(p => p.id === participantId);
-        // Resilient identification: Use participant metadata or fallback to meeting presenter ID
         const isScreenShare = (p && stream.id === p.screenStreamId) || stream.id === meetingData?.screenSharerId;
 
         if (isScreenShare) {
@@ -668,7 +662,6 @@ export default function RoomPage() {
           await pc.setLocalDescription();
           const offer = pc.localDescription;
           if (offer) {
-             // Quota Optimization: Only write if description is new
              await setDoc(channelRef, { 
                [user.uid]: { type: offer.type, sdp: offer.sdp, timestamp: Date.now() } 
              }, { merge: true });
@@ -680,7 +673,6 @@ export default function RoomPage() {
         }
       };
 
-      // Quota Optimization: 3-second buffer for ICE candidates
       const candidateBuffer: any[] = [];
       let candidateTimeout: NodeJS.Timeout | null = null;
 
@@ -722,7 +714,6 @@ export default function RoomPage() {
             }
           }
 
-          // Quota Optimization: Deduplicate candidate processing
           Object.keys(data).forEach(async (key) => {
             if (key.startsWith(`candidates_${participantId}`) && !appliedCandidates.has(key)) {
               appliedCandidates.add(key);
@@ -921,7 +912,9 @@ export default function RoomPage() {
 
                <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
 
-               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
+               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
+                {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
+               </Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
                
                {isHost && (
