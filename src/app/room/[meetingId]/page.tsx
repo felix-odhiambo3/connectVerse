@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -385,7 +386,6 @@ export default function RoomPage() {
     if (presenceHash === lastPresenceRef.current && !isInitial) return;
     lastPresenceRef.current = presenceHash;
 
-    // Use setDoc with merge: true to avoid "document not found" errors
     await setDoc(pRef, data, { merge: true });
   }, [user?.uid, user?.displayName, user?.email, firestore, meetingId, hostId, isMeetingLoading, isMeetingLocked]);
 
@@ -424,7 +424,6 @@ export default function RoomPage() {
       const charDiff = Math.abs(currentTranscript.length - lastCaptionRef.current.length);
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
 
-      // Increase threshold to 20 chars for better quota preservation
       if ((charDiff > 20 || isSentenceEnd) && currentTranscript !== lastCaptionRef.current && user && firestore) {
         lastCaptionRef.current = currentTranscript;
         
@@ -610,17 +609,23 @@ export default function RoomPage() {
     router.push('/dashboard');
   };
 
+  // Optimization: Manage peer connections incrementally to save quota
+  const establishedPcs = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting' || meetingData?.status === 'finished') return;
+    
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
+    // Cleanup peers who left
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
         signalingUnsubs.current.delete(`${id}_channel`);
         pc.close();
         pcs.current.delete(id);
+        establishedPcs.current.delete(id);
         cameraSenders.current.delete(id);
         screenSenders.current.delete(id);
         setRemoteCameraStreams(prev => { const n = new Map(prev); n.delete(id); return n; });
@@ -628,11 +633,14 @@ export default function RoomPage() {
       }
     });
 
+    // Initialize only new peers
     currentIds.forEach(async (participantId) => {
-      if (pcs.current.has(participantId)) return;
+      if (pcs.current.has(participantId) && establishedPcs.current.has(participantId)) return;
       
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
+      establishedPcs.current.add(participantId);
+
       const appliedCandidates = new Set<string>();
 
       if (localCameraStream.current) {
@@ -686,7 +694,6 @@ export default function RoomPage() {
         if (candidate) {
           candidateBuffer.push(candidate.toJSON());
           if (!candidateTimeout) {
-            // Aggressive 10s buffer for ICE candidates to preserve quota
             candidateTimeout = setTimeout(async () => {
               const updates: any = {};
               candidateBuffer.forEach((c, idx) => {
@@ -733,7 +740,7 @@ export default function RoomPage() {
       });
       signalingUnsubs.current.set(`${participantId}_channel`, unsubChannel);
     });
-  }, [user?.uid, firestore, meetingId, activeParticipantIds, localParticipant?.role, meetingData?.screenSharerId, meetingData?.status]);
+  }, [user?.uid, firestore, meetingId, activeParticipantIds, localParticipant?.role, meetingData?.status]);
 
   useEffect(() => {
     if (!meetingData?.createdAt || meetingData.status === 'finished') return;
