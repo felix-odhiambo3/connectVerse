@@ -16,14 +16,25 @@ The application leverages several managed Firebase services that are built for m
 
 - **Firestore**: As a serverless, NoSQL database, Firestore scales automatically to meet your data storage and traffic needs. You do not need to provision servers or manage sharding. Its performance scales with the size of your result set, not the size of your data set, making queries fast even with billions of documents.
 - **Firebase Authentication**: This service is a multi-tenant, managed system that handles user authentication at a global scale. It automatically handles the infrastructure required to sign in millions of users without any scaling effort on your part.
-- **WebRTC and Signaling**: The peer-to-peer WebRTC connections for video and audio do not put a load on the application server. The server's only role is signaling (managed through Firestore), which is a very lightweight task. This architecture means the number of concurrent meetings can scale significantly without overwhelming the backend.
 
-## Redis vs. Firestore
+## WebRTC Architecture: P2P vs SFU
 
-The request mentioned a Redis scaling strategy. This application uses Firestore for all real-time data and persistence needs. Firestore is Google's managed, serverless database solution that provides similar real-time capabilities to Redis Pub/Sub but with the added benefits of data persistence, offline support, and automatic scaling. Therefore, a separate Redis instance is not necessary for this architecture.
+ConnectVerse currently uses a **Full Mesh P2P** (Peer-to-Peer) architecture. 
+
+### Current P2P Mesh
+- **Strengths**: Low latency, zero server bandwidth costs, end-to-end encryption by default.
+- **Limits**: As the number of participants grows (N), each participant must maintain N-1 connections. This leads to exponential growth in CPU and upload bandwidth requirements on the client side.
+- **Optimization**: We have implemented `contentHint` for screen sharing and quality constraints for video to mitigate bandwidth issues.
+
+### Future Scaling (SFU)
+For meetings exceeding 10-15 participants, we recommend transitioning to an **SFU (Selective Forwarding Unit)** like LiveKit or Mediasoup.
+- An SFU acts as a hub where each participant sends only 1 stream and receives N-1 streams, significantly reducing client-side upload requirements.
 
 ## TURN Server Scaling
 
-For production WebRTC, a TURN server is required to relay traffic for users behind restrictive firewalls. While the app is configured to use one, the TURN server itself is a separate piece of infrastructure that needs to be scalable.
-- **Managed Services**: Use a managed TURN server provider like Twilio's Network Traversal Service. These services handle the scaling and geographic distribution of TURN servers for you.
-- **Self-Hosted**: If self-hosting, you would need a load balancer distributing traffic across multiple `coturn` (or other TURN server) instances in different regions to ensure high availability and low latency.
+For production WebRTC, a TURN server is required to relay traffic for users behind restrictive firewalls.
+- **Managed Services**: Use a managed TURN server provider like Twilio's Network Traversal Service or Xirsys. These services handle the scaling and geographic distribution of TURN servers for you.
+- **Self-Hosted**: If self-hosting, you would need a load balancer distributing traffic across multiple `coturn` instances in different regions to ensure high availability and low latency.
+
+## Quota & Rate Limiting
+- We have implemented aggressive client-side batching and throttling (25s ICE candidate buffering, 20s presence sync) to ensure the application remains stable and cost-effective under high load within the Firestore limits.
