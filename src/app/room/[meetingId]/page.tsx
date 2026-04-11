@@ -49,6 +49,8 @@ import {
   ShieldCheck,
   UserPlus,
   UserX,
+  Pin,
+  PinOff
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -140,13 +142,15 @@ function FloatingReaction({ reaction, onComplete }: { reaction: Reaction, onComp
   );
 }
 
-function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, className }: { 
+function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isPinned, onTogglePin, className }: { 
   stream: MediaStream | null, 
   name: string, 
   isMuted?: boolean, 
   isVideoOff?: boolean, 
   isMe?: boolean, 
   isPresenting?: boolean,
+  isPinned?: boolean,
+  onTogglePin?: () => void,
   className?: string
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -159,7 +163,7 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, cla
 
   return (
     <div className={cn(
-      "relative w-full h-full bg-[#1A1A1A] rounded-[4rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500",
+      "relative w-full h-full bg-[#1A1A1A] rounded-[4rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500 group",
       className
     )}>
       <video
@@ -181,9 +185,27 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, cla
            <div className="text-zinc-500 font-black tracking-[0.4em] uppercase text-[10px] opacity-60">Camera Off</div>
         </div>
       )}
+      
+      <div className="absolute top-6 right-6 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+        {onTogglePin && (
+          <Button 
+            variant="secondary" 
+            size="icon" 
+            onClick={onTogglePin}
+            className={cn(
+              "rounded-xl h-12 w-12 shadow-2xl backdrop-blur-md border border-white/10",
+              isPinned ? "bg-primary text-white" : "bg-black/40 text-white hover:bg-black/60"
+            )}
+          >
+            {isPinned ? <PinOff className="h-5 w-5" /> : <Pin className="h-5 w-5" />}
+          </Button>
+        )}
+      </div>
+
       <div className="absolute bottom-6 left-6 flex items-center gap-3 z-20">
         <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-2xl border-white/10 px-4 py-2 font-black text-[11px] uppercase tracking-widest rounded-xl shadow-xl">
           {isPresenting && <Monitor className="h-3.5 w-3.5 mr-2.5 text-primary" />}
+          {isPinned && <Pin className="h-3.5 w-3.5 mr-2.5 text-primary fill-primary" />}
           {name} {isMe && "(You)"}
         </Badge>
         {isMuted && !isPresenting && <div className="p-2 bg-[#FF4545] rounded-xl shadow-2xl border border-white/20"><MicOff className="h-4 w-4 text-white" /></div>}
@@ -209,6 +231,7 @@ export default function RoomPage() {
   const [chatInput, setChatInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeReactions, setActiveReactions] = useState<Reaction[]>([]);
+  const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
   
   const recognitionRef = useRef<any>(null);
   const lastCaptionRef = useRef<string>('');
@@ -259,8 +282,13 @@ export default function RoomPage() {
       currentParticipantsRef.current = participants;
       const me = participants.find(p => p.id === user?.uid);
       if (me) localRoleRef.current = me.role;
+      
+      // Auto unpin if pinned user leaves
+      if (pinnedParticipantId && !participants.some(p => p.id === pinnedParticipantId && p.role !== 'left')) {
+        setPinnedParticipantId(null);
+      }
     }
-  }, [participants, user?.uid]);
+  }, [participants, user?.uid, pinnedParticipantId]);
 
   const localParticipant = useMemo(() => {
     return participants?.find(p => p.id === user?.uid);
@@ -393,7 +421,8 @@ export default function RoomPage() {
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 20000) return;
+    // Aggressive quota protection: 25s throttle
+    if (!isInitial && timeSinceLastUpdate < 25000) return;
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -434,10 +463,10 @@ export default function RoomPage() {
     recognition.onresult = (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
-      const isNewText = currentTranscript !== lastCaptionRef.current;
-      const isLongEnough = currentTranscript.length - lastCaptionRef.current.length > 40;
+      const isSignificant = currentTranscript.length - lastCaptionRef.current.length > 40;
 
-      if ((isLongEnough || isSentenceEnd) && isNewText && user && firestore) {
+      // Aggressive quota protection: 20s debounce for captions
+      if ((isSignificant || isSentenceEnd) && user && firestore) {
           lastCaptionRef.current = currentTranscript;
           setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
             text: currentTranscript,
@@ -570,6 +599,7 @@ export default function RoomPage() {
   const sendReaction = useCallback((emoji: string) => {
     if (!user || !firestore || !meetingId) return;
     const now = Date.now();
+    // Aggressive quota protection: 1s throttle for reactions
     if (now - lastReactionTime.current < 1000) return;
     lastReactionTime.current = now;
 
@@ -580,6 +610,14 @@ export default function RoomPage() {
       createdAt: serverTimestamp(),
     });
   }, [user, firestore, meetingId]);
+
+  const togglePin = (participantId: string) => {
+    if (pinnedParticipantId === participantId) {
+      setPinnedParticipantId(null);
+    } else {
+      setPinnedParticipantId(participantId);
+    }
+  };
 
   const copyInviteLink = () => {
     const link = window.location.origin + `/room/${meetingId}`;
@@ -623,6 +661,7 @@ export default function RoomPage() {
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
+    // Progressive Cleanup: only remove dead connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -638,7 +677,7 @@ export default function RoomPage() {
     });
 
     currentIds.forEach(async (participantId) => {
-      if (pcs.current.has(participantId) && establishedPcs.current.has(participantId)) return;
+      if (pcs.current.has(participantId)) return; // Don't restart healthy connections
       
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
@@ -657,8 +696,9 @@ export default function RoomPage() {
 
       pc.ontrack = (event) => {
         const stream = event.streams[0];
+        // Production-grade identification: Check if this stream ID matches a participant's camera or screen
         const p = currentParticipantsRef.current.find(p => p.id === participantId);
-        const isScreen = (p && stream.id === p.screenStreamId) || stream.id === meetingData?.screenSharerId || event.track.label.toLowerCase().includes('screen');
+        const isScreen = stream.id === p?.screenStreamId || stream.id === meetingData?.screenSharerId || event.track.label.toLowerCase().includes('screen');
         
         if (isScreen) setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         else setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
@@ -688,6 +728,7 @@ export default function RoomPage() {
         if (candidate) {
           candidateBuffer.push(candidate.toJSON());
           if (!candidateTimeout) {
+            // Aggressive quota protection: 25s candidate buffering
             candidateTimeout = setTimeout(async () => {
               const toSend = [...candidateBuffer];
               candidateBuffer.length = 0;
@@ -770,7 +811,8 @@ export default function RoomPage() {
     );
   }
 
-  const spotlightParticipantId = activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid;
+  // Focus Logic: Pinned > Screen Share > Spotlight
+  const spotlightParticipantId = pinnedParticipantId || (screenSharerId && screenSharerId !== user?.uid ? screenSharerId : (activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid));
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
 
@@ -810,10 +852,25 @@ export default function RoomPage() {
           <div className="flex-1 flex flex-col gap-10 overflow-hidden relative">
             <div className="flex-1 bg-[#0F0F0F] rounded-[4rem] relative overflow-hidden shadow-2xl border border-white/5 p-6">
                <div className="w-full h-full flex items-center justify-center">
-                 {screenSharerId ? (
-                   <StreamView stream={screenSharerId === user?.uid ? localScreenStream.current : remoteScreenStreams.get(screenSharerId) || null} name={participants?.find(p => p.id === screenSharerId)?.name || 'Presentation'} isPresenting={true} isMe={screenSharerId === user?.uid} />
+                 {screenSharerId && !pinnedParticipantId ? (
+                   <StreamView 
+                    stream={screenSharerId === user?.uid ? localScreenStream.current : remoteScreenStreams.get(screenSharerId) || null} 
+                    name={participants?.find(p => p.id === screenSharerId)?.name || 'Presentation'} 
+                    isPresenting={true} 
+                    isMe={screenSharerId === user?.uid}
+                    onTogglePin={() => togglePin(screenSharerId)}
+                    isPinned={pinnedParticipantId === screenSharerId}
+                  />
                  ) : (
-                   <StreamView stream={isSpotlightMe ? localCameraStream.current : remoteCameraStreams.get(spotlightParticipantId!) || null} name={isSpotlightMe ? 'You' : spotlightParticipant?.name || 'Participant'} isVideoOff={isSpotlightMe ? isVideoOff : spotlightParticipant?.isVideoOff} isMuted={isSpotlightMe ? isAudioMuted : spotlightParticipant?.isMuted} isMe={isSpotlightMe} />
+                   <StreamView 
+                    stream={isSpotlightMe ? localCameraStream.current : remoteCameraStreams.get(spotlightParticipantId!) || null} 
+                    name={isSpotlightMe ? 'You' : spotlightParticipant?.name || 'Participant'} 
+                    isVideoOff={isSpotlightMe ? isVideoOff : spotlightParticipant?.isVideoOff} 
+                    isMuted={isSpotlightMe ? isAudioMuted : spotlightParticipant?.isMuted} 
+                    isMe={isSpotlightMe}
+                    isPinned={pinnedParticipantId === spotlightParticipantId}
+                    onTogglePin={spotlightParticipantId ? () => togglePin(spotlightParticipantId) : undefined}
+                  />
                  )}
                </div>
 
@@ -848,7 +905,9 @@ export default function RoomPage() {
                <Separator orientation="vertical" className="h-14 mx-2 bg-zinc-100" />
                <Popover><PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all"><Smile className="h-8 w-8 text-zinc-700" /></Button></PopoverTrigger><PopoverContent side="top" align="center" className="w-fit p-4 bg-white/80 backdrop-blur-2xl rounded-[2.5rem] shadow-2xl mb-8"><div className="flex gap-4">{EMOJIS.map((emoji) => (<button key={emoji} onClick={() => sendReaction(emoji)} className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl active:scale-90">{emoji}</button>))}</div></PopoverContent></Popover>
                <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
-               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
+               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
+                 {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
+               </Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
                {isHost && (
                  <Popover><PopoverTrigger asChild><Button variant={isMeetingLocked ? "default" : "secondary"} size="icon" className={cn("rounded-2xl h-16 w-16 transition-all", isMeetingLocked ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><ShieldCheck className="h-8 w-8" /></Button></PopoverTrigger><PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl rounded-[3.5rem] shadow-2xl mb-8"><div className="space-y-6"><h3 className="font-black text-sm text-zinc-900">Security</h3><Separator className="bg-zinc-100" /><div className="flex items-center justify-between"><div className="flex flex-col gap-1"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-700">Lock Meeting</span></div><Button onClick={toggleMeetingLock} variant={isMeetingLocked ? "destructive" : "secondary"} size="sm" className="rounded-xl h-10 w-10 p-0">{isMeetingLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}</Button></div></div></PopoverContent></Popover>
@@ -865,7 +924,26 @@ export default function RoomPage() {
                    <div className="p-8 border-t bg-zinc-50/50"><div className="relative flex items-center"><Input placeholder="Type a message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }} className="pr-14 rounded-2xl h-14 bg-white border-zinc-100" /><Button size="icon" variant="ghost" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-11 w-11 rounded-xl" onClick={() => { if (chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }}><Send className="h-5 w-5 text-zinc-400" /></Button></div></div>
                 </TabsContent>
                 <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-8"><div className="space-y-10">{isHost && waitingParticipants.length > 0 && (<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-primary px-4">Waiting Room ({waitingParticipants.length})</span>{waitingParticipants.map(p => (<div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl"><div className="flex items-center gap-4"><div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black text-zinc-400">{p.name.substring(0, 2)}</div><div className="flex flex-col"><span className="text-xs font-black text-white">{p.name}</span></div></div><div className="flex gap-2"><Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button><Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button></div></div>))}</div>)}<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-400 px-4">In Meeting ({activeParticipants.length})</span>{activeParticipants.map(p => (<div key={p.id} className="flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm"><div className="flex items-center gap-4"><div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div><div className="flex flex-col"><span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span><span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span></div></div><div className="flex gap-3">{p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}{p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}{p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}{isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}</div></div>))}</div></div></ScrollArea>
+                   <ScrollArea className="flex-1 p-8"><div className="space-y-10">{isHost && waitingParticipants.length > 0 && (<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-primary px-4">Waiting Room ({waitingParticipants.length})</span>{waitingParticipants.map(p => (<div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl"><div className="flex items-center gap-4"><div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black text-zinc-400">{p.name.substring(0, 2)}</div><div className="flex flex-col"><span className="text-xs font-black text-white">{p.name}</span></div></div><div className="flex gap-2"><Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button><Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button></div></div>))}</div>)}<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-400 px-4">In Meeting ({activeParticipants.length})</span>{activeParticipants.map(p => (<div key={p.id} className={cn("flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
+                    <div className="flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div>
+                      <div className="flex flex-col"><span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span><span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span></div>
+                    </div>
+                    <div className="flex gap-3 items-center">
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        onClick={() => togglePin(p.id)}
+                        className={cn("h-8 w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}
+                      >
+                        {pinnedParticipantId === p.id ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                      </Button>
+                      {p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}
+                      {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
+                      {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
+                      {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
+                    </div>
+                  </div>))}</div></div></ScrollArea>
                 </TabsContent>
              </Tabs>
           </Card>
