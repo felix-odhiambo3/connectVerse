@@ -50,7 +50,9 @@ import {
   UserPlus,
   UserX,
   Pin,
-  PinOff
+  PinOff,
+  Maximize,
+  Minimize
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -232,12 +234,16 @@ export default function RoomPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeReactions, setActiveReactions] = useState<Reaction[]>([]);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
   
   const recognitionRef = useRef<any>(null);
   const lastCaptionRef = useRef<string>('');
   const lastPresenceRef = useRef<string>('');
   const lastPresenceUpdateAt = useRef<number>(0);
   const lastReactionTime = useRef<number>(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const controlTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -283,7 +289,6 @@ export default function RoomPage() {
       const me = participants.find(p => p.id === user?.uid);
       if (me) localRoleRef.current = me.role;
       
-      // Auto unpin if pinned user leaves
       if (pinnedParticipantId && !participants.some(p => p.id === pinnedParticipantId && p.role !== 'left')) {
         setPinnedParticipantId(null);
       }
@@ -421,7 +426,6 @@ export default function RoomPage() {
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    // Aggressive quota protection: 25s throttle
     if (!isInitial && timeSinceLastUpdate < 25000) return;
 
     lastPresenceRef.current = presenceHash;
@@ -435,6 +439,50 @@ export default function RoomPage() {
     syncPresence({ isMuted: true, isVideoOff: true, hasRaisedHand: false }, true);
     initialPresenceSynced.current = true;
   }, [user?.uid, meetingId, !!meetingData, isMeetingLoading, syncPresence]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey && !e.altKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+        toggleFullscreen();
+      }
+    };
+
+    const handleMouseMove = () => {
+      if (document.fullscreenElement) {
+        setShowControls(true);
+        if (controlTimeoutRef.current) clearTimeout(controlTimeoutRef.current);
+        controlTimeoutRef.current = setTimeout(() => {
+          setShowControls(false);
+        }, 3000);
+      } else {
+        setShowControls(true);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('mousemove', handleMouseMove);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen().catch(err => {
+        toast({ variant: 'destructive', title: "Fullscreen failed", description: err.message });
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  };
 
   useEffect(() => {
     if (!isCaptionsEnabled) {
@@ -465,7 +513,6 @@ export default function RoomPage() {
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
       const isSignificant = currentTranscript.length - lastCaptionRef.current.length > 40;
 
-      // Aggressive quota protection: 20s debounce for captions
       if ((isSignificant || isSentenceEnd) && user && firestore) {
           lastCaptionRef.current = currentTranscript;
           setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
@@ -599,7 +646,6 @@ export default function RoomPage() {
   const sendReaction = useCallback((emoji: string) => {
     if (!user || !firestore || !meetingId) return;
     const now = Date.now();
-    // Aggressive quota protection: 1s throttle for reactions
     if (now - lastReactionTime.current < 1000) return;
     lastReactionTime.current = now;
 
@@ -661,7 +707,6 @@ export default function RoomPage() {
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // Progressive Cleanup: only remove dead connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -677,7 +722,7 @@ export default function RoomPage() {
     });
 
     currentIds.forEach(async (participantId) => {
-      if (pcs.current.has(participantId)) return; // Don't restart healthy connections
+      if (pcs.current.has(participantId)) return;
       
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcs.current.set(participantId, pc);
@@ -696,7 +741,6 @@ export default function RoomPage() {
 
       pc.ontrack = (event) => {
         const stream = event.streams[0];
-        // Production-grade identification: Check if this stream ID matches a participant's camera or screen
         const p = currentParticipantsRef.current.find(p => p.id === participantId);
         const isScreen = stream.id === p?.screenStreamId || stream.id === meetingData?.screenSharerId || event.track.label.toLowerCase().includes('screen');
         
@@ -728,7 +772,6 @@ export default function RoomPage() {
         if (candidate) {
           candidateBuffer.push(candidate.toJSON());
           if (!candidateTimeout) {
-            // Aggressive quota protection: 25s candidate buffering
             candidateTimeout = setTimeout(async () => {
               const toSend = [...candidateBuffer];
               candidateBuffer.length = 0;
@@ -811,14 +854,13 @@ export default function RoomPage() {
     );
   }
 
-  // Focus Logic: Pinned > Screen Share > Spotlight
   const spotlightParticipantId = pinnedParticipantId || (screenSharerId && screenSharerId !== user?.uid ? screenSharerId : (activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid));
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
 
   return (
     <AuthGuard>
-      <div className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
+      <div ref={containerRef} className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
         {isSharingScreen && (
           <div className="bg-zinc-900 px-10 py-4 flex items-center justify-between text-white z-50 shadow-2xl">
              <div className="flex items-center gap-4"><Monitor className="h-5 w-5 text-primary animate-pulse" /><span className="font-black text-[11px] uppercase tracking-[0.25em]">You are presenting</span></div>
@@ -826,27 +868,29 @@ export default function RoomPage() {
           </div>
         )}
 
-        <header className="flex h-24 items-center justify-between px-12 bg-white border-b z-10 shrink-0 shadow-sm">
-          <div className="flex items-center gap-10">
-            <div className="bg-zinc-900 flex items-center justify-center h-14 w-14 rounded-[1.5rem] text-white font-black text-2xl shadow-2xl">CV</div>
-            <div className="flex flex-col">
-               <div className="flex items-center gap-4">
-                 <h1 className="text-xl font-black truncate max-w-[400px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Live Session'}</h1>
-                 <Button variant="secondary" size="icon" onClick={copyInviteLink} className="h-10 w-10 rounded-xl text-zinc-400 bg-zinc-50"><LinkIcon className="h-4 w-4" /></Button>
-                 {isMeetingLocked && <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 rounded-lg px-3 py-1 font-black text-[9px] uppercase tracking-widest"><Lock className="h-3 w-3 mr-1.5" /> Locked</Badge>}
-               </div>
-               <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.3em] mt-1.5 flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>{screenSharerId ? 'Presentation Active' : 'Live Meeting Room'}</p>
+        {!isFullscreen && (
+          <header className="flex h-24 items-center justify-between px-12 bg-white border-b z-10 shrink-0 shadow-sm transition-all duration-300">
+            <div className="flex items-center gap-10">
+              <div className="bg-zinc-900 flex items-center justify-center h-14 w-14 rounded-[1.5rem] text-white font-black text-2xl shadow-2xl">CV</div>
+              <div className="flex flex-col">
+                 <div className="flex items-center gap-4">
+                   <h1 className="text-xl font-black truncate max-w-[400px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Live Session'}</h1>
+                   <Button variant="secondary" size="icon" onClick={copyInviteLink} className="h-10 w-10 rounded-xl text-zinc-400 bg-zinc-50"><LinkIcon className="h-4 w-4" /></Button>
+                   {isMeetingLocked && <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 rounded-lg px-3 py-1 font-black text-[9px] uppercase tracking-widest"><Lock className="h-3 w-3 mr-1.5" /> Locked</Badge>}
+                 </div>
+                 <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.3em] mt-1.5 flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>{screenSharerId ? 'Presentation Active' : 'Live Meeting Room'}</p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-8">
-            <div className="flex items-center gap-4 bg-zinc-50 border border-zinc-100 rounded-[1.5rem] px-6 py-4 text-xs font-black text-zinc-600"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
-            {isHost ? (
-              <Button onClick={handleEndSession} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none">End Session</Button>
-            ) : (
-              <Button onClick={handleLeaveRoom} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200">Leave Room</Button>
-            )}
-          </div>
-        </header>
+            <div className="flex items-center gap-8">
+              <div className="flex items-center gap-4 bg-zinc-50 border border-zinc-100 rounded-[1.5rem] px-6 py-4 text-xs font-black text-zinc-600"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
+              {isHost ? (
+                <Button onClick={handleEndSession} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none">End Session</Button>
+              ) : (
+                <Button onClick={handleLeaveRoom} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200">Leave Room</Button>
+              )}
+            </div>
+          </header>
+        )}
 
         <main className="flex-1 flex overflow-hidden p-10 gap-10 relative">
           <div className="flex-1 flex flex-col gap-10 overflow-hidden relative">
@@ -899,7 +943,10 @@ export default function RoomPage() {
               )}
             </div>
 
-            <div className="h-32 mx-auto w-fit bg-white/90 backdrop-blur-3xl rounded-[3.5rem] border border-white shadow-2xl flex items-center px-12 gap-6 shrink-0 -mt-16 z-20">
+            <div className={cn(
+              "h-32 mx-auto w-fit bg-white/90 backdrop-blur-3xl rounded-[3.5rem] border border-white shadow-2xl flex items-center px-12 gap-6 shrink-0 -mt-16 z-20 transition-all duration-500",
+              isFullscreen && !showControls ? "opacity-0 translate-y-10" : "opacity-100 translate-y-0"
+            )}>
                <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 transition-all", isAudioMuted ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isAudioMuted ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}</Button>
                <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 transition-all", isVideoOff ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isVideoOff ? <VideoOff className="h-8 w-8" /> : <VideoIcon className="h-8 w-8" />}</Button>
                <Separator orientation="vertical" className="h-14 mx-2 bg-zinc-100" />
@@ -909,6 +956,9 @@ export default function RoomPage() {
                  {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
                </Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
+               <Button variant="secondary" size="icon" onClick={toggleFullscreen} className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all hover:scale-110">
+                 {isFullscreen ? <Minimize className="h-8 w-8 text-zinc-700" /> : <Maximize className="h-8 w-8 text-zinc-700" />}
+               </Button>
                {isHost && (
                  <Popover><PopoverTrigger asChild><Button variant={isMeetingLocked ? "default" : "secondary"} size="icon" className={cn("rounded-2xl h-16 w-16 transition-all", isMeetingLocked ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><ShieldCheck className="h-8 w-8" /></Button></PopoverTrigger><PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl rounded-[3.5rem] shadow-2xl mb-8"><div className="space-y-6"><h3 className="font-black text-sm text-zinc-900">Security</h3><Separator className="bg-zinc-100" /><div className="flex items-center justify-between"><div className="flex flex-col gap-1"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-700">Lock Meeting</span></div><Button onClick={toggleMeetingLock} variant={isMeetingLocked ? "destructive" : "secondary"} size="sm" className="rounded-xl h-10 w-10 p-0">{isMeetingLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}</Button></div></div></PopoverContent></Popover>
                )}
@@ -916,37 +966,39 @@ export default function RoomPage() {
             </div>
           </div>
 
-          <Card className="w-[450px] flex flex-col overflow-hidden border-none shadow-2xl shrink-0 rounded-[4rem] bg-white">
-             <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
-                <div className="px-10 pt-12 pb-6 border-b"><TabsList className="w-full h-16 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1.5"><TabsTrigger value="chat" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><MessageSquare className="h-4 w-4 mr-3" /> Chat</TabsTrigger><TabsTrigger value="participants" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><Users className="h-4 w-4 mr-3" /> People</TabsTrigger></TabsList></div>
-                <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-10"><div className="space-y-8">{chatMessages?.map((msg) => (<div key={msg.id} className={cn("flex flex-col gap-2.5", msg.senderId === user?.uid ? "items-end" : "items-start")}><div className="text-[10px] font-black text-zinc-400 px-3 uppercase tracking-widest">{msg.senderName}</div><div className={cn("max-w-[85%] px-6 py-4 rounded-[1.75rem] text-[13px] font-bold shadow-sm leading-relaxed", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 rounded-tl-none")}>{msg.text}</div></div>))}</div></ScrollArea>
-                   <div className="p-8 border-t bg-zinc-50/50"><div className="relative flex items-center"><Input placeholder="Type a message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }} className="pr-14 rounded-2xl h-14 bg-white border-zinc-100" /><Button size="icon" variant="ghost" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-11 w-11 rounded-xl" onClick={() => { if (chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }}><Send className="h-5 w-5 text-zinc-400" /></Button></div></div>
-                </TabsContent>
-                <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
-                   <ScrollArea className="flex-1 p-8"><div className="space-y-10">{isHost && waitingParticipants.length > 0 && (<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-primary px-4">Waiting Room ({waitingParticipants.length})</span>{waitingParticipants.map(p => (<div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl"><div className="flex items-center gap-4"><div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black text-zinc-400">{p.name.substring(0, 2)}</div><div className="flex flex-col"><span className="text-xs font-black text-white">{p.name}</span></div></div><div className="flex gap-2"><Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button><Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button></div></div>))}</div>)}<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-400 px-4">In Meeting ({activeParticipants.length})</span>{activeParticipants.map(p => (<div key={p.id} className={cn("flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
-                    <div className="flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div>
-                      <div className="flex flex-col"><span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span><span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span></div>
-                    </div>
-                    <div className="flex gap-3 items-center">
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        onClick={() => togglePin(p.id)}
-                        className={cn("h-8 w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}
-                      >
-                        {pinnedParticipantId === p.id ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-                      </Button>
-                      {p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}
-                      {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
-                      {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
-                      {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
-                    </div>
-                  </div>))}</div></div></ScrollArea>
-                </TabsContent>
-             </Tabs>
-          </Card>
+          {!isFullscreen && (
+            <Card className="w-[450px] flex flex-col overflow-hidden border-none shadow-2xl shrink-0 rounded-[4rem] bg-white transition-all duration-300">
+               <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
+                  <div className="px-10 pt-12 pb-6 border-b"><TabsList className="w-full h-16 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1.5"><TabsTrigger value="chat" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><MessageSquare className="h-4 w-4 mr-3" /> Chat</TabsTrigger><TabsTrigger value="participants" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><Users className="h-4 w-4 mr-3" /> People</TabsTrigger></TabsList></div>
+                  <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
+                     <ScrollArea className="flex-1 p-10"><div className="space-y-8">{chatMessages?.map((msg) => (<div key={msg.id} className={cn("flex flex-col gap-2.5", msg.senderId === user?.uid ? "items-end" : "items-start")}><div className="text-[10px] font-black text-zinc-400 px-3 uppercase tracking-widest">{msg.senderName}</div><div className={cn("max-w-[85%] px-6 py-4 rounded-[1.75rem] text-[13px] font-bold shadow-sm leading-relaxed", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 rounded-tl-none")}>{msg.text}</div></div>))}</div></ScrollArea>
+                     <div className="p-8 border-t bg-zinc-50/50"><div className="relative flex items-center"><Input placeholder="Type a message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }} className="pr-14 rounded-2xl h-14 bg-white border-zinc-100" /><Button size="icon" variant="ghost" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-11 w-11 rounded-xl" onClick={() => { if (chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }}><Send className="h-5 w-5 text-zinc-400" /></Button></div></div>
+                  </TabsContent>
+                  <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
+                     <ScrollArea className="flex-1 p-8"><div className="space-y-10">{isHost && waitingParticipants.length > 0 && (<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-primary px-4">Waiting Room ({waitingParticipants.length})</span>{waitingParticipants.map(p => (<div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl"><div className="flex items-center gap-4"><div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black text-zinc-400">{p.name.substring(0, 2)}</div><div className="flex flex-col"><span className="text-xs font-black text-white">{p.name}</span></div></div><div className="flex gap-2"><Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button><Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button></div></div>))}</div>)}<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-400 px-4">In Meeting ({activeParticipants.length})</span>{activeParticipants.map(p => (<div key={p.id} className={cn("flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
+                      <div className="flex items-center gap-4">
+                        <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div>
+                        <div className="flex flex-col"><span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span><span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span></div>
+                      </div>
+                      <div className="flex gap-3 items-center">
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          onClick={() => togglePin(p.id)}
+                          className={cn("h-8 w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}
+                        >
+                          {pinnedParticipantId === p.id ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                        </Button>
+                        {p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}
+                        {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
+                        {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
+                        {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
+                      </div>
+                    </div>))}</div></div></ScrollArea>
+                  </TabsContent>
+               </Tabs>
+            </Card>
+          )}
         </main>
       </div>
     </AuthGuard>
