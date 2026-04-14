@@ -52,7 +52,9 @@ import {
   Pin,
   PinOff,
   Maximize,
-  Minimize
+  Minimize,
+  Settings,
+  Check
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -115,6 +117,67 @@ function formatDuration(seconds: number) {
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+}
+
+/**
+ * Hook to analyze audio levels from a stream.
+ */
+function useAudioLevel(stream: MediaStream | null) {
+  const [level, setLevel] = useState(0);
+  const analyzerRef = useRef<AnalyserNode | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!stream || stream.getAudioTracks().length === 0) {
+      setLevel(0);
+      return;
+    }
+
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyzer = audioContext.createAnalyser();
+    analyzer.fftSize = 256;
+    source.connect(analyzer);
+    analyzerRef.current = analyzer;
+
+    const update = () => {
+      if (!analyzerRef.current) return;
+      const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
+      analyzerRef.current.getByteFrequencyData(dataArray);
+      let values = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        values += dataArray[i];
+      }
+      const average = values / dataArray.length;
+      setLevel(average);
+      rafRef.current = requestAnimationFrame(update);
+    };
+
+    update();
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      audioContext.close();
+    };
+  }, [stream]);
+
+  return level;
+}
+
+function AudioLevelIndicator({ stream, isMuted }: { stream: MediaStream | null, isMuted: boolean }) {
+  const level = useAudioLevel(isMuted ? null : stream);
+  // Scale level (0-128 typically) to a percentage (0-100)
+  const height = Math.min(100, (level / 128) * 100);
+  
+  if (isMuted) return null;
+
+  return (
+    <div className="flex items-end gap-[2px] h-3 w-4">
+      <div className="w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 0.4)}%` }} />
+      <div className="w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 1.0)}%` }} />
+      <div className="w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 0.6)}%` }} />
+    </div>
+  );
 }
 
 function FloatingReaction({ reaction, onComplete }: { reaction: Reaction, onComplete: (id: string) => void }) {
@@ -205,9 +268,10 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
       </div>
 
       <div className="absolute bottom-6 left-6 flex items-center gap-3 z-20">
-        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-2xl border-white/10 px-4 py-2 font-black text-[11px] uppercase tracking-widest rounded-xl shadow-xl">
-          {isPresenting && <Monitor className="h-3.5 w-3.5 mr-2.5 text-primary" />}
-          {isPinned && <Pin className="h-3.5 w-3.5 mr-2.5 text-primary fill-primary" />}
+        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-2xl border-white/10 px-4 py-2 font-black text-[11px] uppercase tracking-widest rounded-xl shadow-xl flex items-center gap-2">
+          {isPresenting && <Monitor className="h-3.5 w-3.5 mr-0.5 text-primary" />}
+          {isPinned && <Pin className="h-3.5 w-3.5 mr-0.5 text-primary fill-primary" />}
+          <AudioLevelIndicator stream={stream} isMuted={!!isMuted} />
           {name} {isMe && "(You)"}
         </Badge>
         {isMuted && !isPresenting && <div className="p-2 bg-[#FF4545] rounded-xl shadow-2xl border border-white/20"><MicOff className="h-4 w-4 text-white" /></div>}
@@ -237,6 +301,12 @@ export default function RoomPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   
+  // Media Device Management
+  const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [videoInputDevices, setVideoInputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedAudioInput, setSelectedAudioInput] = useState<string>('');
+  const [selectedVideoInput, setSelectedVideoInput] = useState<string>('');
+
   const recognitionRef = useRef<any>(null);
   const lastCaptionRef = useRef<string>('');
   const lastPresenceRef = useRef<string>('');
@@ -381,6 +451,26 @@ export default function RoomPage() {
     }
   }, [meetingData?.status, cleanupAllResources, toast]);
 
+  // Device Enumeration
+  useEffect(() => {
+    const getDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audios = devices.filter(d => d.kind === 'audioinput');
+        const videos = devices.filter(d => d.kind === 'videoinput');
+        setAudioInputDevices(audios);
+        setVideoInputDevices(videos);
+        if (audios.length > 0 && !selectedAudioInput) setSelectedAudioInput(audios[0].deviceId);
+        if (videos.length > 0 && !selectedVideoInput) setSelectedVideoInput(videos[0].deviceId);
+      } catch (err) {
+        console.error("Error listing devices:", err);
+      }
+    };
+    getDevices();
+    navigator.mediaDevices.ondevicechange = getDevices;
+    return () => { navigator.mediaDevices.ondevicechange = null; };
+  }, [selectedAudioInput, selectedVideoInput]);
+
   const syncPresence = useCallback(async (updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
     
@@ -426,7 +516,7 @@ export default function RoomPage() {
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 25000) return;
+    if (!isInitial && timeSinceLastUpdate < 20000) return; // 20s throttle
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -515,6 +605,7 @@ export default function RoomPage() {
 
       if ((isSignificant || isSentenceEnd) && user && firestore) {
           lastCaptionRef.current = currentTranscript;
+          // Quota protection: update captions only periodically
           setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
             text: currentTranscript,
             updatedAt: serverTimestamp(),
@@ -556,8 +647,18 @@ export default function RoomPage() {
     try {
       if (isVideoOff) {
         const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { width: 1280, height: 720, frameRate: 24 }, 
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+          video: { 
+            deviceId: selectedVideoInput ? { exact: selectedVideoInput } : undefined,
+            width: 1280, 
+            height: 720, 
+            frameRate: 24 
+          }, 
+          audio: { 
+            deviceId: selectedAudioInput ? { exact: selectedAudioInput } : undefined,
+            echoCancellation: true, 
+            noiseSuppression: true, 
+            autoGainControl: true 
+          } 
         });
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current?.getTracks().forEach(t => t.stop());
@@ -568,7 +669,12 @@ export default function RoomPage() {
       } else {
         if (!isAudioMuted) {
           const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+            audio: { 
+              deviceId: selectedAudioInput ? { exact: selectedAudioInput } : undefined,
+              echoCancellation: true, 
+              noiseSuppression: true, 
+              autoGainControl: true 
+            } 
           });
           localCameraStream.current?.getTracks().forEach(t => t.stop());
           localCameraStream.current = stream;
@@ -596,7 +702,12 @@ export default function RoomPage() {
       const newState = !isAudioMuted;
       if (!newState && !localCameraStream.current) {
         const stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          audio: { 
+            deviceId: selectedAudioInput ? { exact: selectedAudioInput } : undefined,
+            echoCancellation: true, 
+            noiseSuppression: true, 
+            autoGainControl: true 
+          },
           video: !isVideoOff 
         });
         localCameraStream.current = stream;
@@ -701,12 +812,14 @@ export default function RoomPage() {
     router.push('/dashboard');
   };
 
+  // WebRTC Mesh Handling
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting' || meetingData?.status === 'finished') return;
     
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
+    // 1. Cleanup old connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -721,6 +834,7 @@ export default function RoomPage() {
       }
     });
 
+    // 2. Setup new connections incrementally
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
       
@@ -742,6 +856,7 @@ export default function RoomPage() {
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         const p = currentParticipantsRef.current.find(p => p.id === participantId);
+        // Identify screen share vs camera via stream ID or label
         const isScreen = stream.id === p?.screenStreamId || stream.id === meetingData?.screenSharerId || event.track.label.toLowerCase().includes('screen');
         
         if (isScreen) setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
@@ -765,6 +880,7 @@ export default function RoomPage() {
         } catch (err) { console.error(err); } finally { makingOffer = false; }
       };
 
+      // Buffered ICE candidate collection (25s window for quota protection)
       const candidateBuffer: any[] = [];
       let candidateTimeout: NodeJS.Timeout | null = null;
 
@@ -959,6 +1075,59 @@ export default function RoomPage() {
                <Button variant="secondary" size="icon" onClick={toggleFullscreen} className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all hover:scale-110">
                  {isFullscreen ? <Minimize className="h-8 w-8 text-zinc-700" /> : <Maximize className="h-8 w-8 text-zinc-700" />}
                </Button>
+               
+               <Popover>
+                 <PopoverTrigger asChild>
+                   <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all hover:scale-110">
+                     <Settings className="h-8 w-8 text-zinc-700" />
+                   </Button>
+                 </PopoverTrigger>
+                 <PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl rounded-[3.5rem] shadow-2xl mb-8">
+                   <div className="space-y-6">
+                     <h3 className="font-black text-sm text-zinc-900">Device Settings</h3>
+                     <Separator className="bg-zinc-100" />
+                     <div className="space-y-4">
+                       <div className="space-y-2">
+                         <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Microphone</label>
+                         <div className="flex flex-col gap-2">
+                           {audioInputDevices.map((device) => (
+                             <button
+                               key={device.deviceId}
+                               onClick={() => { setSelectedAudioInput(device.deviceId); toast({ title: "Microphone updated" }); }}
+                               className={cn(
+                                 "flex items-center justify-between p-3 rounded-xl text-xs font-medium transition-all",
+                                 selectedAudioInput === device.deviceId ? "bg-primary/5 text-primary" : "hover:bg-zinc-50 text-zinc-600"
+                               )}
+                             >
+                               <span className="truncate max-w-[180px]">{device.label || `Mic ${device.deviceId.slice(0, 5)}`}</span>
+                               {selectedAudioInput === device.deviceId && <Check className="h-3 w-3" />}
+                             </button>
+                           ))}
+                         </div>
+                       </div>
+                       <div className="space-y-2">
+                         <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Camera</label>
+                         <div className="flex flex-col gap-2">
+                           {videoInputDevices.map((device) => (
+                             <button
+                               key={device.deviceId}
+                               onClick={() => { setSelectedVideoInput(device.deviceId); toast({ title: "Camera updated" }); }}
+                               className={cn(
+                                 "flex items-center justify-between p-3 rounded-xl text-xs font-medium transition-all",
+                                 selectedVideoInput === device.deviceId ? "bg-primary/5 text-primary" : "hover:bg-zinc-50 text-zinc-600"
+                               )}
+                             >
+                               <span className="truncate max-w-[180px]">{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</span>
+                               {selectedVideoInput === device.deviceId && <Check className="h-3 w-3" />}
+                             </button>
+                           ))}
+                         </div>
+                       </div>
+                     </div>
+                   </div>
+                 </PopoverContent>
+               </Popover>
+
                {isHost && (
                  <Popover><PopoverTrigger asChild><Button variant={isMeetingLocked ? "default" : "secondary"} size="icon" className={cn("rounded-2xl h-16 w-16 transition-all", isMeetingLocked ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><ShieldCheck className="h-8 w-8" /></Button></PopoverTrigger><PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl rounded-[3.5rem] shadow-2xl mb-8"><div className="space-y-6"><h3 className="font-black text-sm text-zinc-900">Security</h3><Separator className="bg-zinc-100" /><div className="flex items-center justify-between"><div className="flex flex-col gap-1"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-700">Lock Meeting</span></div><Button onClick={toggleMeetingLock} variant={isMeetingLocked ? "destructive" : "secondary"} size="sm" className="rounded-xl h-10 w-10 p-0">{isMeetingLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}</Button></div></div></PopoverContent></Popover>
                )}
@@ -978,7 +1147,13 @@ export default function RoomPage() {
                      <ScrollArea className="flex-1 p-8"><div className="space-y-10">{isHost && waitingParticipants.length > 0 && (<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-primary px-4">Waiting Room ({waitingParticipants.length})</span>{waitingParticipants.map(p => (<div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl"><div className="flex items-center gap-4"><div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black text-zinc-400">{p.name.substring(0, 2)}</div><div className="flex flex-col"><span className="text-xs font-black text-white">{p.name}</span></div></div><div className="flex gap-2"><Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button><Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button></div></div>))}</div>)}<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-400 px-4">In Meeting ({activeParticipants.length})</span>{activeParticipants.map(p => (<div key={p.id} className={cn("flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
                       <div className="flex items-center gap-4">
                         <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div>
-                        <div className="flex flex-col"><span className="text-xs font-black text-zinc-900">{p.name} {p.id === user?.uid && "(You)"}</span><span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span></div>
+                        <div className="flex flex-col">
+                          <span className="text-xs font-black text-zinc-900 flex items-center gap-2">
+                            {p.name} {p.id === user?.uid && "(You)"}
+                            <AudioLevelIndicator stream={p.id === user?.uid ? localCameraStream.current : remoteCameraStreams.get(p.id) || null} isMuted={!!p.isMuted} />
+                          </span>
+                          <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
+                        </div>
                       </div>
                       <div className="flex gap-3 items-center">
                         <Button 
