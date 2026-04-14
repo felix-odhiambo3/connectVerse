@@ -54,7 +54,8 @@ import {
   Maximize,
   Minimize,
   Settings,
-  Check
+  Check,
+  AlertCircle
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -63,6 +64,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
 import { setDocumentNonBlocking, addDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface Participant {
   id: string;
@@ -119,9 +121,6 @@ function formatDuration(seconds: number) {
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
 }
 
-/**
- * Hook to analyze audio levels from a stream.
- */
 function useAudioLevel(stream: MediaStream | null) {
   const [level, setLevel] = useState(0);
   const analyzerRef = useRef<AnalyserNode | null>(null);
@@ -166,7 +165,6 @@ function useAudioLevel(stream: MediaStream | null) {
 
 function AudioLevelIndicator({ stream, isMuted }: { stream: MediaStream | null, isMuted: boolean }) {
   const level = useAudioLevel(isMuted ? null : stream);
-  // Scale level (0-128 typically) to a percentage (0-100)
   const height = Math.min(100, (level / 128) * 100);
   
   if (isMuted) return null;
@@ -301,11 +299,12 @@ export default function RoomPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   
-  // Media Device Management
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoInputDevices, setVideoInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedAudioInput, setSelectedAudioInput] = useState<string>('');
   const [selectedVideoInput, setSelectedVideoInput] = useState<string>('');
+  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
 
   const recognitionRef = useRef<any>(null);
   const lastCaptionRef = useRef<string>('');
@@ -451,25 +450,33 @@ export default function RoomPage() {
     }
   }, [meetingData?.status, cleanupAllResources, toast]);
 
-  // Device Enumeration
   useEffect(() => {
-    const getDevices = async () => {
+    const checkPermissions = async () => {
       try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        setHasCameraPermission(true);
+        setHasMicPermission(true);
+        stream.getTracks().forEach(t => t.stop());
+        
         const devices = await navigator.mediaDevices.enumerateDevices();
         const audios = devices.filter(d => d.kind === 'audioinput');
         const videos = devices.filter(d => d.kind === 'videoinput');
         setAudioInputDevices(audios);
         setVideoInputDevices(videos);
-        if (audios.length > 0 && !selectedAudioInput) setSelectedAudioInput(audios[0].deviceId);
-        if (videos.length > 0 && !selectedVideoInput) setSelectedVideoInput(videos[0].deviceId);
-      } catch (err) {
-        console.error("Error listing devices:", err);
+        if (audios.length > 0) setSelectedAudioInput(audios[0].deviceId);
+        if (videos.length > 0) setSelectedVideoInput(videos[0].deviceId);
+      } catch (err: any) {
+        console.error("Permission check failed:", err);
+        if (err.name === 'NotAllowedError') {
+          setHasCameraPermission(false);
+          setHasMicPermission(false);
+        } else {
+          toast({ variant: 'destructive', title: 'Media Error', description: 'Could not access camera or microphone.' });
+        }
       }
     };
-    getDevices();
-    navigator.mediaDevices.ondevicechange = getDevices;
-    return () => { navigator.mediaDevices.ondevicechange = null; };
-  }, [selectedAudioInput, selectedVideoInput]);
+    checkPermissions();
+  }, [toast]);
 
   const syncPresence = useCallback(async (updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
@@ -516,7 +523,7 @@ export default function RoomPage() {
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 20000) return; // 20s throttle
+    if (!isInitial && timeSinceLastUpdate < 25000) return; // 25s throttle
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -605,7 +612,6 @@ export default function RoomPage() {
 
       if ((isSignificant || isSentenceEnd) && user && firestore) {
           lastCaptionRef.current = currentTranscript;
-          // Quota protection: update captions only periodically
           setDocumentNonBlocking(doc(firestore, 'meetings', meetingId, 'captions', user.uid), {
             text: currentTranscript,
             updatedAt: serverTimestamp(),
@@ -666,6 +672,7 @@ export default function RoomPage() {
         await syncPresence({ isVideoOff: false });
         updateTracksForPeers(stream, 'camera');
         setIsVideoOff(false);
+        setHasCameraPermission(true);
       } else {
         if (!isAudioMuted) {
           const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -688,8 +695,11 @@ export default function RoomPage() {
         }
         setIsVideoOff(true);
       }
-    } catch (err) {
-      toast({ variant: 'destructive', title: 'Camera Access Denied' });
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        setHasCameraPermission(false);
+      }
+      toast({ variant: 'destructive', title: 'Camera Access Error', description: 'Could not access camera. Please check permissions.' });
     } finally {
       setIsProcessing(false);
     }
@@ -713,14 +723,18 @@ export default function RoomPage() {
         localCameraStream.current = stream;
         await syncPresence({ isMuted: newState });
         updateTracksForPeers(stream, 'camera');
+        setHasMicPermission(true);
       }
       if (localCameraStream.current) {
         localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !newState);
       }
       setIsAudioMuted(newState);
       syncPresence({ isMuted: newState });
-    } catch (err) {
-      toast({ variant: 'destructive', title: 'Mic Access Denied' });
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        setHasMicPermission(false);
+      }
+      toast({ variant: 'destructive', title: 'Mic Access Error', description: 'Could not access microphone. Please check permissions.' });
     } finally {
       setIsProcessing(false);
     }
@@ -812,14 +826,12 @@ export default function RoomPage() {
     router.push('/dashboard');
   };
 
-  // WebRTC Mesh Handling
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting' || meetingData?.status === 'finished') return;
     
     const currentIds = activeParticipantIds.split(',').filter(id => id && id !== user.uid);
     const currentIdSet = new Set(currentIds);
 
-    // 1. Cleanup old connections
     pcs.current.forEach((pc, id) => {
       if (!currentIdSet.has(id)) {
         signalingUnsubs.current.get(`${id}_channel`)?.();
@@ -834,7 +846,6 @@ export default function RoomPage() {
       }
     });
 
-    // 2. Setup new connections incrementally
     currentIds.forEach(async (participantId) => {
       if (pcs.current.has(participantId)) return;
       
@@ -856,7 +867,6 @@ export default function RoomPage() {
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         const p = currentParticipantsRef.current.find(p => p.id === participantId);
-        // Identify screen share vs camera via stream ID or label
         const isScreen = stream.id === p?.screenStreamId || stream.id === meetingData?.screenSharerId || event.track.label.toLowerCase().includes('screen');
         
         if (isScreen) setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
@@ -880,7 +890,6 @@ export default function RoomPage() {
         } catch (err) { console.error(err); } finally { makingOffer = false; }
       };
 
-      // Buffered ICE candidate collection (25s window for quota protection)
       const candidateBuffer: any[] = [];
       let candidateTimeout: NodeJS.Timeout | null = null;
 
@@ -977,6 +986,22 @@ export default function RoomPage() {
   return (
     <AuthGuard>
       <div ref={containerRef} className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
+        {(hasCameraPermission === false || hasMicPermission === false) && (
+          <div className="p-4 bg-red-50 border-b border-red-100">
+            <Alert variant="destructive" className="max-w-6xl mx-auto border-none bg-transparent p-0 shadow-none">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-red-600" />
+                <div>
+                  <AlertTitle className="text-red-900 font-black text-[11px] uppercase tracking-widest mb-1">Access Blocked</AlertTitle>
+                  <AlertDescription className="text-red-700 font-medium text-xs">
+                    Please allow camera and microphone access in your browser settings to use video conferencing.
+                  </AlertDescription>
+                </div>
+              </div>
+            </Alert>
+          </div>
+        )}
+
         {isSharingScreen && (
           <div className="bg-zinc-900 px-10 py-4 flex items-center justify-between text-white z-50 shadow-2xl">
              <div className="flex items-center gap-4"><Monitor className="h-5 w-5 text-primary animate-pulse" /><span className="font-black text-[11px] uppercase tracking-[0.25em]">You are presenting</span></div>
