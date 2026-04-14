@@ -453,25 +453,28 @@ export default function RoomPage() {
   useEffect(() => {
     const checkPermissions = async () => {
       try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audios = devices.filter(d => d.kind === 'audioinput' && d.deviceId);
+        const videos = devices.filter(d => d.kind === 'videoinput' && d.deviceId);
+        
+        setAudioInputDevices(audios);
+        setVideoInputDevices(videos);
+        
+        if (audios.length > 0) setSelectedAudioInput(audios[0].deviceId);
+        if (videos.length > 0) setSelectedVideoInput(videos[0].deviceId);
+
+        // Attempt generic request to confirm permissions
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setHasCameraPermission(true);
         setHasMicPermission(true);
         stream.getTracks().forEach(t => t.stop());
-        
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audios = devices.filter(d => d.kind === 'audioinput');
-        const videos = devices.filter(d => d.kind === 'videoinput');
-        setAudioInputDevices(audios);
-        setVideoInputDevices(videos);
-        if (audios.length > 0) setSelectedAudioInput(audios[0].deviceId);
-        if (videos.length > 0) setSelectedVideoInput(videos[0].deviceId);
       } catch (err: any) {
-        console.error("Permission check failed:", err);
         if (err.name === 'NotAllowedError') {
           setHasCameraPermission(false);
           setHasMicPermission(false);
-        } else {
-          toast({ variant: 'destructive', title: 'Media Error', description: 'Could not access camera or microphone.' });
+        } else if (err.name === 'NotFoundError') {
+           // No hardware found, but not necessarily a permission issue
+           console.warn("No camera/mic found.");
         }
       }
     };
@@ -652,20 +655,30 @@ export default function RoomPage() {
     setIsProcessing(true);
     try {
       if (isVideoOff) {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { 
-            deviceId: selectedVideoInput ? { exact: selectedVideoInput } : undefined,
-            width: 1280, 
-            height: 720, 
-            frameRate: 24 
-          }, 
-          audio: { 
-            deviceId: selectedAudioInput ? { exact: selectedAudioInput } : undefined,
-            echoCancellation: true, 
-            noiseSuppression: true, 
-            autoGainControl: true 
-          } 
-        });
+        let stream;
+        try {
+          // Attempt with specific device
+          stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { 
+              deviceId: selectedVideoInput ? { ideal: selectedVideoInput } : undefined,
+              width: { ideal: 1280 }, 
+              height: { ideal: 720 }, 
+              frameRate: { ideal: 24 } 
+            }, 
+            audio: { 
+              deviceId: selectedAudioInput ? { ideal: selectedAudioInput } : undefined,
+              echoCancellation: true, 
+              noiseSuppression: true, 
+              autoGainControl: true 
+            } 
+          });
+        } catch (err: any) {
+          if (err.name === 'NotFoundError') {
+            // Fallback to generic request if specific ID fails
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          } else throw err;
+        }
+
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = stream;
@@ -675,18 +688,26 @@ export default function RoomPage() {
         setHasCameraPermission(true);
       } else {
         if (!isAudioMuted) {
-          const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: { 
-              deviceId: selectedAudioInput ? { exact: selectedAudioInput } : undefined,
-              echoCancellation: true, 
-              noiseSuppression: true, 
-              autoGainControl: true 
-            } 
-          });
-          localCameraStream.current?.getTracks().forEach(t => t.stop());
-          localCameraStream.current = stream;
-          await syncPresence({ isVideoOff: true });
-          updateTracksForPeers(stream, 'camera');
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+              audio: { 
+                deviceId: selectedAudioInput ? { ideal: selectedAudioInput } : undefined,
+                echoCancellation: true, 
+                noiseSuppression: true, 
+                autoGainControl: true 
+              } 
+            });
+            localCameraStream.current?.getTracks().forEach(t => t.stop());
+            localCameraStream.current = stream;
+            await syncPresence({ isVideoOff: true });
+            updateTracksForPeers(stream, 'camera');
+          } catch (e) {
+            // If fallback fails, just stop tracks
+            localCameraStream.current?.getTracks().forEach(t => t.stop());
+            localCameraStream.current = null;
+            await syncPresence({ isVideoOff: true });
+            updateTracksForPeers(null, 'camera');
+          }
         } else {
           localCameraStream.current?.getTracks().forEach(t => t.stop());
           localCameraStream.current = null;
@@ -698,8 +719,11 @@ export default function RoomPage() {
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
         setHasCameraPermission(false);
+      } else if (err.name === 'NotFoundError') {
+        toast({ variant: 'destructive', title: 'Device Not Found', description: 'No camera was detected. Please check your connection.' });
+      } else {
+        toast({ variant: 'destructive', title: 'Camera Error', description: err.message });
       }
-      toast({ variant: 'destructive', title: 'Camera Access Error', description: 'Could not access camera. Please check permissions.' });
     } finally {
       setIsProcessing(false);
     }
@@ -711,19 +735,28 @@ export default function RoomPage() {
     try {
       const newState = !isAudioMuted;
       if (!newState && !localCameraStream.current) {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: { 
-            deviceId: selectedAudioInput ? { exact: selectedAudioInput } : undefined,
-            echoCancellation: true, 
-            noiseSuppression: true, 
-            autoGainControl: true 
-          },
-          video: !isVideoOff 
-        });
-        localCameraStream.current = stream;
-        await syncPresence({ isMuted: newState });
-        updateTracksForPeers(stream, 'camera');
-        setHasMicPermission(true);
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: { 
+              deviceId: selectedAudioInput ? { ideal: selectedAudioInput } : undefined,
+              echoCancellation: true, 
+              noiseSuppression: true, 
+              autoGainControl: true 
+            },
+            video: !isVideoOff 
+          });
+          localCameraStream.current = stream;
+          await syncPresence({ isMuted: newState });
+          updateTracksForPeers(stream, 'camera');
+          setHasMicPermission(true);
+        } catch (err: any) {
+          if (err.name === 'NotFoundError') {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
+            localCameraStream.current = stream;
+            await syncPresence({ isMuted: newState });
+            updateTracksForPeers(stream, 'camera');
+          } else throw err;
+        }
       }
       if (localCameraStream.current) {
         localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !newState);
@@ -733,8 +766,11 @@ export default function RoomPage() {
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
         setHasMicPermission(false);
+      } else if (err.name === 'NotFoundError') {
+        toast({ variant: 'destructive', title: 'Mic Not Found', description: 'No microphone was detected.' });
+      } else {
+        toast({ variant: 'destructive', title: 'Mic Error', description: err.message });
       }
-      toast({ variant: 'destructive', title: 'Mic Access Error', description: 'Could not access microphone. Please check permissions.' });
     } finally {
       setIsProcessing(false);
     }
@@ -1115,7 +1151,7 @@ export default function RoomPage() {
                        <div className="space-y-2">
                          <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Microphone</label>
                          <div className="flex flex-col gap-2">
-                           {audioInputDevices.map((device) => (
+                           {audioInputDevices.length > 0 ? audioInputDevices.map((device) => (
                              <button
                                key={device.deviceId}
                                onClick={() => { setSelectedAudioInput(device.deviceId); toast({ title: "Microphone updated" }); }}
@@ -1127,13 +1163,13 @@ export default function RoomPage() {
                                <span className="truncate max-w-[180px]">{device.label || `Mic ${device.deviceId.slice(0, 5)}`}</span>
                                {selectedAudioInput === device.deviceId && <Check className="h-3 w-3" />}
                              </button>
-                           ))}
+                           )) : <p className="text-xs text-zinc-400">No microphones found.</p>}
                          </div>
                        </div>
                        <div className="space-y-2">
                          <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Camera</label>
                          <div className="flex flex-col gap-2">
-                           {videoInputDevices.map((device) => (
+                           {videoInputDevices.length > 0 ? videoInputDevices.map((device) => (
                              <button
                                key={device.deviceId}
                                onClick={() => { setSelectedVideoInput(device.deviceId); toast({ title: "Camera updated" }); }}
@@ -1145,7 +1181,7 @@ export default function RoomPage() {
                                <span className="truncate max-w-[180px]">{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</span>
                                {selectedVideoInput === device.deviceId && <Check className="h-3 w-3" />}
                              </button>
-                           ))}
+                           )) : <p className="text-xs text-zinc-400">No cameras found.</p>}
                          </div>
                        </div>
                      </div>
