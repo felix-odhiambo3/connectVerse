@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useMemo } from 'react';
@@ -26,6 +25,9 @@ import { format } from "date-fns";
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { cn } from '@/lib/utils';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
 
 export default function AttendanceRecordsPage() {
   const router = useRouter();
@@ -246,4 +248,3 @@ export default function AttendanceRecordsPage() {
     </AuthGuard>
   );
 }
-
