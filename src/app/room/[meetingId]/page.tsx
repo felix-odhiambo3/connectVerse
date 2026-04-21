@@ -32,7 +32,6 @@ import {
   MicOff, 
   Video as VideoIcon, 
   VideoOff, 
-  Timer, 
   Send, 
   Hand, 
   User as UserIcon, 
@@ -42,12 +41,10 @@ import {
   ScreenShare,
   StopCircle,
   Monitor,
-  MoreVertical,
   Link as LinkIcon,
   Smile,
   Captions,
   Lock,
-  Unlock,
   ShieldCheck,
   UserPlus,
   UserX,
@@ -58,12 +55,9 @@ import {
   Settings,
   Check,
   AlertCircle,
-  X,
-  Clock,
-  FileText,
-  CheckCircle2,
-  XCircle,
-  Download
+  Download,
+  Search,
+  ChevronLeft
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -323,6 +317,7 @@ export default function RoomPage() {
   const [showControls, setShowControls] = useState(true);
   const [activeTab, setActiveTab] = useState<'chat' | 'participants'>('chat');
   const [isRecordingAttendance, setIsRecordingAttendance] = useState(false);
+  const [customMeetingName, setCustomMeetingName] = useState('');
   
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoInputDevices, setVideoInputDevices] = useState<MediaDeviceInfo[]>([]);
@@ -378,6 +373,12 @@ export default function RoomPage() {
   const { data: participants } = useCollection<Participant>(participantsRefQuery);
   const currentParticipantsRef = useRef<Participant[]>([]);
   
+  useEffect(() => {
+    if (meetingData?.name) {
+      setCustomMeetingName(meetingData.name);
+    }
+  }, [meetingData?.name]);
+
   useEffect(() => {
     if (!participants) return;
     const currentRaised = new Set(participants.filter(p => p.hasRaisedHand).map(p => p.id));
@@ -486,7 +487,6 @@ export default function RoomPage() {
       try { pc.close(); } catch (e) {}
     });
     pcs.current.clear();
-    establishedPcs.current.add(user?.uid || ''); // Keep self as established to prevent re-init if possible
     establishedPcs.current.clear();
     cameraSenders.current.clear();
     screenSenders.current.clear();
@@ -501,14 +501,13 @@ export default function RoomPage() {
 
     setRemoteCameraStreams(new Map());
     setRemoteScreenStreams(new Map());
-  }, [user?.uid]);
+  }, []);
 
   useEffect(() => {
     if (meetingData?.status === 'finished') {
       cleanupAllResources();
-      toast({ title: "Session Ended", description: "The host has ended the meeting for everyone." });
     }
-  }, [meetingData?.status, cleanupAllResources, toast]);
+  }, [meetingData?.status, cleanupAllResources]);
 
   useEffect(() => {
     const checkPermissions = async () => {
@@ -563,7 +562,6 @@ export default function RoomPage() {
     const existingSnap = await getDoc(pRef);
     const existingData = existingSnap.exists() ? existingSnap.data() as Participant : null;
     
-    // Calculate accumulated seconds if leaving
     let accumulatedSeconds = existingData?.accumulatedSeconds || 0;
     if (updates.role === 'left' && existingData?.lastJoinTime) {
       const duration = Math.floor((now - existingData.lastJoinTime.toMillis()) / 1000);
@@ -578,7 +576,7 @@ export default function RoomPage() {
       cameraStreamId: localCameraStream.current?.id || null,
       screenStreamId: localScreenStream.current?.id || null,
       accumulatedSeconds: accumulatedSeconds,
-      lastJoinTime: isInitial || (!isInitial && updates.role !== 'left') ? serverTimestamp() : null,
+      lastJoinTime: (isInitial || (!isInitial && updates.role !== 'left')) ? Timestamp.now() : null,
     };
     if (isInitial) {
       data.joinedAt = serverTimestamp();
@@ -886,6 +884,10 @@ export default function RoomPage() {
 
   const handleRecordAttendance = async () => {
     if (!firestore || !meetingId || !participants) return;
+    if (isHost && !customMeetingName.trim()) {
+      toast({ variant: 'destructive', title: "Session Name Required", description: "Please enter a name for this session before saving." });
+      return;
+    }
     setIsRecordingAttendance(true);
     try {
       const batch = writeBatch(firestore);
@@ -896,13 +898,14 @@ export default function RoomPage() {
         const ref = doc(attendanceCollection, recordId);
         batch.set(ref, {
           meetingId,
-          meetingName: meetingData?.name || 'Session',
+          meetingName: customMeetingName,
           userId: record.id,
           userName: record.name,
           totalTimeAttended: record.totalTime,
           attendancePercentage: record.percentage,
           status: record.status,
           recordedAt: serverTimestamp(),
+          hostId: user?.uid,
         });
       });
 
@@ -996,7 +999,7 @@ export default function RoomPage() {
                 toSend.forEach((c, i) => updates[`c_${user.uid}_${Date.now()}_${i}`] = c);
                 await setDoc(channelRef, updates, { merge: true });
               }
-            }, 25000); 
+            }, 30000); 
           }
         }
       };
@@ -1051,7 +1054,6 @@ export default function RoomPage() {
         totalActiveSeconds += Math.max(0, currentStretch);
       }
       
-      // Cap at total session time
       totalActiveSeconds = Math.min(totalActiveSeconds, totalSessionSeconds);
       const percentage = Math.round((totalActiveSeconds / totalSessionSeconds) * 100);
       const status = percentage >= 70 ? 'Present' : 'Absent';
@@ -1087,14 +1089,14 @@ export default function RoomPage() {
               <Trophy className="h-12 w-12 md:h-16 md:w-16 text-white" />
             </div>
             <h1 className="text-3xl md:text-5xl font-black mb-2 text-zinc-900 tracking-tighter">Session Ended</h1>
-            <p className="text-zinc-500 font-bold uppercase tracking-widest text-[10px] md:text-xs">{meetingData?.name}</p>
+            <p className="text-zinc-500 font-bold uppercase tracking-widest text-[10px] md:text-xs">{customMeetingName || meetingData?.name}</p>
           </div>
 
           <Card className="rounded-[2.5rem] md:rounded-[3.5rem] border-none shadow-2xl overflow-hidden bg-white">
             <CardHeader className="p-8 md:p-12 pb-0">
               <CardTitle className="text-2xl font-black tracking-tight">Attendance Summary</CardTitle>
             </CardHeader>
-            <CardContent className="p-8 md:p-12 space-y-8">
+            <CardContent className="p-8 md:p-12 space-y-8 text-left">
               {isHost ? (
                 <div className="space-y-10">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
@@ -1130,6 +1132,19 @@ export default function RoomPage() {
                     </div>
                   </div>
 
+                  {meetingData?.name === 'Instant Meeting' && (
+                    <div className="space-y-3 p-6 bg-zinc-50 rounded-[2rem] border border-zinc-100">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Session Name</label>
+                      <Input 
+                        placeholder="Enter name (e.g., Weekly Sync #12)" 
+                        value={customMeetingName} 
+                        onChange={(e) => setCustomMeetingName(e.target.value)}
+                        className="h-12 rounded-xl bg-white border-zinc-200 font-bold"
+                      />
+                      <p className="text-[9px] font-bold text-zinc-400 italic">This will be used as the identifier for these records.</p>
+                    </div>
+                  )}
+
                   <div className="rounded-[2rem] border border-zinc-100 overflow-hidden">
                     <Table>
                       <TableHeader className="bg-zinc-50">
@@ -1159,7 +1174,7 @@ export default function RoomPage() {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center gap-6">
+                <div className="flex flex-col items-center gap-6 text-center">
                   {attendanceData.find(d => d.id === user?.uid) ? (
                     (() => {
                       const myRecord = attendanceData.find(d => d.id === user?.uid)!;

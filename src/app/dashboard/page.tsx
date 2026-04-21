@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useMemo } from 'react';
@@ -9,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat, Copy } from 'lucide-react';
+import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat, Copy, BarChart3 } from 'lucide-react';
 import Link from 'next/link';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
@@ -212,9 +213,16 @@ export default function DashboardPage() {
         <main className="flex-1 p-4 md:p-12 bg-[#F8F9FB]">
           <div className="w-full max-w-6xl mx-auto space-y-8 md:space-y-12">
             <section className="space-y-6 md:space-y-8">
-              <div className="flex flex-col gap-1">
-                <h2 className="text-3xl md:text-4xl font-black tracking-tighter">Welcome back</h2>
-                <p className="text-zinc-500 font-medium text-sm md:text-base">Ready for your next session?</p>
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                <div className="flex flex-col gap-1">
+                  <h2 className="text-3xl md:text-4xl font-black tracking-tighter">Welcome back</h2>
+                  <p className="text-zinc-500 font-medium text-sm md:text-base">Ready for your next session?</p>
+                </div>
+                <Button asChild variant="secondary" className="h-12 md:h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] md:text-[11px] bg-white shadow-xl shadow-zinc-200/50">
+                  <Link href="/attendance">
+                    <BarChart3 className="mr-2 h-4 w-4" /> Attendance Records
+                  </Link>
+                </Button>
               </div>
               
               <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
