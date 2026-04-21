@@ -57,7 +57,9 @@ import {
   AlertCircle,
   Download,
   Search,
-  ChevronLeft
+  ChevronLeft,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -1570,4 +1572,3 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
-
