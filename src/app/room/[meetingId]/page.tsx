@@ -75,6 +75,7 @@ interface Participant {
   joinedAt: Timestamp | null;
   role: 'host' | 'co-host' | 'participant' | 'waiting' | 'left';
   hasRaisedHand?: boolean;
+  raisedAt?: Timestamp | null;
   isMuted?: boolean;
   isVideoOff?: boolean;
   cameraStreamId?: string;
@@ -208,7 +209,7 @@ function FloatingReaction({ reaction, onComplete }: { reaction: Reaction, onComp
   );
 }
 
-function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isPinned, onTogglePin, className }: { 
+function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isPinned, isRaised, onTogglePin, className }: { 
   stream: MediaStream | null, 
   name: string, 
   isMuted?: boolean, 
@@ -216,6 +217,7 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
   isMe?: boolean, 
   isPresenting?: boolean,
   isPinned?: boolean,
+  isRaised?: boolean,
   onTogglePin?: () => void,
   className?: string
 }) {
@@ -229,7 +231,8 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
 
   return (
     <div className={cn(
-      "relative w-full h-full bg-[#1A1A1A] rounded-2xl md:rounded-[4rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500 group",
+      "relative w-full h-full bg-[#1A1A1A] rounded-2xl md:rounded-[4rem] overflow-hidden border-4 transition-all duration-500 group",
+      isRaised ? "border-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.3)]" : "border-white/5 shadow-2xl",
       className
     )}>
       <video
@@ -252,7 +255,12 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
         </div>
       )}
       
-      <div className="absolute top-3 right-3 md:top-6 md:right-6 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute top-3 right-3 md:top-6 md:right-6 z-30 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-2">
+        {isRaised && (
+          <div className="bg-yellow-400 p-2 md:p-3 rounded-lg md:rounded-xl shadow-2xl animate-bounce">
+            <Hand className="h-4 w-4 md:h-6 md:w-6 text-zinc-900" />
+          </div>
+        )}
         {onTogglePin && (
           <Button 
             variant="secondary" 
@@ -332,6 +340,7 @@ export default function RoomPage() {
   const establishedPcs = useRef<Set<string>>(new Set());
   const initialPresenceSynced = useRef(false);
   const localRoleRef = useRef<Participant['role'] | null>(null);
+  const prevRaisedHandsRef = useRef<Set<string>>(new Set());
   
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -357,6 +366,34 @@ export default function RoomPage() {
   const { data: participants } = useCollection<Participant>(participantsRefQuery);
   const currentParticipantsRef = useRef<Participant[]>([]);
   
+  // Hand Raise Sound Logic
+  useEffect(() => {
+    if (!participants) return;
+    const currentRaised = new Set(participants.filter(p => p.hasRaisedHand).map(p => p.id));
+    
+    currentRaised.forEach(id => {
+      if (!prevRaisedHandsRef.current.has(id) && id !== user?.uid) {
+        // Play notification sound
+        try {
+          const context = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const osc = context.createOscillator();
+          const gain = context.createGain();
+          osc.connect(gain);
+          gain.connect(context.destination);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(523.25, context.currentTime); // C5
+          gain.gain.setValueAtTime(0, context.currentTime);
+          gain.gain.linearRampToValueAtTime(0.1, context.currentTime + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
+          osc.start(context.currentTime);
+          osc.stop(context.currentTime + 0.3);
+        } catch (e) { console.warn("Audio feedback failed", e); }
+      }
+    });
+    
+    prevRaisedHandsRef.current = currentRaised;
+  }, [participants, user?.uid]);
+
   useEffect(() => {
     if (participants) {
       currentParticipantsRef.current = participants;
@@ -412,7 +449,15 @@ export default function RoomPage() {
 
   const activeParticipants = useMemo(() => {
     if (!participants) return [];
-    return participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
+    const active = participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
+    
+    // Sort logic: Hand Raised first, then alphabetical
+    return [...active].sort((a, b) => {
+      if (a.hasRaisedHand && b.hasRaisedHand) return a.name.localeCompare(b.name);
+      if (a.hasRaisedHand) return -1;
+      if (b.hasRaisedHand) return 1;
+      return a.name.localeCompare(b.name);
+    });
   }, [participants]);
 
   const waitingParticipants = useMemo(() => {
@@ -973,7 +1018,8 @@ export default function RoomPage() {
     );
   }
 
-  const spotlightParticipantId = pinnedParticipantId || (screenSharerId && screenSharerId !== user?.uid ? screenSharerId : (activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid));
+  const raisedHandUser = activeParticipants.find(p => p.hasRaisedHand);
+  const spotlightParticipantId = pinnedParticipantId || (screenSharerId && screenSharerId !== user?.uid ? screenSharerId : (raisedHandUser?.id || (activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid)));
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
 
@@ -1048,9 +1094,11 @@ export default function RoomPage() {
             <div className="space-y-3 md:space-y-4">
               <span className="text-[10px] md:text-[11px] font-black uppercase tracking-widest text-zinc-400 px-3 md:px-4">In Meeting ({activeParticipants.length})</span>
               {activeParticipants.map(p => (
-                <div key={p.id} className={cn("flex items-center justify-between p-4 md:p-5 bg-zinc-50 rounded-2xl md:rounded-3xl border border-zinc-100 shadow-sm transition-all", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
+                <div key={p.id} className={cn("flex items-center justify-between p-4 md:p-5 bg-zinc-50 rounded-2xl md:rounded-3xl border transition-all", p.hasRaisedHand ? "border-yellow-400 bg-yellow-50/50 shadow-[0_0_15px_rgba(250,204,21,0.2)]" : "border-zinc-100 bg-zinc-50 shadow-sm", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
                   <div className="flex items-center gap-3 md:gap-4">
-                    <div className="h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-[10px] md:text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div>
+                    <div className="h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-[10px] md:text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">
+                      {p.hasRaisedHand ? <Hand className="h-4 w-4 text-yellow-500" /> : p.name.substring(0, 2)}
+                    </div>
                     <div className="flex flex-col">
                       <span className="text-[11px] md:text-xs font-black text-zinc-900 flex items-center gap-1.5 md:gap-2">
                         <span className="truncate max-w-[60px] md:max-w-none">{p.name}</span> {p.id === user?.uid && "(You)"}
@@ -1132,6 +1180,7 @@ export default function RoomPage() {
                     isMe={screenSharerId === user?.uid}
                     onTogglePin={() => togglePin(screenSharerId)}
                     isPinned={pinnedParticipantId === screenSharerId}
+                    isRaised={participants?.find(p => p.id === screenSharerId)?.hasRaisedHand}
                   />
                  ) : (
                    <StreamView 
@@ -1141,6 +1190,7 @@ export default function RoomPage() {
                     isMuted={isSpotlightMe ? isAudioMuted : spotlightParticipant?.isMuted} 
                     isMe={isSpotlightMe}
                     isPinned={pinnedParticipantId === spotlightParticipantId}
+                    isRaised={spotlightParticipant?.hasRaisedHand}
                     onTogglePin={spotlightParticipantId ? () => togglePin(spotlightParticipantId) : undefined}
                   />
                  )}
@@ -1168,8 +1218,8 @@ export default function RoomPage() {
               )}
 
               {(screenSharerId || !isVideoOff) && (
-                <div className={cn("absolute bottom-4 right-4 md:bottom-16 md:right-16 w-32 md:w-80 aspect-video rounded-xl md:rounded-[2.5rem] overflow-hidden border-2 md:border-[6px] border-white/10 shadow-2xl z-40 bg-zinc-900 transition-all duration-700", !screenSharerId && isMobile && "w-24")}>
-                   <StreamView stream={localCameraStream.current} name="You" isMe={true} isVideoOff={isVideoOff} isMuted={isAudioMuted} />
+                <div className={cn("absolute bottom-4 right-4 md:bottom-16 md:right-16 w-32 md:w-80 aspect-video rounded-xl md:rounded-[2.5rem] overflow-hidden border-2 md:border-[6px] shadow-2xl z-40 bg-zinc-900 transition-all duration-700", localParticipant?.hasRaisedHand ? "border-yellow-400" : "border-white/10", !screenSharerId && isMobile && "w-24")}>
+                   <StreamView stream={localCameraStream.current} name="You" isMe={true} isVideoOff={isVideoOff} isMuted={isAudioMuted} isRaised={localParticipant?.hasRaisedHand} />
                 </div>
               )}
             </div>
@@ -1199,7 +1249,7 @@ export default function RoomPage() {
                  </>
                )}
 
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-5 w-5 md:h-8 md:w-8" /></Button>
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised, raisedAt: !hasHandRaised ? Timestamp.now() : null }); }} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-5 w-5 md:h-8 md:w-8" /></Button>
                
                <div className="hidden md:block">
                  <Button variant="secondary" size="icon" onClick={toggleFullscreen} className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all">
