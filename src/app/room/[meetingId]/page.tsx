@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -56,7 +55,8 @@ import {
   Minimize,
   Settings,
   Check,
-  AlertCircle
+  AlertCircle,
+  X
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -66,6 +66,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { setDocumentNonBlocking, addDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useIsMobile } from '@/hooks/use-mobile';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 
 interface Participant {
   id: string;
@@ -171,10 +173,10 @@ function AudioLevelIndicator({ stream, isMuted }: { stream: MediaStream | null, 
   if (isMuted) return null;
 
   return (
-    <div className="flex items-end gap-[2px] h-3 w-4">
-      <div className="w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 0.4)}%` }} />
-      <div className="w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 1.0)}%` }} />
-      <div className="w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 0.6)}%` }} />
+    <div className="flex items-end gap-[1px] md:gap-[2px] h-2 md:h-3 w-3 md:w-4">
+      <div className="w-0.5 md:w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 0.4)}%` }} />
+      <div className="w-0.5 md:w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 1.0)}%` }} />
+      <div className="w-0.5 md:w-1 bg-primary rounded-full transition-all duration-75" style={{ height: `${Math.max(20, height * 0.6)}%` }} />
     </div>
   );
 }
@@ -198,8 +200,8 @@ function FloatingReaction({ reaction, onComplete }: { reaction: Reaction, onComp
         animationDelay: `${delay}s`
       }}
     >
-      <div className="text-5xl drop-shadow-2xl filter saturate-150">{reaction.type}</div>
-      <div className="bg-black/40 backdrop-blur-md px-3 py-1 rounded-full text-[9px] text-white font-black uppercase tracking-widest whitespace-nowrap border border-white/10 shadow-lg">
+      <div className="text-3xl md:text-5xl drop-shadow-2xl filter saturate-150">{reaction.type}</div>
+      <div className="bg-black/40 backdrop-blur-md px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[8px] md:text-[9px] text-white font-black uppercase tracking-widest whitespace-nowrap border border-white/10 shadow-lg">
         {reaction.senderName}
       </div>
     </div>
@@ -227,7 +229,7 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
 
   return (
     <div className={cn(
-      "relative w-full h-full bg-[#1A1A1A] rounded-[4rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500 group",
+      "relative w-full h-full bg-[#1A1A1A] rounded-2xl md:rounded-[4rem] overflow-hidden border border-white/5 shadow-2xl flex items-center justify-center transition-all duration-500 group",
       className
     )}>
       <video
@@ -242,38 +244,38 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
         )}
       />
       {(isVideoOff && !isPresenting) && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#121212] z-10">
-           <div className="rounded-full bg-[#1E1E1E] flex items-center justify-center w-24 h-24 shadow-2xl border border-white/5 mb-4">
-              <UserIcon className="text-zinc-700 h-10 w-10" />
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#121212] z-10 p-4 text-center">
+           <div className="rounded-full bg-[#1E1E1E] flex items-center justify-center w-16 h-16 md:w-24 md:h-24 shadow-2xl border border-white/5 mb-2 md:mb-4">
+              <UserIcon className="text-zinc-700 h-6 w-6 md:h-10 md:w-10" />
            </div>
-           <div className="text-zinc-500 font-black tracking-[0.4em] uppercase text-[10px] opacity-60">Camera Off</div>
+           <div className="text-zinc-500 font-black tracking-[0.2em] md:tracking-[0.4em] uppercase text-[8px] md:text-[10px] opacity-60">Camera Off</div>
         </div>
       )}
       
-      <div className="absolute top-6 right-6 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute top-3 right-3 md:top-6 md:right-6 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
         {onTogglePin && (
           <Button 
             variant="secondary" 
             size="icon" 
             onClick={onTogglePin}
             className={cn(
-              "rounded-xl h-12 w-12 shadow-2xl backdrop-blur-md border border-white/10",
+              "rounded-lg md:rounded-xl h-8 w-8 md:h-12 md:w-12 shadow-2xl backdrop-blur-md border border-white/10",
               isPinned ? "bg-primary text-white" : "bg-black/40 text-white hover:bg-black/60"
             )}
           >
-            {isPinned ? <PinOff className="h-5 w-5" /> : <Pin className="h-5 w-5" />}
+            {isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
           </Button>
         )}
       </div>
 
-      <div className="absolute bottom-6 left-6 flex items-center gap-3 z-20">
-        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-2xl border-white/10 px-4 py-2 font-black text-[11px] uppercase tracking-widest rounded-xl shadow-xl flex items-center gap-2">
-          {isPresenting && <Monitor className="h-3.5 w-3.5 mr-0.5 text-primary" />}
-          {isPinned && <Pin className="h-3.5 w-3.5 mr-0.5 text-primary fill-primary" />}
+      <div className="absolute bottom-3 left-3 md:bottom-6 md:left-6 flex items-center gap-2 md:gap-3 z-20">
+        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-2xl border-white/10 px-2 md:px-4 py-1 md:py-2 font-black text-[8px] md:text-[11px] uppercase tracking-widest rounded-lg md:rounded-xl shadow-xl flex items-center gap-1.5 md:gap-2">
+          {isPresenting && <Monitor className="h-3 w-3 md:h-3.5 md:w-3.5 text-primary" />}
+          {isPinned && <Pin className="h-3 w-3 md:h-3.5 md:w-3.5 text-primary fill-primary" />}
           <AudioLevelIndicator stream={stream} isMuted={!!isMuted} />
-          {name} {isMe && "(You)"}
+          <span className="truncate max-w-[80px] md:max-w-none">{name} {isMe && "(You)"}</span>
         </Badge>
-        {isMuted && !isPresenting && <div className="p-2 bg-[#FF4545] rounded-xl shadow-2xl border border-white/20"><MicOff className="h-4 w-4 text-white" /></div>}
+        {isMuted && !isPresenting && <div className="p-1.5 md:p-2 bg-[#FF4545] rounded-lg md:rounded-xl shadow-2xl border border-white/20"><MicOff className="h-3 w-3 md:h-4 md:w-4 text-white" /></div>}
       </div>
     </div>
   );
@@ -286,6 +288,7 @@ export default function RoomPage() {
   const firestore = useFirestore();
   const router = useRouter();
   const { toast } = useToast();
+  const isMobile = useIsMobile();
 
   const [isAudioMuted, setIsAudioMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(true);
@@ -299,6 +302,7 @@ export default function RoomPage() {
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [activeTab, setActiveTab] = useState<'chat' | 'participants'>('chat');
   
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoInputDevices, setVideoInputDevices] = useState<MediaDeviceInfo[]>([]);
@@ -472,8 +476,6 @@ export default function RoomPage() {
         if (err.name === 'NotAllowedError') {
           setHasCameraPermission(false);
           setHasMicPermission(false);
-        } else if (err.name === 'NotFoundError') {
-           console.warn("No camera/mic found.");
         }
       }
     };
@@ -525,7 +527,7 @@ export default function RoomPage() {
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 30000) return; // 30s throttle for Spark Plan
+    if (!isInitial && timeSinceLastUpdate < 25000) return; // 25s throttle for Spark Plan
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -610,7 +612,7 @@ export default function RoomPage() {
     recognition.onresult = (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
-      const isSignificant = currentTranscript.length - lastCaptionRef.current.length > 50;
+      const isSignificant = currentTranscript.length - lastCaptionRef.current.length > 40;
 
       if ((isSignificant || isSentenceEnd) && user && firestore) {
           lastCaptionRef.current = currentTranscript;
@@ -671,9 +673,7 @@ export default function RoomPage() {
             } 
           });
         } catch (err: any) {
-          if (err.name === 'NotFoundError') {
-            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-          } else throw err;
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         }
 
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
@@ -691,13 +691,8 @@ export default function RoomPage() {
         setIsVideoOff(true);
       }
     } catch (err: any) {
-      if (err.name === 'NotAllowedError') {
-        setHasCameraPermission(false);
-      } else if (err.name === 'NotFoundError') {
-        toast({ variant: 'destructive', title: 'Device Not Found', description: 'No camera was detected.' });
-      } else {
-        toast({ variant: 'destructive', title: 'Camera Error', description: err.message });
-      }
+      if (err.name === 'NotAllowedError') setHasCameraPermission(false);
+      else toast({ variant: 'destructive', title: 'Camera Error', description: err.message });
     } finally {
       setIsProcessing(false);
     }
@@ -736,21 +731,15 @@ export default function RoomPage() {
       setIsAudioMuted(newState);
       syncPresence({ isMuted: newState });
     } catch (err: any) {
-      if (err.name === 'NotAllowedError') {
-        setHasMicPermission(false);
-      } else {
-        toast({ variant: 'destructive', title: 'Mic Error', description: err.message });
-      }
+      if (err.name === 'NotAllowedError') setHasMicPermission(false);
+      else toast({ variant: 'destructive', title: 'Mic Error', description: err.message });
     } finally {
       setIsProcessing(false);
     }
   };
 
   const startScreenShare = async () => {
-    if (!user || !firestore || screenSharerId) {
-      if (screenSharerId) toast({ title: "Someone is already presenting" });
-      return;
-    }
+    if (!user || !firestore || screenSharerId) return;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
       localScreenStream.current = stream;
@@ -760,7 +749,7 @@ export default function RoomPage() {
       setIsSharingScreen(true);
       stream.getVideoTracks()[0].onended = stopScreenShare;
     } catch (err) {
-      toast({ variant: 'destructive', title: 'Presentation Cancelled' });
+      toast({ title: 'Presentation Cancelled' });
     }
   };
 
@@ -907,7 +896,7 @@ export default function RoomPage() {
                 toSend.forEach((c, i) => updates[`c_${user.uid}_${Date.now()}_${i}`] = c);
                 await setDoc(channelRef, updates, { merge: true });
               }
-            }, 30000); // 30s buffering for Spark Plan
+            }, 25000); // 25s buffering for Spark Plan
           }
         }
       };
@@ -949,31 +938,35 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
-  if (isMeetingLoading) return <div className="h-screen flex items-center justify-center bg-[#F8F9FB]"><Skeleton className="h-16 w-64 rounded-3xl" /></div>;
+  if (isMeetingLoading) return <div className="h-screen flex items-center justify-center bg-[#F8F9FB]"><Skeleton className="h-12 md:h-16 w-48 md:w-64 rounded-2xl md:rounded-3xl" /></div>;
 
   if (!meetingData || meetingData?.status === 'finished' || localParticipant?.role === 'left') {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
-        <div className="bg-zinc-900 p-8 rounded-[3rem] shadow-2xl mb-12 animate-in zoom-in duration-500"><Trophy className="h-24 w-24 text-white" /></div>
-        <h1 className="text-5xl font-black mb-4 text-zinc-900 tracking-tighter">Session Ended</h1>
-        <Button onClick={() => router.push('/dashboard')} className="rounded-[2rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-xl hover:scale-105 transition-all">Back to Dashboard</Button>
+        <div className="bg-zinc-900 p-6 md:p-8 rounded-[2rem] md:rounded-[3rem] shadow-2xl mb-8 md:mb-12 animate-in zoom-in duration-500">
+          <Trophy className="h-16 w-16 md:h-24 md:w-24 text-white" />
+        </div>
+        <h1 className="text-3xl md:text-5xl font-black mb-4 text-zinc-900 tracking-tighter">Session Ended</h1>
+        <Button onClick={() => router.push('/dashboard')} className="rounded-2xl h-14 md:h-16 px-8 md:px-12 font-black uppercase text-[10px] md:text-xs tracking-widest shadow-xl hover:scale-105 transition-all">
+          Back to Dashboard
+        </Button>
       </div>
     );
   }
 
   if (localParticipant?.role === 'waiting') {
     return (
-      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
-        <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-zinc-100 max-w-lg w-full">
-          <div className="h-20 w-20 bg-primary/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8"><Lock className="h-10 w-10 text-primary" /></div>
-          <h1 className="text-3xl font-black mb-4 text-zinc-900 tracking-tighter">Meeting Locked</h1>
-          <p className="text-zinc-500 font-medium mb-12">The host has restricted access. Please wait to be admitted.</p>
+      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-4 text-center">
+        <div className="bg-white p-8 md:p-12 rounded-[2.5rem] md:rounded-[3.5rem] shadow-2xl border border-zinc-100 max-w-lg w-full">
+          <div className="h-16 w-16 md:h-20 md:w-20 bg-primary/10 rounded-2xl md:rounded-[2rem] flex items-center justify-center mx-auto mb-6 md:mb-8"><Lock className="h-8 w-8 md:h-10 md:w-10 text-primary" /></div>
+          <h1 className="text-2xl md:text-3xl font-black mb-3 md:mb-4 text-zinc-900 tracking-tighter">Meeting Locked</h1>
+          <p className="text-zinc-500 font-medium mb-8 md:mb-12 text-sm md:text-base">The host has restricted access. Please wait to be admitted.</p>
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-3 py-4 bg-zinc-50 rounded-2xl border border-zinc-100">
               <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-              <span className="text-xs font-black uppercase tracking-widest text-zinc-400">Waiting for host...</span>
+              <span className="text-[10px] md:text-xs font-black uppercase tracking-widest text-zinc-400">Waiting for host...</span>
             </div>
-            <Button variant="outline" onClick={() => router.push('/dashboard')} className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-[10px]">Cancel</Button>
+            <Button variant="outline" onClick={() => router.push('/dashboard')} className="w-full h-12 md:h-14 rounded-2xl font-black uppercase tracking-widest text-[9px] md:text-[10px]">Cancel</Button>
           </div>
         </div>
       </div>
@@ -984,18 +977,117 @@ export default function RoomPage() {
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
 
+  const SidebarContent = () => (
+    <Tabs defaultValue={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="flex-1 flex flex-col overflow-hidden h-full">
+      <div className="px-6 md:px-10 pt-6 md:pt-12 pb-4 md:pb-6 border-b">
+        <TabsList className="w-full h-12 md:h-16 grid grid-cols-2 rounded-xl md:rounded-2xl bg-zinc-100/80 p-1 md:p-1.5">
+          <TabsTrigger value="chat" className="rounded-lg md:rounded-xl font-black text-[10px] md:text-[11px] uppercase tracking-widest">
+            <MessageSquare className="h-3.5 w-3.5 md:h-4 md:w-4 mr-2 md:mr-3" /> Chat
+          </TabsTrigger>
+          <TabsTrigger value="participants" className="rounded-lg md:rounded-xl font-black text-[10px] md:text-[11px] uppercase tracking-widest">
+            <Users className="h-3.5 w-3.5 md:h-4 md:w-4 mr-2 md:mr-3" /> People
+          </TabsTrigger>
+        </TabsList>
+      </div>
+      <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
+        <ScrollArea className="flex-1 p-6 md:p-10">
+          <div className="space-y-6 md:space-y-8">
+            {chatMessages?.map((msg) => (
+              <div key={msg.id} className={cn("flex flex-col gap-2", msg.senderId === user?.uid ? "items-end" : "items-start")}>
+                <div className="text-[9px] font-black text-zinc-400 px-2 uppercase tracking-widest">{msg.senderName}</div>
+                <div className={cn("max-w-[90%] px-4 py-3 md:px-6 md:py-4 rounded-xl md:rounded-[1.75rem] text-xs md:text-[13px] font-bold shadow-sm leading-relaxed", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 rounded-tl-none")}>
+                  {msg.text}
+                </div>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+        <div className="p-4 md:p-8 border-t bg-zinc-50/50">
+          <div className="relative flex items-center">
+            <Input 
+              placeholder="Type a message..." 
+              value={chatInput} 
+              onChange={(e) => setChatInput(e.target.value)} 
+              onKeyDown={(e) => { 
+                if (e.key === 'Enter' && chatInput.trim() && firestore && user) { 
+                  addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
+                    senderId: user.uid, 
+                    senderName: user.displayName || user.email?.split('@')[0], 
+                    text: chatInput, 
+                    createdAt: serverTimestamp() 
+                  }); 
+                  setChatInput(''); 
+                } 
+              }} 
+              className="pr-12 rounded-xl h-12 md:h-14 bg-white border-zinc-100 text-sm" 
+            />
+            <Button size="icon" variant="ghost" className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 rounded-lg" onClick={() => { if (chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }}><Send className="h-4 w-4 text-zinc-400" /></Button>
+          </div>
+        </div>
+      </TabsContent>
+      <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
+        <ScrollArea className="flex-1 p-4 md:p-8">
+          <div className="space-y-8 md:space-y-10">
+            {isHost && waitingParticipants.length > 0 && (
+              <div className="space-y-3 md:space-y-4">
+                <span className="text-[10px] md:text-[11px] font-black uppercase tracking-widest text-primary px-3 md:px-4">Waiting Room ({waitingParticipants.length})</span>
+                {waitingParticipants.map(p => (
+                  <div key={p.id} className="flex items-center justify-between p-4 md:p-5 bg-zinc-900 rounded-2xl md:rounded-3xl shadow-xl">
+                    <div className="flex items-center gap-3 md:gap-4">
+                      <div className="h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white/10 flex items-center justify-center text-[10px] md:text-[11px] font-black text-zinc-400">{p.name.substring(0, 2)}</div>
+                      <span className="text-[11px] md:text-xs font-black text-white truncate max-w-[80px] md:max-w-none">{p.name}</span>
+                    </div>
+                    <div className="flex gap-1 md:gap-2">
+                      <Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button>
+                      <Button size="icon" onClick={() => admitParticipant(p.id)} className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="space-y-3 md:space-y-4">
+              <span className="text-[10px] md:text-[11px] font-black uppercase tracking-widest text-zinc-400 px-3 md:px-4">In Meeting ({activeParticipants.length})</span>
+              {activeParticipants.map(p => (
+                <div key={p.id} className={cn("flex items-center justify-between p-4 md:p-5 bg-zinc-50 rounded-2xl md:rounded-3xl border border-zinc-100 shadow-sm transition-all", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
+                  <div className="flex items-center gap-3 md:gap-4">
+                    <div className="h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-[10px] md:text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div>
+                    <div className="flex flex-col">
+                      <span className="text-[11px] md:text-xs font-black text-zinc-900 flex items-center gap-1.5 md:gap-2">
+                        <span className="truncate max-w-[60px] md:max-w-none">{p.name}</span> {p.id === user?.uid && "(You)"}
+                        <AudioLevelIndicator stream={p.id === user?.uid ? localCameraStream.current : remoteCameraStreams.get(p.id) || null} isMuted={!!p.isMuted} />
+                      </span>
+                      <span className="text-[8px] md:text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 md:gap-3 items-center">
+                    <Button variant="ghost" size="icon" onClick={() => togglePin(p.id)} className={cn("h-7 w-7 md:h-8 md:w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}>
+                      {pinnedParticipantId === p.id ? <PinOff className="h-3.5 w-3.5 md:h-4 md:w-4" /> : <Pin className="h-3.5 w-3.5 md:h-4 md:w-4" />}
+                    </Button>
+                    {p.isMuted && <MicOff className="h-3.5 w-3.5 md:h-4 md:w-4 text-destructive opacity-40" />}
+                    {p.hasRaisedHand && <Hand className="h-3.5 w-3.5 md:h-4 md:w-4 text-yellow-500 animate-bounce" />}
+                    {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-7 w-7 md:h-8 md:w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </ScrollArea>
+      </TabsContent>
+    </Tabs>
+  );
+
   return (
     <AuthGuard>
       <div ref={containerRef} className="flex h-screen w-full flex-col overflow-hidden bg-[#F8F9FB]">
         {(hasCameraPermission === false || hasMicPermission === false) && (
-          <div className="p-4 bg-red-50 border-b border-red-100">
+          <div className="p-2 md:p-4 bg-red-50 border-b border-red-100 shrink-0">
             <Alert variant="destructive" className="max-w-6xl mx-auto border-none bg-transparent p-0 shadow-none">
-              <div className="flex items-center gap-3">
-                <AlertCircle className="h-5 w-5 text-red-600" />
+              <div className="flex items-center gap-2 md:gap-3">
+                <AlertCircle className="h-4 w-4 md:h-5 md:w-5 text-red-600" />
                 <div>
-                  <AlertTitle className="text-red-900 font-black text-[11px] uppercase tracking-widest mb-1">Access Blocked</AlertTitle>
-                  <AlertDescription className="text-red-700 font-medium text-xs">
-                    Please allow camera and microphone access in your browser settings to use video conferencing.
+                  <AlertTitle className="text-red-900 font-black text-[9px] md:text-[11px] uppercase tracking-widest mb-0.5 md:mb-1">Access Blocked</AlertTitle>
+                  <AlertDescription className="text-red-700 font-medium text-[10px] md:text-xs">
+                    Please allow camera/mic access in settings.
                   </AlertDescription>
                 </div>
               </div>
@@ -1003,40 +1095,34 @@ export default function RoomPage() {
           </div>
         )}
 
-        {isSharingScreen && (
-          <div className="bg-zinc-900 px-10 py-4 flex items-center justify-between text-white z-50 shadow-2xl">
-             <div className="flex items-center gap-4"><Monitor className="h-5 w-5 text-primary animate-pulse" /><span className="font-black text-[11px] uppercase tracking-[0.25em]">You are presenting</span></div>
-             <Button variant="ghost" size="sm" onClick={stopScreenShare} className="text-white hover:bg-white/10 font-black uppercase text-[10px] tracking-[0.2em] border border-white/20 rounded-xl px-6 h-10">Stop</Button>
-          </div>
-        )}
-
         {!isFullscreen && (
-          <header className="flex h-24 items-center justify-between px-12 bg-white border-b z-10 shrink-0 shadow-sm transition-all duration-300">
-            <div className="flex items-center gap-10">
-              <div className="bg-zinc-900 flex items-center justify-center h-14 w-14 rounded-[1.5rem] text-white font-black text-2xl shadow-2xl">CV</div>
-              <div className="flex flex-col">
-                 <div className="flex items-center gap-4">
-                   <h1 className="text-xl font-black truncate max-w-[400px] leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Live Session'}</h1>
-                   <Button variant="secondary" size="icon" onClick={copyInviteLink} className="h-10 w-10 rounded-xl text-zinc-400 bg-zinc-50"><LinkIcon className="h-4 w-4" /></Button>
-                   {isMeetingLocked && <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 rounded-lg px-3 py-1 font-black text-[9px] uppercase tracking-widest"><Lock className="h-3 w-3 mr-1.5" /> Locked</Badge>}
+          <header className="flex h-16 md:h-24 items-center justify-between px-4 md:px-12 bg-white border-b z-10 shrink-0 shadow-sm transition-all duration-300">
+            <div className="flex items-center gap-4 md:gap-10 overflow-hidden">
+              <div className="bg-zinc-900 flex items-center justify-center h-10 w-10 md:h-14 md:w-14 rounded-lg md:rounded-[1.5rem] text-white font-black text-lg md:text-2xl shadow-xl shrink-0">CV</div>
+              <div className="flex flex-col min-w-0">
+                 <div className="flex items-center gap-2 md:gap-4 overflow-hidden">
+                   <h1 className="text-sm md:text-xl font-black truncate leading-tight tracking-tight text-zinc-900">{meetingData?.name || 'Live Session'}</h1>
+                   <Button variant="secondary" size="icon" onClick={copyInviteLink} className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-xl text-zinc-400 bg-zinc-50 shrink-0"><LinkIcon className="h-3.5 w-3.5 md:h-4 md:w-4" /></Button>
                  </div>
-                 <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.3em] mt-1.5 flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>{screenSharerId ? 'Presentation Active' : 'Live Meeting Room'}</p>
+                 <div className="flex items-center gap-2 mt-1 shrink-0">
+                    <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></div>
+                    <span className="text-[8px] md:text-[10px] text-zinc-400 font-black uppercase tracking-widest truncate">{elapsedTime}</span>
+                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-8">
-              <div className="flex items-center gap-4 bg-zinc-50 border border-zinc-100 rounded-[1.5rem] px-6 py-4 text-xs font-black text-zinc-600"><Timer className="h-4 w-4 text-primary" /> {elapsedTime}</div>
+            <div className="flex items-center gap-2 md:gap-8">
               {isHost ? (
-                <Button onClick={handleEndSession} variant="destructive" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] shadow-2xl bg-[#FF4545] border-none">End Session</Button>
+                <Button onClick={handleEndSession} variant="destructive" className="rounded-xl md:rounded-[1.5rem] h-10 md:h-16 px-4 md:px-12 font-black uppercase text-[9px] md:text-xs tracking-widest shadow-lg bg-[#FF4545] border-none">End</Button>
               ) : (
-                <Button onClick={handleLeaveRoom} variant="outline" className="rounded-[1.5rem] h-16 px-12 font-black uppercase text-xs tracking-[0.2em] border-zinc-200">Leave Room</Button>
+                <Button onClick={handleLeaveRoom} variant="outline" className="rounded-xl md:rounded-[1.5rem] h-10 md:h-16 px-4 md:px-12 font-black uppercase text-[9px] md:text-xs tracking-widest border-zinc-200">Leave</Button>
               )}
             </div>
           </header>
         )}
 
-        <main className="flex-1 flex overflow-hidden p-10 gap-10 relative">
-          <div className="flex-1 flex flex-col gap-10 overflow-hidden relative">
-            <div className="flex-1 bg-[#0F0F0F] rounded-[4rem] relative overflow-hidden shadow-2xl border border-white/5 p-6">
+        <main className="flex-1 flex overflow-hidden p-3 md:p-10 gap-3 md:gap-10 relative">
+          <div className="flex-1 flex flex-col gap-4 md:gap-10 overflow-hidden relative">
+            <div className="flex-1 bg-[#0F0F0F] rounded-2xl md:rounded-[4rem] relative overflow-hidden shadow-2xl border border-white/5 p-2 md:p-6">
                <div className="w-full h-full flex items-center justify-center">
                  {screenSharerId && !pinnedParticipantId ? (
                    <StreamView 
@@ -1060,142 +1146,117 @@ export default function RoomPage() {
                  )}
                </div>
 
-              <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[4rem]">
+              <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-2xl md:rounded-[4rem]">
                 {activeReactions.map(reaction => (<FloatingReaction key={reaction.id} reaction={reaction} onComplete={(id) => setActiveReactions(prev => prev.filter(r => r.id !== id))} />))}
               </div>
 
               {isCaptionsEnabled && (
-                <div className="absolute bottom-32 left-0 right-0 flex justify-center pointer-events-none z-50">
-                  <div className="bg-black/80 backdrop-blur-xl px-10 py-6 rounded-[2.5rem] border border-white/10 max-w-[80%] shadow-2xl">
-                    <div className="space-y-4 max-h-[120px] overflow-hidden">
+                <div className="absolute bottom-20 md:bottom-32 left-0 right-0 flex justify-center pointer-events-none z-50 p-4">
+                  <div className="bg-black/80 backdrop-blur-xl px-6 py-4 md:px-10 md:py-6 rounded-2xl md:rounded-[2.5rem] border border-white/10 max-w-full md:max-w-[80%] shadow-2xl">
+                    <div className="space-y-2 md:space-y-4 max-h-[100px] overflow-hidden">
                       {remoteCaptions && remoteCaptions.length > 0 ? (
                         remoteCaptions.map((caption) => (
-                          <div key={caption.id} className="flex gap-4 items-start"><span className="font-black text-[10px] uppercase tracking-widest text-primary shrink-0 mt-1">{caption.username}:</span><p className="text-white text-lg font-bold leading-tight">{caption.text}</p></div>
+                          <div key={caption.id} className="flex gap-2 md:gap-4 items-start">
+                            <span className="font-black text-[8px] md:text-[10px] uppercase tracking-widest text-primary shrink-0 mt-0.5 md:mt-1">{caption.username}:</span>
+                            <p className="text-white text-sm md:text-lg font-bold leading-tight truncate-lines-2">{caption.text}</p>
+                          </div>
                         ))
-                      ) : (<p className="text-zinc-500 font-black uppercase text-xs tracking-widest animate-pulse">Listening...</p>)}
+                      ) : (<p className="text-zinc-500 font-black uppercase text-[10px] tracking-widest animate-pulse">Listening...</p>)}
                     </div>
                   </div>
                 </div>
               )}
 
               {(screenSharerId || !isVideoOff) && (
-                <div className={cn("absolute bottom-16 right-16 w-80 aspect-video rounded-[2.5rem] overflow-hidden border-[6px] border-white/10 shadow-2xl z-40 bg-zinc-900 transition-all duration-700", !screenSharerId && "opacity-0 scale-90 pointer-events-none")}>
+                <div className={cn("absolute bottom-4 right-4 md:bottom-16 md:right-16 w-32 md:w-80 aspect-video rounded-xl md:rounded-[2.5rem] overflow-hidden border-2 md:border-[6px] border-white/10 shadow-2xl z-40 bg-zinc-900 transition-all duration-700", !screenSharerId && isMobile && "w-24")}>
                    <StreamView stream={localCameraStream.current} name="You" isMe={true} isVideoOff={isVideoOff} isMuted={isAudioMuted} />
                 </div>
               )}
             </div>
 
             <div className={cn(
-              "h-32 mx-auto w-fit bg-white/90 backdrop-blur-3xl rounded-[3.5rem] border border-white shadow-2xl flex items-center px-12 gap-6 shrink-0 -mt-16 z-20 transition-all duration-500",
+              "h-20 md:h-32 mx-auto w-full md:w-fit bg-white/90 backdrop-blur-3xl rounded-2xl md:rounded-[3.5rem] border border-white shadow-2xl flex items-center justify-center px-4 md:px-12 gap-2 md:gap-6 shrink-0 -mt-8 md:-mt-16 z-20 transition-all duration-500",
               isFullscreen && !showControls ? "opacity-0 translate-y-10" : "opacity-100 translate-y-0"
             )}>
-               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-2xl h-16 w-16 transition-all", isAudioMuted ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isAudioMuted ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}</Button>
-               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-2xl h-16 w-16 transition-all", isVideoOff ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isVideoOff ? <VideoOff className="h-8 w-8" /> : <VideoIcon className="h-8 w-8" />}</Button>
-               <Separator orientation="vertical" className="h-14 mx-2 bg-zinc-100" />
-               <Popover><PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all"><Smile className="h-8 w-8 text-zinc-700" /></Button></PopoverTrigger><PopoverContent side="top" align="center" className="w-fit p-4 bg-white/80 backdrop-blur-2xl rounded-[2.5rem] shadow-2xl mb-8"><div className="flex gap-4">{EMOJIS.map((emoji) => (<button key={emoji} onClick={() => sendReaction(emoji)} className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl active:scale-90">{emoji}</button>))}</div></PopoverContent></Popover>
-               <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
-               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
-               <Button variant="secondary" size="icon" onClick={toggleFullscreen} className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all hover:scale-110">
-                 {isFullscreen ? <Minimize className="h-8 w-8 text-zinc-700" /> : <Maximize className="h-8 w-8 text-zinc-700" />}
-               </Button>
+               <Button variant={isAudioMuted ? "destructive" : "secondary"} size="icon" onClick={handleToggleAudio} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 transition-all", isAudioMuted ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isAudioMuted ? <MicOff className="h-5 w-5 md:h-8 md:w-8" /> : <Mic className="h-5 w-5 md:h-8 md:w-8" />}</Button>
+               <Button variant={isVideoOff ? "destructive" : "secondary"} size="icon" onClick={handleToggleVideo} disabled={isProcessing} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 transition-all", isVideoOff ? "bg-[#FF4545] text-white" : "bg-zinc-100 text-zinc-700")}>{isVideoOff ? <VideoOff className="h-5 w-5 md:h-8 md:w-8" /> : <VideoIcon className="h-5 w-5 md:h-8 md:w-8" />}</Button>
+               
+               <div className="hidden md:block">
+                 <Separator orientation="vertical" className="h-10 md:h-14 mx-1 md:mx-2 bg-zinc-100" />
+               </div>
+
+               <Popover>
+                <PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 bg-zinc-50"><Smile className="h-5 w-5 md:h-8 md:w-8 text-zinc-700" /></Button></PopoverTrigger>
+                <PopoverContent side="top" align="center" className="w-fit p-2 md:p-4 bg-white/80 backdrop-blur-2xl rounded-[1.5rem] md:rounded-[2.5rem] shadow-2xl mb-4 md:mb-8">
+                  <div className="flex gap-2 md:gap-4">{EMOJIS.map((emoji) => (<button key={emoji} onClick={() => sendReaction(emoji)} className="text-2xl md:text-4xl hover:scale-125 transition-transform p-1.5 md:p-3 rounded-xl active:scale-90">{emoji}</button>))}</div>
+                </PopoverContent>
+               </Popover>
+
+               {!isMobile && (
+                 <>
+                   <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-5 w-5 md:h-8 md:w-8" /></Button>
+                   <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-5 w-5 md:h-8 md:w-8" /> : <ScreenShare className="h-5 w-5 md:h-8 md:w-8" />}</Button>
+                 </>
+               )}
+
+               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-5 w-5 md:h-8 md:w-8" /></Button>
+               
+               <div className="hidden md:block">
+                 <Button variant="secondary" size="icon" onClick={toggleFullscreen} className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all">
+                   {isFullscreen ? <Minimize className="h-8 w-8 text-zinc-700" /> : <Maximize className="h-8 w-8 text-zinc-700" />}
+                 </Button>
+               </div>
+
+               {isMobile && (
+                 <Sheet>
+                    <SheetTrigger asChild>
+                      <Button variant="secondary" size="icon" className="rounded-xl h-10 w-10 bg-zinc-50"><MessageSquare className="h-5 w-5 text-zinc-700" /></Button>
+                    </SheetTrigger>
+                    <SheetContent side="bottom" className="h-[80vh] rounded-t-[2.5rem] p-0 overflow-hidden">
+                       <SheetHeader className="sr-only"><SheetTitle>Meeting Interaction</SheetTitle></SheetHeader>
+                       <SidebarContent />
+                    </SheetContent>
+                 </Sheet>
+               )}
                
                <Popover>
                  <PopoverTrigger asChild>
-                   <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all hover:scale-110">
-                     <Settings className="h-8 w-8 text-zinc-700" />
-                   </Button>
+                   <Button variant="secondary" size="icon" className="rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 bg-zinc-50"><Settings className="h-5 w-5 md:h-8 md:w-8 text-zinc-700" /></Button>
                  </PopoverTrigger>
-                 <PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl rounded-[3.5rem] shadow-2xl mb-8">
-                   <div className="space-y-6">
-                     <h3 className="font-black text-sm text-zinc-900">Device Settings</h3>
+                 <PopoverContent side="top" align="center" className="w-[85vw] md:w-80 p-6 md:p-8 bg-white/90 backdrop-blur-2xl rounded-[2rem] md:rounded-[3.5rem] shadow-2xl mb-4 md:mb-8">
+                   <div className="space-y-4 md:space-y-6">
+                     <h3 className="font-black text-xs md:text-sm text-zinc-900 uppercase tracking-widest">Settings</h3>
                      <Separator className="bg-zinc-100" />
                      <div className="space-y-4">
                        <div className="space-y-2">
-                         <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Microphone</label>
-                         <div className="flex flex-col gap-2">
+                         <label className="text-[9px] font-black uppercase tracking-widest text-zinc-400">Audio Source</label>
+                         <div className="flex flex-col gap-1.5">
                            {audioInputDevices.length > 0 ? audioInputDevices.map((device) => (
-                             <button
-                               key={device.deviceId}
-                               onClick={() => { setSelectedAudioInput(device.deviceId); toast({ title: "Microphone updated" }); }}
-                               className={cn(
-                                 "flex items-center justify-between p-3 rounded-xl text-xs font-medium transition-all",
-                                 selectedAudioInput === device.deviceId ? "bg-primary/5 text-primary" : "hover:bg-zinc-50 text-zinc-600"
-                               )}
-                             >
-                               <span className="truncate max-w-[180px]">{device.label || `Mic ${device.deviceId.slice(0, 5)}`}</span>
+                             <button key={device.deviceId} onClick={() => { setSelectedAudioInput(device.deviceId); toast({ title: "Mic updated" }); }} className={cn("flex items-center justify-between p-2.5 rounded-xl text-[10px] font-bold transition-all", selectedAudioInput === device.deviceId ? "bg-primary/5 text-primary" : "hover:bg-zinc-50 text-zinc-600")}>
+                               <span className="truncate max-w-[140px]">{device.label || 'Mic'}</span>
                                {selectedAudioInput === device.deviceId && <Check className="h-3 w-3" />}
                              </button>
-                           )) : <p className="text-xs text-zinc-400">No microphones found.</p>}
+                           )) : <p className="text-[10px] text-zinc-400 italic">No mic found</p>}
                          </div>
                        </div>
-                       <div className="space-y-2">
-                         <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Camera</label>
-                         <div className="flex flex-col gap-2">
-                           {videoInputDevices.length > 0 ? videoInputDevices.map((device) => (
-                             <button
-                               key={device.deviceId}
-                               onClick={() => { setSelectedVideoInput(device.deviceId); toast({ title: "Camera updated" }); }}
-                               className={cn(
-                                 "flex items-center justify-between p-3 rounded-xl text-xs font-medium transition-all",
-                                 selectedVideoInput === device.deviceId ? "bg-primary/5 text-primary" : "hover:bg-zinc-50 text-zinc-600"
-                               )}
-                             >
-                               <span className="truncate max-w-[180px]">{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</span>
-                               {selectedVideoInput === device.deviceId && <Check className="h-3 w-3" />}
-                             </button>
-                           )) : <p className="text-xs text-zinc-400">No cameras found.</p>}
+                       {isMobile && (
+                         <div className="pt-4 space-y-3">
+                           <Button variant={isCaptionsEnabled ? "default" : "outline"} onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className="w-full h-10 rounded-xl font-black text-[9px] uppercase tracking-widest"><Captions className="h-3.5 w-3.5 mr-2" /> Captions</Button>
+                           {isHost && (
+                             <Button onClick={toggleMeetingLock} variant={isMeetingLocked ? "destructive" : "outline"} className="w-full h-10 rounded-xl font-black text-[9px] uppercase tracking-widest"><ShieldCheck className="h-3.5 w-3.5 mr-2" /> {isMeetingLocked ? 'Unlock' : 'Lock'}</Button>
+                           )}
                          </div>
-                       </div>
+                       )}
                      </div>
                    </div>
                  </PopoverContent>
                </Popover>
-
-               {isHost && (
-                 <Popover><PopoverTrigger asChild><Button variant={isMeetingLocked ? "default" : "secondary"} size="icon" className={cn("rounded-2xl h-16 w-16 transition-all", isMeetingLocked ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><ShieldCheck className="h-8 w-8" /></Button></PopoverTrigger><PopoverContent side="top" align="center" className="w-80 p-8 bg-white/90 backdrop-blur-2xl rounded-[3.5rem] shadow-2xl mb-8"><div className="space-y-6"><h3 className="font-black text-sm text-zinc-900">Security</h3><Separator className="bg-zinc-100" /><div className="flex items-center justify-between"><div className="flex flex-col gap-1"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-700">Lock Meeting</span></div><Button onClick={toggleMeetingLock} variant={isMeetingLocked ? "destructive" : "secondary"} size="sm" className="rounded-xl h-10 w-10 p-0">{isMeetingLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}</Button></div></div></PopoverContent></Popover>
-               )}
-               <Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50"><MoreVertical className="h-8 w-8 text-zinc-700" /></Button>
             </div>
           </div>
 
-          {!isFullscreen && (
-            <Card className="w-[450px] flex flex-col overflow-hidden border-none shadow-2xl shrink-0 rounded-[4rem] bg-white transition-all duration-300">
-               <Tabs defaultValue="chat" className="flex-1 flex flex-col overflow-hidden">
-                  <div className="px-10 pt-12 pb-6 border-b"><TabsList className="w-full h-16 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1.5"><TabsTrigger value="chat" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><MessageSquare className="h-4 w-4 mr-3" /> Chat</TabsTrigger><TabsTrigger value="participants" className="rounded-xl font-black text-[11px] uppercase tracking-widest"><Users className="h-4 w-4 mr-3" /> People</TabsTrigger></TabsList></div>
-                  <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
-                     <ScrollArea className="flex-1 p-10"><div className="space-y-8">{chatMessages?.map((msg) => (<div key={msg.id} className={cn("flex flex-col gap-2.5", msg.senderId === user?.uid ? "items-end" : "items-start")}><div className="text-[10px] font-black text-zinc-400 px-3 uppercase tracking-widest">{msg.senderName}</div><div className={cn("max-w-[85%] px-6 py-4 rounded-[1.75rem] text-[13px] font-bold shadow-sm leading-relaxed", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 rounded-tl-none")}>{msg.text}</div></div>))}</div></ScrollArea>
-                     <div className="p-8 border-t bg-zinc-50/50"><div className="relative flex items-center"><Input placeholder="Type a message..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }} className="pr-14 rounded-2xl h-14 bg-white border-zinc-100" /><Button size="icon" variant="ghost" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-11 w-11 rounded-xl" onClick={() => { if (chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }}><Send className="h-5 w-5 text-zinc-400" /></Button></div></div>
-                  </TabsContent>
-                  <TabsContent value="participants" className="flex-1 flex flex-col overflow-hidden mt-0">
-                     <ScrollArea className="flex-1 p-8"><div className="space-y-10">{isHost && waitingParticipants.length > 0 && (<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-primary px-4">Waiting Room ({waitingParticipants.length})</span>{waitingParticipants.map(p => (<div key={p.id} className="flex items-center justify-between p-5 bg-zinc-900 rounded-3xl shadow-xl"><div className="flex items-center gap-4"><div className="h-10 w-10 rounded-2xl bg-white/10 flex items-center justify-center text-[11px] font-black text-zinc-400">{p.name.substring(0, 2)}</div><div className="flex flex-col"><span className="text-xs font-black text-white">{p.name}</span></div></div><div className="flex gap-2"><Button size="icon" variant="ghost" onClick={() => removeParticipant(p.id)} className="h-10 w-10 rounded-xl text-zinc-500 hover:text-destructive"><UserX className="h-4 w-4" /></Button><Button size="icon" onClick={() => admitParticipant(p.id)} className="h-10 w-10 rounded-xl bg-primary text-white"><UserPlus className="h-4 w-4" /></Button></div></div>))}</div>)}<div className="space-y-4"><span className="text-[11px] font-black uppercase tracking-widest text-zinc-400 px-4">In Meeting ({activeParticipants.length})</span>{activeParticipants.map(p => (<div key={p.id} className={cn("flex items-center justify-between p-5 bg-zinc-50 rounded-3xl border border-zinc-100 shadow-sm transition-all", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
-                      <div className="flex items-center gap-4">
-                        <div className="h-10 w-10 rounded-2xl bg-white shadow-sm flex items-center justify-center text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">{p.name.substring(0, 2)}</div>
-                        <div className="flex flex-col">
-                          <span className="text-xs font-black text-zinc-900 flex items-center gap-2">
-                            {p.name} {p.id === user?.uid && "(You)"}
-                            <AudioLevelIndicator stream={p.id === user?.uid ? localCameraStream.current : remoteCameraStreams.get(p.id) || null} isMuted={!!p.isMuted} />
-                          </span>
-                          <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
-                        </div>
-                      </div>
-                      <div className="flex gap-3 items-center">
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          onClick={() => togglePin(p.id)}
-                          className={cn("h-8 w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}
-                        >
-                          {pinnedParticipantId === p.id ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-                        </Button>
-                        {p.isMuted && <MicOff className="h-4 w-4 text-destructive opacity-40" />}
-                        {p.isVideoOff && <VideoOff className="h-4 w-4 text-destructive opacity-40" />}
-                        {p.hasRaisedHand && <Hand className="h-4 w-4 text-yellow-500 animate-bounce" />}
-                        {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-8 w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
-                      </div>
-                    </div>))}</div></div></ScrollArea>
-                  </TabsContent>
-               </Tabs>
+          {!isFullscreen && !isMobile && (
+            <Card className="w-[380px] lg:w-[450px] flex flex-col overflow-hidden border-none shadow-2xl shrink-0 rounded-[3rem] lg:rounded-[4rem] bg-white transition-all duration-300">
+               <SidebarContent />
             </Card>
           )}
         </main>

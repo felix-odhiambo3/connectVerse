@@ -32,37 +32,8 @@ export default function LoginPage() {
     }
   };
 
-  const handleSignUp = async ({ email, password, username }) => {
-    try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
-      const user = userCredential.user;
-      
-      const userRef = doc(firestore, 'users', user.uid);
-      // Not using non-blocking update here to ensure user doc is created before redirect
-      await setDoc(userRef, {
-        id: user.uid,
-        email: user.email,
-        username: username,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      toast({ title: 'Account created successfully!' });
-      router.push('/dashboard');
-    } catch (error: any) {
-       toast({
-          variant: 'destructive',
-          title: 'Uh oh! Something went wrong.',
-          description: error.message,
-        });
-    }
-  }
-
   return (
-    <div className="container relative h-screen flex-col items-center justify-center grid lg:max-w-none lg:grid-cols-2 lg:px-0">
+    <div className="container relative min-h-screen flex-col items-center justify-center grid lg:max-w-none lg:grid-cols-2 lg:px-0">
       <div className="relative hidden h-full flex-col bg-muted p-10 text-white lg:flex dark:border-r">
         <div className="absolute inset-0 bg-zinc-900" />
         <div className="relative z-20 flex items-center text-lg font-medium">
@@ -78,19 +49,28 @@ export default function LoginPage() {
           </blockquote>
         </div>
       </div>
-      <div className="lg:p-8">
-        <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">
+      <div className="p-4 md:p-8 flex items-center justify-center min-h-screen">
+        <div className="mx-auto flex w-full flex-col justify-center space-y-6 max-w-[350px]">
+          <div className="flex flex-col space-y-2 text-center">
+            <div className="flex justify-center mb-4 lg:hidden">
+              <div className="bg-zinc-900 p-2 rounded-xl">
+                <Video className="h-6 w-6 text-white" />
+              </div>
+            </div>
+            <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
+            <p className="text-sm font-medium text-zinc-500">Enter your email below to log in</p>
+          </div>
           <AuthForm
-            title="Welcome back"
-            description="Enter your email below to log in to your account"
+            title=""
+            description=""
             buttonText="Login"
             onSubmit={handleLogin}
           />
-          <p className="px-8 text-center text-sm text-muted-foreground">
+          <p className="px-8 text-center text-sm text-zinc-500 font-medium">
             Don't have an account?{' '}
             <Link
               href="/register"
-              className="underline underline-offset-4 hover:text-primary"
+              className="underline underline-offset-4 font-bold text-zinc-900"
             >
               Sign up
             </Link>

@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat, Copy, Link as LinkIcon } from 'lucide-react';
+import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat, Copy } from 'lucide-react';
 import Link from 'next/link';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
@@ -195,32 +195,38 @@ export default function DashboardPage() {
 
   return (
     <AuthGuard>
-      <div className="flex flex-col min-h-screen bg-background text-zinc-900">
-        <header className="px-8 h-20 flex items-center border-b bg-white/80 backdrop-blur-md sticky top-0 z-50">
+      <div className="flex flex-col min-h-screen bg-background">
+        <header className="px-4 md:px-8 h-16 md:h-20 flex items-center border-b bg-white/80 backdrop-blur-md sticky top-0 z-50">
           <Link href="/dashboard" className="flex items-center transition-all hover:scale-105">
-            <div className="bg-zinc-900 p-2 rounded-xl mr-3 shadow-lg shadow-zinc-200"><Video className="h-5 w-5 text-white" /></div>
-            <span className="font-black text-xl tracking-tighter">ConnectVerse</span>
+            <div className="bg-zinc-900 p-1.5 md:p-2 rounded-lg md:rounded-xl mr-3 shadow-lg shadow-zinc-200">
+              <Video className="h-4 w-4 md:h-5 md:w-5 text-white" />
+            </div>
+            <span className="font-black text-lg md:text-xl tracking-tighter">ConnectVerse</span>
           </Link>
           <div className="ml-auto flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => auth?.signOut()} className="rounded-full hover:bg-zinc-100"><LogOut className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" onClick={() => auth?.signOut()} className="rounded-full hover:bg-zinc-100">
+              <LogOut className="h-4 w-4" />
+            </Button>
           </div>
         </header>
-        <main className="flex-1 flex flex-col items-center p-6 md:p-12 bg-[#F8F9FB]">
-          <div className="w-full max-w-6xl space-y-12">
-            <section className="space-y-8">
-              <div className="flex flex-col gap-2">
-                <h2 className="text-4xl font-black tracking-tighter">Welcome back</h2>
-                <p className="text-zinc-500 font-medium">Ready for your next session?</p>
+        <main className="flex-1 p-4 md:p-12 bg-[#F8F9FB]">
+          <div className="w-full max-w-6xl mx-auto space-y-8 md:space-y-12">
+            <section className="space-y-6 md:space-y-8">
+              <div className="flex flex-col gap-1">
+                <h2 className="text-3xl md:text-4xl font-black tracking-tighter">Welcome back</h2>
+                <p className="text-zinc-500 font-medium text-sm md:text-base">Ready for your next session?</p>
               </div>
               
-              <div className="grid gap-6 md:grid-cols-3">
+              <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 <Card className="flex flex-col shadow-xl border-none bg-zinc-900 text-white rounded-[2rem] overflow-hidden group">
-                  <CardHeader className="p-8">
-                    <CardTitle className="flex items-center gap-3 text-2xl font-black"><Plus className="h-6 w-6 text-primary-foreground opacity-50" /> Instant</CardTitle>
-                    <CardDescription className="text-zinc-400 font-medium">Start a video call immediately.</CardDescription>
+                  <CardHeader className="p-6 md:p-8">
+                    <CardTitle className="flex items-center gap-3 text-xl md:text-2xl font-black">
+                      <Plus className="h-5 w-5 md:h-6 md:w-6 text-primary-foreground opacity-50" /> Instant
+                    </CardTitle>
+                    <CardDescription className="text-zinc-400 font-medium text-sm">Start a video call immediately.</CardDescription>
                   </CardHeader>
-                  <CardFooter className="mt-auto p-8 pt-0">
-                    <Button onClick={createInstantMeeting} disabled={isCreating} className="w-full h-14 rounded-2xl bg-white text-zinc-900 font-black uppercase tracking-widest text-[11px] hover:bg-zinc-100">
+                  <CardFooter className="mt-auto p-6 md:p-8 pt-0">
+                    <Button onClick={createInstantMeeting} disabled={isCreating} className="w-full h-12 md:h-14 rounded-2xl bg-white text-zinc-900 font-black uppercase tracking-widest text-[10px] md:text-[11px] hover:bg-zinc-100">
                       {isCreating ? 'Creating...' : 'Start Now'}
                     </Button>
                   </CardFooter>
@@ -229,30 +235,47 @@ export default function DashboardPage() {
                 <Dialog open={openScheduleDialog} onOpenChange={setOpenScheduleDialog}>
                   <DialogTrigger asChild>
                     <Card className="flex flex-col cursor-pointer hover:shadow-2xl transition-all shadow-xl border-none rounded-[2rem] overflow-hidden bg-white">
-                      <CardHeader className="p-8">
-                        <CardTitle className="flex items-center gap-3 text-2xl font-black"><CalendarIcon className="h-6 w-6 text-zinc-400" /> Schedule</CardTitle>
-                        <CardDescription className="font-medium text-zinc-500">Plan single or recurring sessions.</CardDescription>
+                      <CardHeader className="p-6 md:p-8">
+                        <CardTitle className="flex items-center gap-3 text-xl md:text-2xl font-black">
+                          <CalendarIcon className="h-5 w-5 md:h-6 md:w-6 text-zinc-400" /> Schedule
+                        </CardTitle>
+                        <CardDescription className="font-medium text-zinc-500 text-sm">Plan single or recurring sessions.</CardDescription>
                       </CardHeader>
-                      <CardFooter className="mt-auto p-8 pt-0"><Button variant="secondary" className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-[11px] bg-zinc-100 text-zinc-900">Schedule</Button></CardFooter>
+                      <CardFooter className="mt-auto p-6 md:p-8 pt-0">
+                        <Button variant="secondary" className="w-full h-12 md:h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] md:text-[11px] bg-zinc-100 text-zinc-900">
+                          Schedule
+                        </Button>
+                      </CardFooter>
                     </Card>
                   </DialogTrigger>
-                  <DialogContent className="sm:max-w-[500px] rounded-[2.5rem] border-none shadow-2xl">
+                  <DialogContent className="w-[95vw] max-w-[500px] rounded-[2rem] md:rounded-[2.5rem] border-none shadow-2xl p-4 md:p-6">
                     <DialogHeader>
-                      <DialogTitle className="text-2xl font-black">Schedule Meeting</DialogTitle>
-                      <DialogDescription className="font-medium">Set up your session details (Max 2 for trial).</DialogDescription>
+                      <DialogTitle className="text-xl md:text-2xl font-black">Schedule Meeting</DialogTitle>
+                      <DialogDescription className="font-medium text-xs md:text-sm">Set up your session details.</DialogDescription>
                     </DialogHeader>
                     <Form {...form}>
-                      <form onSubmit={form.handleSubmit(handleScheduleSubmit)} className="space-y-6 pt-4">
+                      <form onSubmit={form.handleSubmit(handleScheduleSubmit)} className="space-y-4 md:space-y-6 pt-2 md:pt-4">
                         <FormField control={form.control} name="name" render={({ field }) => (
-                          <FormItem><FormLabel className="font-black text-[11px] uppercase tracking-widest">Meeting Name</FormLabel><FormControl><Input className="h-12 rounded-xl bg-zinc-50 border-zinc-100" placeholder="e.g., Physics 101" {...field} /></FormControl><FormMessage /></FormItem>
+                          <FormItem>
+                            <FormLabel className="font-black text-[10px] uppercase tracking-widest">Meeting Name</FormLabel>
+                            <FormControl>
+                              <Input className="h-10 md:h-12 rounded-xl bg-zinc-50 border-zinc-100" placeholder="e.g., Physics 101" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
                         )} />
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <FormField control={form.control} name="date" render={({ field }) => (
                             <FormItem className="flex flex-col">
-                              <FormLabel className="font-black text-[11px] uppercase tracking-widest">Date</FormLabel>
+                              <FormLabel className="font-black text-[10px] uppercase tracking-widest">Date</FormLabel>
                               <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
                                 <PopoverTrigger asChild>
-                                  <FormControl><Button variant="outline" className={cn("h-12 rounded-xl bg-zinc-50 border-zinc-100 text-left font-medium", !field.value && "text-muted-foreground")}>{field.value ? format(field.value, "PPP") : <span>Pick a date</span>}<CalendarIcon className="ml-auto h-4 w-4 opacity-50" /></Button></FormControl>
+                                  <FormControl>
+                                    <Button variant="outline" className={cn("h-10 md:h-12 rounded-xl bg-zinc-50 border-zinc-100 text-left font-medium", !field.value && "text-muted-foreground")}>
+                                      {field.value ? format(field.value, "PPP") : <span>Pick a date</span>}
+                                      <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                    </Button>
+                                  </FormControl>
                                 </PopoverTrigger>
                                 <PopoverContent className="w-auto p-0 rounded-2xl border-none shadow-2xl" align="start">
                                   <Calendar mode="single" selected={field.value} onSelect={(d) => { if (d) { field.onChange(d); setDatePickerOpen(false); } }} disabled={(d) => d < new Date(new Date().setHours(0,0,0,0))} />
@@ -261,67 +284,108 @@ export default function DashboardPage() {
                             </FormItem>
                           )} />
                           <FormField control={form.control} name="time" render={({ field }) => (
-                            <FormItem><FormLabel className="font-black text-[11px] uppercase tracking-widest">Time</FormLabel><FormControl><Input type="time" className="h-12 rounded-xl bg-zinc-50 border-zinc-100" {...field} /></FormControl></FormItem>
+                            <FormItem>
+                              <FormLabel className="font-black text-[10px] uppercase tracking-widest">Time</FormLabel>
+                              <FormControl>
+                                <Input type="time" className="h-10 md:h-12 rounded-xl bg-zinc-50 border-zinc-100" {...field} />
+                              </FormControl>
+                            </FormItem>
                           )} />
                         </div>
-                        <div className="p-6 bg-zinc-50 rounded-[2rem] border border-zinc-100 space-y-6">
+                        <div className="p-4 md:p-6 bg-zinc-50 rounded-[1.5rem] md:rounded-[2rem] border border-zinc-100 space-y-4 md:space-y-6">
                           <FormField control={form.control} name="isRecurring" render={({ field }) => (
                             <FormItem className="flex items-center justify-between">
-                              <div className="space-y-0.5"><FormLabel className="font-black text-[11px] uppercase tracking-widest">Recurring</FormLabel><FormDescription className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Max 2 sessions</FormDescription></div>
+                              <div className="space-y-0.5">
+                                <FormLabel className="font-black text-[10px] uppercase tracking-widest">Recurring</FormLabel>
+                                <FormDescription className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">Max 2 sessions</FormDescription>
+                              </div>
                               <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
                             </FormItem>
                           )} />
                           {form.watch('isRecurring') && (
                             <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-2">
                               <FormField control={form.control} name="repeatInterval" render={({ field }) => (
-                                <FormItem><FormLabel className="font-black text-[11px] uppercase tracking-widest">Pattern</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value}><FormControl><SelectTrigger className="h-12 rounded-xl bg-white"><SelectValue placeholder="Select interval" /></SelectTrigger></FormControl><SelectContent className="rounded-xl"><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem></SelectContent></Select></FormItem>
+                                <FormItem>
+                                  <FormLabel className="font-black text-[10px] uppercase tracking-widest">Pattern</FormLabel>
+                                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                    <FormControl>
+                                      <SelectTrigger className="h-10 md:h-12 rounded-xl bg-white"><SelectValue placeholder="Select interval" /></SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent className="rounded-xl">
+                                      <SelectItem value="daily">Daily</SelectItem>
+                                      <SelectItem value="weekly">Weekly</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </FormItem>
                               )} />
                               <FormField control={form.control} name="occurrences" render={({ field }) => (
-                                <FormItem><FormLabel className="font-black text-[11px] uppercase tracking-widest">Count</FormLabel><FormControl><Input type="number" min="2" max="2" className="h-12 rounded-xl bg-white" {...field} /></FormControl></FormItem>
+                                <FormItem>
+                                  <FormLabel className="font-black text-[10px] uppercase tracking-widest">Count</FormLabel>
+                                  <FormControl><Input type="number" min="2" max="2" className="h-10 md:h-12 rounded-xl bg-white" {...field} /></FormControl>
+                                </FormItem>
                               )} />
                             </div>
                           )}
                         </div>
-                        <DialogFooter><Button type="submit" disabled={isCreating} className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-[11px]">{isCreating ? 'Processing...' : 'Schedule Now'}</Button></DialogFooter>
+                        <DialogFooter>
+                          <Button type="submit" disabled={isCreating} className="w-full h-12 md:h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] md:text-[11px]">
+                            {isCreating ? 'Processing...' : 'Schedule Now'}
+                          </Button>
+                        </DialogFooter>
                       </form>
                     </Form>
                   </DialogContent>
                 </Dialog>
 
                 <Card className="flex flex-col shadow-xl border-none rounded-[2rem] overflow-hidden bg-white">
-                  <CardHeader className="p-8">
-                    <CardTitle className="flex items-center gap-3 text-2xl font-black"><ArrowRight className="h-6 w-6 text-zinc-400" /> Join</CardTitle>
-                    <CardDescription className="font-medium text-zinc-500">Enter a meeting ID or link.</CardDescription>
+                  <CardHeader className="p-6 md:p-8">
+                    <CardTitle className="flex items-center gap-3 text-xl md:text-2xl font-black">
+                      <ArrowRight className="h-5 w-5 md:h-6 md:w-6 text-zinc-400" /> Join
+                    </CardTitle>
+                    <CardDescription className="font-medium text-zinc-500 text-sm">Enter a meeting ID or link.</CardDescription>
                   </CardHeader>
-                  <CardContent className="px-8 pb-4"><Input placeholder="Meeting ID or Link" value={meetingIdInput} onChange={(e) => setMeetingIdInput(e.target.value)} className="h-12 rounded-xl bg-zinc-50 border-zinc-100" /></CardContent>
-                  <CardFooter className="mt-auto p-8 pt-0"><Button onClick={joinMeeting} variant="secondary" className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-[11px] bg-zinc-100 text-zinc-900">Join Room</Button></CardFooter>
+                  <CardContent className="px-6 md:px-8 pb-4">
+                    <Input 
+                      placeholder="Meeting ID or Link" 
+                      value={meetingIdInput} 
+                      onChange={(e) => setMeetingIdInput(e.target.value)} 
+                      className="h-10 md:h-12 rounded-xl bg-zinc-50 border-zinc-100" 
+                    />
+                  </CardContent>
+                  <CardFooter className="mt-auto p-6 md:p-8 pt-0">
+                    <Button onClick={joinMeeting} variant="secondary" className="w-full h-12 md:h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] md:text-[11px] bg-zinc-100 text-zinc-900">
+                      Join Room
+                    </Button>
+                  </CardFooter>
                 </Card>
               </div>
             </section>
 
             {upcomingMeetings.length > 0 && (
-              <section className="space-y-8 pb-12">
-                <h2 className="text-3xl font-black tracking-tighter">History & Scheduled</h2>
-                <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              <section className="space-y-6 md:space-y-8 pb-12">
+                <h2 className="text-2xl md:text-3xl font-black tracking-tighter">History & Scheduled</h2>
+                <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                   {upcomingMeetings.map((meeting) => (
-                    <Card key={meeting.id} className="group overflow-hidden border-none shadow-lg hover:shadow-2xl transition-all rounded-[2.5rem] bg-white">
-                      <CardHeader className="p-8 pb-4">
+                    <Card key={meeting.id} className="group overflow-hidden border-none shadow-lg hover:shadow-2xl transition-all rounded-[2rem] md:rounded-[2.5rem] bg-white">
+                      <CardHeader className="p-6 md:p-8 pb-4">
                         <div className="flex justify-between items-start mb-4">
-                           <div className="bg-zinc-50 p-3 rounded-2xl"><Video className="h-5 w-5 text-zinc-900" /></div>
+                           <div className="bg-zinc-50 p-2.5 rounded-xl"><Video className="h-4 w-4 md:h-5 md:w-5 text-zinc-900" /></div>
                           <div className="flex gap-2">
                              {meeting.seriesId && <Repeat className="h-4 w-4 text-zinc-300" />}
-                             <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/5" onClick={() => copyMeetingLink(meeting.id)}><Copy className="h-4 w-4" /></Button>
+                             <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/5" onClick={() => copyMeetingLink(meeting.id)}>
+                               <Copy className="h-3.5 w-3.5" />
+                             </Button>
                           </div>
                         </div>
-                        <CardTitle className="text-xl font-black truncate">{meeting.name}</CardTitle>
-                        <CardDescription className="font-bold text-zinc-400 text-xs mt-2 uppercase tracking-widest">
+                        <CardTitle className="text-lg md:text-xl font-black truncate">{meeting.name}</CardTitle>
+                        <CardDescription className="font-bold text-zinc-400 text-[10px] mt-2 uppercase tracking-widest leading-relaxed">
                           {meeting.scheduledAt ? format(new Date(meeting.scheduledAt.seconds * 1000), 'PPP') : 'Active Now'}<br />
                           <span className="opacity-60">{meeting.scheduledAt ? format(new Date(meeting.scheduledAt.seconds * 1000), 'p') : '--'} • {meeting.fixedDurationHours}h Session</span>
                         </CardDescription>
                       </CardHeader>
-                      <CardFooter className="p-8 pt-4 gap-3">
-                        <Button size="sm" onClick={() => router.push(`/room/${meeting.id}`)} className="flex-1 h-12 rounded-xl font-black text-[10px] uppercase tracking-widest">Start</Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteMeeting(meeting.id)} className="h-12 w-12 rounded-xl text-zinc-300 hover:text-destructive hover:bg-destructive/5"><Trash2 className="h-4 w-4" /></Button>
+                      <CardFooter className="p-6 md:p-8 pt-4 gap-3">
+                        <Button size="sm" onClick={() => router.push(`/room/${meeting.id}`)} className="flex-1 h-10 md:h-12 rounded-xl font-black text-[9px] md:text-[10px] uppercase tracking-widest">Start</Button>
+                        <Button size="sm" variant="ghost" onClick={() => deleteMeeting(meeting.id)} className="h-10 w-10 md:h-12 md:w-12 rounded-xl text-zinc-300 hover:text-destructive hover:bg-destructive/5"><Trash2 className="h-4 w-4" /></Button>
                       </CardFooter>
                     </Card>
                   ))}
