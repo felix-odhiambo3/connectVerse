@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -18,9 +19,10 @@ import {
   where,
   deleteDoc,
   getDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { Card } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -57,7 +59,11 @@ import {
   Check,
   AlertCircle,
   X,
-  Clock
+  Clock,
+  FileText,
+  CheckCircle2,
+  XCircle,
+  Download
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -69,11 +75,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
 
 interface Participant {
   id: string;
   name: string;
   joinedAt: Timestamp | null;
+  lastJoinTime: Timestamp | null;
+  accumulatedSeconds: number;
   role: 'host' | 'co-host' | 'participant' | 'waiting' | 'left';
   hasRaisedHand?: boolean;
   raisedAt?: Timestamp | null;
@@ -312,6 +322,7 @@ export default function RoomPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [activeTab, setActiveTab] = useState<'chat' | 'participants'>('chat');
+  const [isRecordingAttendance, setIsRecordingAttendance] = useState(false);
   
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoInputDevices, setVideoInputDevices] = useState<MediaDeviceInfo[]>([]);
@@ -475,6 +486,7 @@ export default function RoomPage() {
       try { pc.close(); } catch (e) {}
     });
     pcs.current.clear();
+    establishedPcs.current.add(user?.uid || ''); // Keep self as established to prevent re-init if possible
     establishedPcs.current.clear();
     cameraSenders.current.clear();
     screenSenders.current.clear();
@@ -489,7 +501,7 @@ export default function RoomPage() {
 
     setRemoteCameraStreams(new Map());
     setRemoteScreenStreams(new Map());
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
     if (meetingData?.status === 'finished') {
@@ -531,6 +543,9 @@ export default function RoomPage() {
     const pRef = doc(firestore, 'meetings', meetingId, 'participants', user.uid);
     let role: Participant['role'] = user.uid === hostId ? 'host' : 'participant';
 
+    const now = Date.now();
+    const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
+
     if (isInitial) {
       const snap = await getDoc(pRef);
       if (isMeetingLocked && user.uid !== hostId) {
@@ -545,13 +560,25 @@ export default function RoomPage() {
     }
 
     const currentRole = localRoleRef.current || role;
+    const existingSnap = await getDoc(pRef);
+    const existingData = existingSnap.exists() ? existingSnap.data() as Participant : null;
+    
+    // Calculate accumulated seconds if leaving
+    let accumulatedSeconds = existingData?.accumulatedSeconds || 0;
+    if (updates.role === 'left' && existingData?.lastJoinTime) {
+      const duration = Math.floor((now - existingData.lastJoinTime.toMillis()) / 1000);
+      accumulatedSeconds += Math.max(0, duration);
+    }
+
     const data: any = {
       ...updates,
       id: user.uid,
       name: user.displayName || user.email?.split('@')[0],
-      role: isInitial ? role : currentRole,
+      role: isInitial ? role : (updates.role || currentRole),
       cameraStreamId: localCameraStream.current?.id || null,
       screenStreamId: localScreenStream.current?.id || null,
+      accumulatedSeconds: accumulatedSeconds,
+      lastJoinTime: isInitial || (!isInitial && updates.role !== 'left') ? serverTimestamp() : null,
     };
     if (isInitial) {
       data.joinedAt = serverTimestamp();
@@ -566,11 +593,8 @@ export default function RoomPage() {
       screenStreamId: data.screenStreamId
     });
 
-    const now = Date.now();
-    const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
-    
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 25000) return; 
+    if (!isInitial && timeSinceLastUpdate < 25000 && !updates.role) return; 
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -854,9 +878,42 @@ export default function RoomPage() {
     }
   };
 
-  const handleLeaveRoom = () => {
+  const handleLeaveRoom = async () => {
+    await syncPresence({ role: 'left' });
     cleanupAllResources();
     router.push('/dashboard');
+  };
+
+  const handleRecordAttendance = async () => {
+    if (!firestore || !meetingId || !participants) return;
+    setIsRecordingAttendance(true);
+    try {
+      const batch = writeBatch(firestore);
+      const attendanceCollection = collection(firestore, 'seriesAttendance');
+      
+      attendanceData.forEach(record => {
+        const recordId = `${meetingId}_${record.id}`;
+        const ref = doc(attendanceCollection, recordId);
+        batch.set(ref, {
+          meetingId,
+          meetingName: meetingData?.name || 'Session',
+          userId: record.id,
+          userName: record.name,
+          totalTimeAttended: record.totalTime,
+          attendancePercentage: record.percentage,
+          status: record.status,
+          recordedAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
+      toast({ title: "Attendance recorded successfully!" });
+      router.push('/dashboard');
+    } catch (error) {
+      toast({ variant: 'destructive', title: "Failed to record attendance" });
+    } finally {
+      setIsRecordingAttendance(false);
+    }
   };
 
   useEffect(() => {
@@ -981,18 +1038,180 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [meetingData?.createdAt, meetingData?.status]);
 
+  const attendanceData = useMemo(() => {
+    if (!meetingData?.endedAt || !meetingData?.createdAt || !participants) return [];
+    
+    const totalSessionSeconds = Math.max(1, meetingData.endedAt.seconds - meetingData.createdAt.seconds);
+    const now = Date.now();
+
+    return participants.map(p => {
+      let totalActiveSeconds = p.accumulatedSeconds || 0;
+      if (p.lastJoinTime) {
+        const currentStretch = Math.floor((now - p.lastJoinTime.toMillis()) / 1000);
+        totalActiveSeconds += Math.max(0, currentStretch);
+      }
+      
+      // Cap at total session time
+      totalActiveSeconds = Math.min(totalActiveSeconds, totalSessionSeconds);
+      const percentage = Math.round((totalActiveSeconds / totalSessionSeconds) * 100);
+      const status = percentage >= 70 ? 'Present' : 'Absent';
+      
+      return {
+        id: p.id,
+        name: p.name,
+        totalTime: totalActiveSeconds,
+        percentage,
+        status,
+        role: p.role
+      };
+    });
+  }, [meetingData?.endedAt, meetingData?.createdAt, participants]);
+
+  const attendanceStats = useMemo(() => {
+    const present = attendanceData.filter(d => d.status === 'Present').length;
+    const absent = attendanceData.filter(d => d.status === 'Absent').length;
+    return [
+      { name: 'Present', value: present, color: '#22c55e' },
+      { name: 'Absent', value: absent, color: '#ef4444' },
+    ];
+  }, [attendanceData]);
+
   if (isMeetingLoading) return <div className="h-screen flex items-center justify-center bg-[#F8F9FB]"><Skeleton className="h-12 md:h-16 w-48 md:w-64 rounded-2xl md:rounded-3xl" /></div>;
 
   if (!meetingData || meetingData?.status === 'finished' || localParticipant?.role === 'left') {
     return (
-      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-6 text-center">
-        <div className="bg-zinc-900 p-6 md:p-8 rounded-[2rem] md:rounded-[3rem] shadow-2xl mb-8 md:mb-12 animate-in zoom-in duration-500">
-          <Trophy className="h-16 w-16 md:h-24 md:w-24 text-white" />
+      <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-4 md:p-6 text-center overflow-auto">
+        <div className="w-full max-w-4xl space-y-6 md:space-y-8 animate-in zoom-in duration-500 py-8">
+          <div className="flex flex-col items-center">
+            <div className="bg-zinc-900 p-6 md:p-8 rounded-[2rem] md:rounded-[3rem] shadow-2xl mb-6 md:mb-8">
+              <Trophy className="h-12 w-12 md:h-16 md:w-16 text-white" />
+            </div>
+            <h1 className="text-3xl md:text-5xl font-black mb-2 text-zinc-900 tracking-tighter">Session Ended</h1>
+            <p className="text-zinc-500 font-bold uppercase tracking-widest text-[10px] md:text-xs">{meetingData?.name}</p>
+          </div>
+
+          <Card className="rounded-[2.5rem] md:rounded-[3.5rem] border-none shadow-2xl overflow-hidden bg-white">
+            <CardHeader className="p-8 md:p-12 pb-0">
+              <CardTitle className="text-2xl font-black tracking-tight">Attendance Summary</CardTitle>
+            </CardHeader>
+            <CardContent className="p-8 md:p-12 space-y-8">
+              {isHost ? (
+                <div className="space-y-10">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                    <div className="h-[250px] w-full">
+                       <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={attendanceStats}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={60}
+                            outerRadius={100}
+                            paddingAngle={5}
+                            dataKey="value"
+                          >
+                            {attendanceStats.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <RechartsTooltip />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center p-4 bg-green-50 rounded-2xl border border-green-100">
+                        <span className="font-black text-[10px] uppercase tracking-widest text-green-600">Present</span>
+                        <span className="text-2xl font-black text-green-700">{attendanceStats[0].value}</span>
+                      </div>
+                      <div className="flex justify-between items-center p-4 bg-red-50 rounded-2xl border border-red-100">
+                        <span className="font-black text-[10px] uppercase tracking-widest text-red-600">Absent</span>
+                        <span className="text-2xl font-black text-red-700">{attendanceStats[1].value}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[2rem] border border-zinc-100 overflow-hidden">
+                    <Table>
+                      <TableHeader className="bg-zinc-50">
+                        <TableRow>
+                          <TableHead className="font-black text-[10px] uppercase tracking-widest">Name</TableHead>
+                          <TableHead className="font-black text-[10px] uppercase tracking-widest">Time</TableHead>
+                          <TableHead className="font-black text-[10px] uppercase tracking-widest text-right">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {attendanceData.map((record) => (
+                          <TableRow key={record.id}>
+                            <TableCell className="font-bold text-sm">{record.name}</TableCell>
+                            <TableCell className="text-zinc-500 font-medium text-xs">{formatDuration(record.totalTime)} ({record.percentage}%)</TableCell>
+                            <TableCell className="text-right">
+                              <Badge variant={record.status === 'Present' ? 'secondary' : 'destructive'} className={cn(
+                                "font-black text-[9px] uppercase tracking-widest",
+                                record.status === 'Present' ? "bg-green-100 text-green-700 border-green-200" : "bg-red-100 text-red-700 border-red-200"
+                              )}>
+                                {record.status}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-6">
+                  {attendanceData.find(d => d.id === user?.uid) ? (
+                    (() => {
+                      const myRecord = attendanceData.find(d => d.id === user?.uid)!;
+                      return (
+                        <div className="w-full max-w-md p-8 md:p-12 bg-zinc-50 rounded-[2.5rem] md:rounded-[3rem] border border-zinc-100 space-y-6 md:space-y-8">
+                          <div className="flex flex-col items-center gap-4">
+                            {myRecord.status === 'Present' ? (
+                              <CheckCircle2 className="h-16 w-16 md:h-20 md:w-20 text-green-500" />
+                            ) : (
+                              <XCircle className="h-16 w-16 md:h-20 md:w-20 text-red-500" />
+                            )}
+                            <h2 className="text-2xl md:text-3xl font-black">{myRecord.status}</h2>
+                          </div>
+                          <Separator className="bg-zinc-200" />
+                          <div className="space-y-4">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Total Participation</span>
+                              <span className="text-lg font-black">{formatDuration(myRecord.totalTime)}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Attendance Score</span>
+                              <span className="text-lg font-black text-primary">{myRecord.percentage}%</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <p className="text-zinc-400 font-bold italic">No personal record found.</p>
+                  )}
+                </div>
+              )}
+            </CardContent>
+            <CardFooter className="p-8 md:p-12 pt-0 flex flex-col md:flex-row gap-4">
+              {isHost ? (
+                <>
+                  <Button onClick={handleRecordAttendance} disabled={isRecordingAttendance} className="w-full h-14 md:h-16 rounded-2xl md:rounded-3xl font-black uppercase text-[10px] md:text-xs tracking-widest shadow-xl">
+                    {isRecordingAttendance ? "Saving..." : "Record Attendance"}
+                    <Download className="ml-2 h-4 w-4" />
+                  </Button>
+                  <Button variant="outline" onClick={() => router.push('/dashboard')} className="w-full h-14 md:h-16 rounded-2xl md:rounded-3xl font-black uppercase text-[10px] md:text-xs tracking-widest border-zinc-200">
+                    Discard
+                  </Button>
+                </>
+              ) : (
+                <Button onClick={() => router.push('/dashboard')} className="w-full h-14 md:h-16 rounded-2xl md:rounded-3xl font-black uppercase text-[10px] md:text-xs tracking-widest shadow-xl">
+                  Back to Dashboard
+                </Button>
+              )}
+            </CardFooter>
+          </Card>
         </div>
-        <h1 className="text-3xl md:text-5xl font-black mb-4 text-zinc-900 tracking-tighter">Session Ended</h1>
-        <Button onClick={() => router.push('/dashboard')} className="rounded-2xl h-14 md:h-16 px-8 md:px-12 font-black uppercase text-[10px] md:text-xs tracking-widest shadow-xl hover:scale-105 transition-all">
-          Back to Dashboard
-        </Button>
       </div>
     );
   }
@@ -1336,3 +1555,4 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
+
