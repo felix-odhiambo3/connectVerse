@@ -56,7 +56,8 @@ import {
   Settings,
   Check,
   AlertCircle,
-  X
+  X,
+  Clock
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -366,14 +367,12 @@ export default function RoomPage() {
   const { data: participants } = useCollection<Participant>(participantsRefQuery);
   const currentParticipantsRef = useRef<Participant[]>([]);
   
-  // Hand Raise Sound Logic
   useEffect(() => {
     if (!participants) return;
     const currentRaised = new Set(participants.filter(p => p.hasRaisedHand).map(p => p.id));
     
     currentRaised.forEach(id => {
       if (!prevRaisedHandsRef.current.has(id) && id !== user?.uid) {
-        // Play notification sound
         try {
           const context = new (window.AudioContext || (window as any).webkitAudioContext)();
           const osc = context.createOscillator();
@@ -451,7 +450,6 @@ export default function RoomPage() {
     if (!participants) return [];
     const active = participants.filter(p => p.role !== 'left' && p.role !== 'waiting');
     
-    // Sort logic: Hand Raised first, then alphabetical
     return [...active].sort((a, b) => {
       if (a.hasRaisedHand && b.hasRaisedHand) return a.name.localeCompare(b.name);
       if (a.hasRaisedHand) return -1;
@@ -572,7 +570,7 @@ export default function RoomPage() {
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 25000) return; // 25s throttle for Spark Plan
+    if (!isInitial && timeSinceLastUpdate < 25000) return; 
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -941,7 +939,7 @@ export default function RoomPage() {
                 toSend.forEach((c, i) => updates[`c_${user.uid}_${Date.now()}_${i}`] = c);
                 await setDoc(channelRef, updates, { merge: true });
               }
-            }, 25000); // 25s buffering for Spark Plan
+            }, 25000); 
           }
         }
       };
@@ -1023,6 +1021,20 @@ export default function RoomPage() {
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
 
+  const getAttendanceStatus = (participant: Participant) => {
+    if (!meetingData?.scheduledAt || !participant.joinedAt) return null;
+    
+    const startTime = meetingData.scheduledAt.seconds;
+    const joinTime = participant.joinedAt.seconds;
+    const diffMinutes = (joinTime - startTime) / 60;
+    
+    if (diffMinutes <= 15) {
+      return { label: 'On Time', className: 'bg-green-100 text-green-700 border-green-200' };
+    } else {
+      return { label: 'Late', className: 'bg-red-100 text-red-700 border-red-200' };
+    }
+  };
+
   const SidebarContent = () => (
     <Tabs defaultValue={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="flex-1 flex flex-col overflow-hidden h-full">
       <div className="px-6 md:px-10 pt-6 md:pt-12 pb-4 md:pb-6 border-b">
@@ -1093,30 +1105,40 @@ export default function RoomPage() {
             )}
             <div className="space-y-3 md:space-y-4">
               <span className="text-[10px] md:text-[11px] font-black uppercase tracking-widest text-zinc-400 px-3 md:px-4">In Meeting ({activeParticipants.length})</span>
-              {activeParticipants.map(p => (
-                <div key={p.id} className={cn("flex items-center justify-between p-4 md:p-5 bg-zinc-50 rounded-2xl md:rounded-3xl border transition-all", p.hasRaisedHand ? "border-yellow-400 bg-yellow-50/50 shadow-[0_0_15px_rgba(250,204,21,0.2)]" : "border-zinc-100 bg-zinc-50 shadow-sm", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
-                  <div className="flex items-center gap-3 md:gap-4">
-                    <div className="h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-[10px] md:text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">
-                      {p.hasRaisedHand ? <Hand className="h-4 w-4 text-yellow-500" /> : p.name.substring(0, 2)}
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-[11px] md:text-xs font-black text-zinc-900 flex items-center gap-1.5 md:gap-2">
-                        <span className="truncate max-w-[60px] md:max-w-none">{p.name}</span> {p.id === user?.uid && "(You)"}
-                        <AudioLevelIndicator stream={p.id === user?.uid ? localCameraStream.current : remoteCameraStreams.get(p.id) || null} isMuted={!!p.isMuted} />
-                      </span>
-                      <span className="text-[8px] md:text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
+              {activeParticipants.map(p => {
+                const status = getAttendanceStatus(p);
+                return (
+                  <div key={p.id} className={cn("flex flex-col gap-2 p-4 md:p-5 bg-zinc-50 rounded-2xl md:rounded-3xl border transition-all", p.hasRaisedHand ? "border-yellow-400 bg-yellow-50/50 shadow-[0_0_15px_rgba(250,204,21,0.2)]" : "border-zinc-100 bg-zinc-50 shadow-sm", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 md:gap-4">
+                        <div className="h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-[10px] md:text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">
+                          {p.hasRaisedHand ? <Hand className="h-4 w-4 text-yellow-500" /> : p.name.substring(0, 2)}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[11px] md:text-xs font-black text-zinc-900 flex items-center gap-1.5 md:gap-2">
+                            <span className="truncate max-w-[60px] md:max-w-none">{p.name}</span> {p.id === user?.uid && "(You)"}
+                            <AudioLevelIndicator stream={p.id === user?.uid ? localCameraStream.current : remoteCameraStreams.get(p.id) || null} isMuted={!!p.isMuted} />
+                          </span>
+                          <span className="text-[8px] md:text-[9px] font-black text-zinc-400 uppercase tracking-widest">{p.role}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-1.5 md:gap-3 items-center">
+                        {status && (
+                          <Badge variant="outline" className={cn("font-black text-[7px] md:text-[9px] uppercase tracking-widest px-2 py-0.5 rounded-full border shadow-sm", status.className)}>
+                            {status.label}
+                          </Badge>
+                        )}
+                        <Button variant="ghost" size="icon" onClick={() => togglePin(p.id)} className={cn("h-7 w-7 md:h-8 md:w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}>
+                          {pinnedParticipantId === p.id ? <PinOff className="h-3.5 w-3.5 md:h-4 md:w-4" /> : <Pin className="h-3.5 w-3.5 md:h-4 md:w-4" />}
+                        </Button>
+                        {p.isMuted && <MicOff className="h-3.5 w-3.5 md:h-4 md:w-4 text-destructive opacity-40" />}
+                        {p.hasRaisedHand && <Hand className="h-3.5 w-3.5 md:h-4 md:w-4 text-yellow-500 animate-bounce" />}
+                        {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-7 w-7 md:h-8 md:w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex gap-1.5 md:gap-3 items-center">
-                    <Button variant="ghost" size="icon" onClick={() => togglePin(p.id)} className={cn("h-7 w-7 md:h-8 md:w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}>
-                      {pinnedParticipantId === p.id ? <PinOff className="h-3.5 w-3.5 md:h-4 md:w-4" /> : <Pin className="h-3.5 w-3.5 md:h-4 md:w-4" />}
-                    </Button>
-                    {p.isMuted && <MicOff className="h-3.5 w-3.5 md:h-4 md:w-4 text-destructive opacity-40" />}
-                    {p.hasRaisedHand && <Hand className="h-3.5 w-3.5 md:h-4 md:w-4 text-yellow-500 animate-bounce" />}
-                    {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-7 w-7 md:h-8 md:w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </ScrollArea>
