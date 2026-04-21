@@ -7,23 +7,44 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isHost(meetingId) {
+      return get(/databases/$(database)/documents/meetings/$(meetingId)).data.hostId == request.auth.uid;
+    }
+
     match /users/{userId} {
       allow read: if isSignedIn();
       allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
     match /meetings/{meetingId} {
-      allow read, write: if isSignedIn();
+      // Allow creation by any signed in user
+      allow create: if isSignedIn();
+      // Allow read by anyone in the meeting
+      allow read: if isSignedIn();
+      // Only the host can update the meeting status or meta-info
+      allow update: if isSignedIn() && (
+        isHost(meetingId) || 
+        // Allow participants to update specific transient fields like screenSharerId if needed, 
+        // but for security we restrict most meta-updates to host
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['screenSharerId', 'participantPermissions']))
+      );
+      // Only host can delete
+      allow delete: if isSignedIn() && isHost(meetingId);
       
       match /participants/{participantId} {
-        allow read, write: if isSignedIn();
+        allow read: if isSignedIn();
+        // Users can update their own presence, host can update anyone (for kick/admit)
+        allow write: if isSignedIn() && (request.auth.uid == participantId || isHost(meetingId));
       }
 
       match /chat/{messageId} {
-        allow read, write: if isSignedIn();
+        allow read: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update, delete: if false;
       }
 
       match /webrtc/{channelId} {
+        // Signaling is open to participants for P2P handshake
         allow read, write: if isSignedIn();
       }
 

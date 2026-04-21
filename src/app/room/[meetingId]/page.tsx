@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -463,7 +464,6 @@ export default function RoomPage() {
         if (audios.length > 0) setSelectedAudioInput(audios[0].deviceId);
         if (videos.length > 0) setSelectedVideoInput(videos[0].deviceId);
 
-        // Attempt generic request to confirm permissions
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setHasCameraPermission(true);
         setHasMicPermission(true);
@@ -473,7 +473,6 @@ export default function RoomPage() {
           setHasCameraPermission(false);
           setHasMicPermission(false);
         } else if (err.name === 'NotFoundError') {
-           // No hardware found, but not necessarily a permission issue
            console.warn("No camera/mic found.");
         }
       }
@@ -526,7 +525,7 @@ export default function RoomPage() {
     const timeSinceLastUpdate = now - lastPresenceUpdateAt.current;
     
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 25000) return; // 25s throttle
+    if (!isInitial && timeSinceLastUpdate < 30000) return; // 30s throttle for Spark Plan
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -611,7 +610,7 @@ export default function RoomPage() {
     recognition.onresult = (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript;
       const isSentenceEnd = /[.!?]$/.test(currentTranscript);
-      const isSignificant = currentTranscript.length - lastCaptionRef.current.length > 40;
+      const isSignificant = currentTranscript.length - lastCaptionRef.current.length > 50;
 
       if ((isSignificant || isSentenceEnd) && user && firestore) {
           lastCaptionRef.current = currentTranscript;
@@ -657,7 +656,6 @@ export default function RoomPage() {
       if (isVideoOff) {
         let stream;
         try {
-          // Attempt with specific device
           stream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
               deviceId: selectedVideoInput ? { ideal: selectedVideoInput } : undefined,
@@ -674,7 +672,6 @@ export default function RoomPage() {
           });
         } catch (err: any) {
           if (err.name === 'NotFoundError') {
-            // Fallback to generic request if specific ID fails
             stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
           } else throw err;
         }
@@ -687,40 +684,17 @@ export default function RoomPage() {
         setIsVideoOff(false);
         setHasCameraPermission(true);
       } else {
-        if (!isAudioMuted) {
-          try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-              audio: { 
-                deviceId: selectedAudioInput ? { ideal: selectedAudioInput } : undefined,
-                echoCancellation: true, 
-                noiseSuppression: true, 
-                autoGainControl: true 
-              } 
-            });
-            localCameraStream.current?.getTracks().forEach(t => t.stop());
-            localCameraStream.current = stream;
-            await syncPresence({ isVideoOff: true });
-            updateTracksForPeers(stream, 'camera');
-          } catch (e) {
-            // If fallback fails, just stop tracks
-            localCameraStream.current?.getTracks().forEach(t => t.stop());
-            localCameraStream.current = null;
-            await syncPresence({ isVideoOff: true });
-            updateTracksForPeers(null, 'camera');
-          }
-        } else {
-          localCameraStream.current?.getTracks().forEach(t => t.stop());
-          localCameraStream.current = null;
-          await syncPresence({ isVideoOff: true });
-          updateTracksForPeers(null, 'camera');
-        }
+        localCameraStream.current?.getTracks().forEach(t => t.stop());
+        localCameraStream.current = null;
+        await syncPresence({ isVideoOff: true });
+        updateTracksForPeers(null, 'camera');
         setIsVideoOff(true);
       }
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
         setHasCameraPermission(false);
       } else if (err.name === 'NotFoundError') {
-        toast({ variant: 'destructive', title: 'Device Not Found', description: 'No camera was detected. Please check your connection.' });
+        toast({ variant: 'destructive', title: 'Device Not Found', description: 'No camera was detected.' });
       } else {
         toast({ variant: 'destructive', title: 'Camera Error', description: err.message });
       }
@@ -750,12 +724,10 @@ export default function RoomPage() {
           updateTracksForPeers(stream, 'camera');
           setHasMicPermission(true);
         } catch (err: any) {
-          if (err.name === 'NotFoundError') {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
-            localCameraStream.current = stream;
-            await syncPresence({ isMuted: newState });
-            updateTracksForPeers(stream, 'camera');
-          } else throw err;
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
+          localCameraStream.current = stream;
+          await syncPresence({ isMuted: newState });
+          updateTracksForPeers(stream, 'camera');
         }
       }
       if (localCameraStream.current) {
@@ -766,8 +738,6 @@ export default function RoomPage() {
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
         setHasMicPermission(false);
-      } else if (err.name === 'NotFoundError') {
-        toast({ variant: 'destructive', title: 'Mic Not Found', description: 'No microphone was detected.' });
       } else {
         toast({ variant: 'destructive', title: 'Mic Error', description: err.message });
       }
@@ -807,7 +777,7 @@ export default function RoomPage() {
   const sendReaction = useCallback((emoji: string) => {
     if (!user || !firestore || !meetingId) return;
     const now = Date.now();
-    if (now - lastReactionTime.current < 1000) return;
+    if (now - lastReactionTime.current < 2000) return;
     lastReactionTime.current = now;
 
     addDocumentNonBlocking(collection(firestore, 'meetings', meetingId, 'reactions'), {
@@ -819,16 +789,11 @@ export default function RoomPage() {
   }, [user, firestore, meetingId]);
 
   const togglePin = (participantId: string) => {
-    if (pinnedParticipantId === participantId) {
-      setPinnedParticipantId(null);
-    } else {
-      setPinnedParticipantId(participantId);
-    }
+    setPinnedParticipantId(pinnedParticipantId === participantId ? null : participantId);
   };
 
   const copyInviteLink = () => {
-    const link = window.location.origin + `/room/${meetingId}`;
-    navigator.clipboard.writeText(link);
+    navigator.clipboard.writeText(window.location.origin + `/room/${meetingId}`);
     toast({ title: "Link copied!" });
   };
 
@@ -903,7 +868,7 @@ export default function RoomPage() {
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         const p = currentParticipantsRef.current.find(p => p.id === participantId);
-        const isScreen = stream.id === p?.screenStreamId || stream.id === meetingData?.screenSharerId || event.track.label.toLowerCase().includes('screen');
+        const isScreen = stream.id === p?.screenStreamId || stream.id === meetingData?.screenSharerId;
         
         if (isScreen) setRemoteScreenStreams(prev => new Map(prev).set(participantId, stream));
         else setRemoteCameraStreams(prev => new Map(prev).set(participantId, stream));
@@ -942,7 +907,7 @@ export default function RoomPage() {
                 toSend.forEach((c, i) => updates[`c_${user.uid}_${Date.now()}_${i}`] = c);
                 await setDoc(channelRef, updates, { merge: true });
               }
-            }, 25000);
+            }, 30000); // 30s buffering for Spark Plan
           }
         }
       };
@@ -1129,9 +1094,7 @@ export default function RoomPage() {
                <Separator orientation="vertical" className="h-14 mx-2 bg-zinc-100" />
                <Popover><PopoverTrigger asChild><Button variant="secondary" size="icon" className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all"><Smile className="h-8 w-8 text-zinc-700" /></Button></PopoverTrigger><PopoverContent side="top" align="center" className="w-fit p-4 bg-white/80 backdrop-blur-2xl rounded-[2.5rem] shadow-2xl mb-8"><div className="flex gap-4">{EMOJIS.map((emoji) => (<button key={emoji} onClick={() => sendReaction(emoji)} className="text-4xl hover:scale-125 transition-transform p-3 rounded-2xl active:scale-90">{emoji}</button>))}</div></PopoverContent></Popover>
                <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-8 w-8" /></Button>
-               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>
-                 {isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}
-               </Button>
+               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-8 w-8" /> : <ScreenShare className="h-8 w-8" />}</Button>
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised }); }} className={cn("rounded-2xl h-16 w-16 shadow-2xl transition-all hover:scale-110", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-8 w-8" /></Button>
                <Button variant="secondary" size="icon" onClick={toggleFullscreen} className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all hover:scale-110">
                  {isFullscreen ? <Minimize className="h-8 w-8 text-zinc-700" /> : <Maximize className="h-8 w-8 text-zinc-700" />}
