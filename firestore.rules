@@ -54,9 +54,12 @@ service cloud.firestore {
 
     match /seriesAttendance/{recordId} {
       // Allow the host to read and manage their own attendance records
-      allow read: if isSignedIn() && resource.data.hostId == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
+      // Explicitly checking both resource.data (for existing) and request.resource.data (for new/updated)
+      allow read: if isSignedIn() && (resource == null || resource.data.hostId == request.auth.uid);
+      allow write: if isSignedIn() && (
+        (resource == null && request.resource.data.hostId == request.auth.uid) ||
+        (resource != null && resource.data.hostId == request.auth.uid)
+      );
     }
   }
 }

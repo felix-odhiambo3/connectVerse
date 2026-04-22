@@ -59,7 +59,8 @@ import {
   Search,
   ChevronLeft,
   CheckCircle2,
-  XCircle
+  XCircle,
+  Repeat
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -394,7 +395,7 @@ export default function RoomPage() {
           osc.connect(gain);
           gain.connect(context.destination);
           osc.type = 'sine';
-          osc.frequency.setValueAtTime(523.25, context.currentTime); // C5
+          osc.frequency.setValueAtTime(523.25, context.currentTime); 
           gain.gain.setValueAtTime(0, context.currentTime);
           gain.gain.linearRampToValueAtTime(0.1, context.currentTime + 0.05);
           gain.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
@@ -536,7 +537,7 @@ export default function RoomPage() {
       }
     };
     checkPermissions();
-  }, [toast]);
+  }, []);
 
   const syncPresence = useCallback(async (updates: Partial<Participant>, isInitial = false) => {
     if (!user?.uid || !firestore || !meetingId || isMeetingLoading || !hostId) return;
@@ -1233,6 +1234,20 @@ export default function RoomPage() {
     );
   }
 
+  const getAttendanceStatus = (participant: Participant) => {
+    if (!meetingData?.scheduledAt || !participant.joinedAt) return null;
+    
+    const startTime = meetingData.scheduledAt.seconds;
+    const joinTime = participant.joinedAt.seconds;
+    const diffMinutes = (joinTime - startTime) / 60;
+    
+    if (diffMinutes <= 15) {
+      return { label: 'On Time', className: 'bg-green-100 text-green-700 border-green-200' };
+    } else {
+      return { label: 'Late', className: 'bg-red-100 text-red-700 border-red-200' };
+    }
+  };
+
   if (localParticipant?.role === 'waiting') {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-[#F8F9FB] p-4 text-center">
@@ -1256,20 +1271,6 @@ export default function RoomPage() {
   const spotlightParticipantId = pinnedParticipantId || (screenSharerId && screenSharerId !== user?.uid ? screenSharerId : (raisedHandUser?.id || (activeParticipants.find(p => p.id !== user?.uid)?.id || user?.uid)));
   const isSpotlightMe = spotlightParticipantId === user?.uid;
   const spotlightParticipant = activeParticipants.find(p => p.id === spotlightParticipantId);
-
-  const getAttendanceStatus = (participant: Participant) => {
-    if (!meetingData?.scheduledAt || !participant.joinedAt) return null;
-    
-    const startTime = meetingData.scheduledAt.seconds;
-    const joinTime = participant.joinedAt.seconds;
-    const diffMinutes = (joinTime - startTime) / 60;
-    
-    if (diffMinutes <= 15) {
-      return { label: 'On Time', className: 'bg-green-100 text-green-700 border-green-200' };
-    } else {
-      return { label: 'Late', className: 'bg-red-100 text-red-700 border-red-200' };
-    }
-  };
 
   const SidebarContent = () => (
     <Tabs defaultValue={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="flex-1 flex flex-col overflow-hidden h-full">
@@ -1301,7 +1302,7 @@ export default function RoomPage() {
             <Input 
               placeholder="Type a message..." 
               value={chatInput} 
-              onChange={(e) => setChatInput(e.target.value)} 
+              onChange={(e) => chatInput && setChatInput(e.target.value)} 
               onKeyDown={(e) => { 
                 if (e.key === 'Enter' && chatInput.trim() && firestore && user) { 
                   addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
@@ -1364,7 +1365,7 @@ export default function RoomPage() {
                             {status.label}
                           </Badge>
                         )}
-                        <Button variant="ghost" size="icon" onClick={() => togglePin(p.id)} className={cn("h-7 w-7 md:h-8 md:w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}>
+                        <Button variant="ghost" size="icon" onClick={() => togglePin(p.id)} className={cn("h-7 w-7 md:h-8 w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}>
                           {pinnedParticipantId === p.id ? <PinOff className="h-3.5 w-3.5 md:h-4 md:w-4" /> : <Pin className="h-3.5 w-3.5 md:h-4 md:w-4" />}
                         </Button>
                         {p.isMuted && <MicOff className="h-3.5 w-3.5 md:h-4 md:w-4 text-destructive opacity-40" />}
