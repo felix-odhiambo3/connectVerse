@@ -53,8 +53,8 @@ service cloud.firestore {
     }
 
     match /seriesAttendance/{recordId} {
-      // Allow the host to read and manage their own attendance records.
-      // We use a direct check on resource.data to allow Firestore to optimize list queries.
+      // Split read and write for clarity and ensure query optimization.
+      // hostId must match for both single document gets and collection queries.
       allow read: if isSignedIn() && resource.data.hostId == request.auth.uid;
       allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
       allow update, delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
