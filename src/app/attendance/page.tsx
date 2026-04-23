@@ -4,7 +4,7 @@
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useFirestore, useUser, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, query, where, orderBy, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, doc, deleteDoc } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -40,10 +40,11 @@ export default function AttendanceRecordsPage() {
 
   const attendanceQuery = useMemoFirebase(() => {
     if (!user?.uid || !firestore) return null;
+    // Removed orderBy to prevent 'Missing permissions' error caused by missing composite indexes.
+    // Sorting is now handled client-side in the useMemo below.
     return query(
       collection(firestore, 'seriesAttendance'),
-      where('hostId', '==', user.uid),
-      orderBy('recordedAt', 'desc')
+      where('hostId', '==', user.uid)
     );
   }, [user?.uid, firestore]);
 
@@ -51,6 +52,7 @@ export default function AttendanceRecordsPage() {
 
   const sessions = useMemo(() => {
     if (!rawRecords) return [];
+    
     const grouped = rawRecords.reduce((acc: any, record) => {
       if (!acc[record.meetingId]) {
         acc[record.meetingId] = {
@@ -64,9 +66,16 @@ export default function AttendanceRecordsPage() {
       return acc;
     }, {});
     
-    return Object.values(grouped).filter((s: any) => 
-      s.name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    // Sort sessions by date (descending) and filter by search query
+    return Object.values(grouped)
+      .sort((a: any, b: any) => {
+        const dateA = a.date?.seconds || 0;
+        const dateB = b.date?.seconds || 0;
+        return dateB - dateA;
+      })
+      .filter((s: any) => 
+        s.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
   }, [rawRecords, searchQuery]);
 
   const selectedSession = useMemo(() => {

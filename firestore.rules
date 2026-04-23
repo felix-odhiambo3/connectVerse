@@ -53,11 +53,12 @@ service cloud.firestore {
     }
 
     match /seriesAttendance/{recordId} {
-      // Split read and write for clarity and ensure query optimization.
-      // hostId must match for both single document gets and collection queries.
-      allow read: if isSignedIn() && resource.data.hostId == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
+      // Simplified read/write rules to ensure query optimization works correctly.
+      // We check if the document's hostId matches the authenticated user.
+      allow read, write: if isSignedIn() && (
+        (resource != null && resource.data.hostId == request.auth.uid) ||
+        (resource == null && request.resource.data.hostId == request.auth.uid)
+      );
     }
   }
 }
