@@ -368,7 +368,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* Final CTA */}
+        {/* Final CTA Section */}
         <section className="w-full py-24 bg-primary relative overflow-hidden">
           <div className="absolute top-0 right-0 w-96 h-96 bg-accent/20 rounded-full blur-[100px]" />
           <div className="absolute bottom-0 left-0 w-96 h-96 bg-white/10 rounded-full blur-[100px]" />
