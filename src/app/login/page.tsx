@@ -1,28 +1,30 @@
+
 'use client';
 
 import {
-  createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
 } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
-import { useAuth, useFirestore } from '@/firebase';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuth } from '@/firebase';
 import AuthForm from '@/components/auth/AuthForm';
 import { useToast } from '@/hooks/use-toast';
 import Link from 'next/link';
 import { Video } from 'lucide-react';
+import { Suspense } from 'react';
 
-export default function LoginPage() {
+function LoginContent() {
   const auth = useAuth();
-  const firestore = useFirestore();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
+
+  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
 
   const handleLogin = async ({ email, password }) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
       toast({ title: 'Login successful!' });
-      router.push('/dashboard');
+      router.push(callbackUrl);
     } catch (error: any) {
       toast({
         variant: 'destructive',
@@ -69,7 +71,7 @@ export default function LoginPage() {
           <p className="px-8 text-center text-sm text-zinc-500 font-medium">
             Don't have an account?{' '}
             <Link
-              href="/register"
+              href={callbackUrl ? `/register?callbackUrl=${callbackUrl}` : "/register"}
               className="underline underline-offset-4 font-bold text-zinc-900"
             >
               Sign up
@@ -80,3 +82,12 @@ export default function LoginPage() {
     </div>
   );
 }
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="h-screen flex items-center justify-center">Loading...</div>}>
+      <LoginContent />
+    </Suspense>
+  );
+}
+

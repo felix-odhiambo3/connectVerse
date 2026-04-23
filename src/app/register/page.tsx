@@ -1,21 +1,26 @@
+
 'use client';
 
 import {
   createUserWithEmailAndPassword,
 } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, useFirestore } from '@/firebase';
 import AuthForm from '@/components/auth/AuthForm';
 import { useToast } from '@/hooks/use-toast';
 import Link from 'next/link';
 import { Video } from 'lucide-react';
+import { Suspense } from 'react';
 
-export default function RegisterPage() {
+function RegisterContent() {
   const auth = useAuth();
   const firestore = useFirestore();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
+
+  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
 
   const handleSignUp = async ({ email, password, username }) => {
     if (!username) {
@@ -34,7 +39,6 @@ export default function RegisterPage() {
       const user = userCredential.user;
       
       const userRef = doc(firestore, 'users', user.uid);
-      // Not using non-blocking update here to ensure user doc is created before redirect
       await setDoc(userRef, {
         id: user.uid,
         email: user.email,
@@ -43,7 +47,7 @@ export default function RegisterPage() {
         updatedAt: new Date().toISOString(),
       });
       toast({ title: 'Account created successfully!' });
-      router.push('/dashboard');
+      router.push(callbackUrl);
     } catch (error: any) {
        toast({
           variant: 'destructive',
@@ -99,7 +103,7 @@ export default function RegisterPage() {
           <p className="px-8 text-center text-sm text-muted-foreground">
             Already have an account?{' '}
             <Link
-              href="/login"
+              href={callbackUrl ? `/login?callbackUrl=${callbackUrl}` : "/login"}
               className="underline underline-offset-4 hover:text-primary"
             >
               Login
@@ -108,5 +112,13 @@ export default function RegisterPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="h-screen flex items-center justify-center">Loading...</div>}>
+      <RegisterContent />
+    </Suspense>
   );
 }
