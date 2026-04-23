@@ -435,8 +435,8 @@ export default function LandingPage() {
                    <Smartphone className="h-6 w-6 text-white" />
                 </div>
                 <div>
-                   <h2 className="text-2xl font-black tracking-tight">Pay with M-Pesa</h2>
-                   <p className="text-white/70 font-medium text-sm">Securely upgrade to {selectedPlan?.name}</p>
+                   <DialogTitle className="text-2xl font-black tracking-tight text-white">Pay with M-Pesa</DialogTitle>
+                   <DialogDescription className="text-white/70 font-medium text-sm">Securely upgrade to {selectedPlan?.name}</DialogDescription>
                 </div>
              </div>
           </div>
@@ -544,4 +544,3 @@ export default function LandingPage() {
     </div>
   );
 }
-

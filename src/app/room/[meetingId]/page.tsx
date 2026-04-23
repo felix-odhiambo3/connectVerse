@@ -1280,7 +1280,7 @@ export default function RoomPage() {
             <MessageSquare className="h-3.5 w-3.5 md:h-4 md:w-4 mr-2 md:mr-3" /> Chat
           </TabsTrigger>
           <TabsTrigger value="participants" className="rounded-lg md:rounded-xl font-black text-[10px] md:text-[11px] uppercase tracking-widest">
-            <Users className="h-3.5 w-3.5 md:h-4 md:w-4 mr-2 md:mr-3" /> People
+            <Users className="h-3.5 w-3.5 md:h-4 w-4 mr-2 md:mr-3" /> People
           </TabsTrigger>
         </TabsList>
       </div>
@@ -1522,7 +1522,9 @@ export default function RoomPage() {
                       <Button variant="secondary" size="icon" className="rounded-xl h-10 w-10 bg-zinc-50"><MessageSquare className="h-5 w-5 text-zinc-700" /></Button>
                     </SheetTrigger>
                     <SheetContent side="bottom" className="h-[80vh] rounded-t-[2.5rem] p-0 overflow-hidden">
-                       <SheetHeader className="sr-only"><SheetTitle>Meeting Interaction</SheetTitle></SheetHeader>
+                       <SheetHeader className="sr-only">
+                         <SheetTitle>Meeting Interaction</SheetTitle>
+                       </SheetHeader>
                        <SidebarContent />
                     </SheetContent>
                  </Sheet>
