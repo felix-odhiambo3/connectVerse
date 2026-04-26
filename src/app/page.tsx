@@ -23,7 +23,9 @@ import {
   Loader2,
   CheckCircle,
   Smartphone,
-  BookOpen
+  BookOpen,
+  Mail,
+  Phone
 } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -87,7 +89,6 @@ export default function LandingPage() {
     setPaymentStep('processing');
 
     try {
-      // Step 1: Initiate STK Push
       const response = await fetch('/api/mpesa/stkpush', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -98,7 +99,6 @@ export default function LandingPage() {
         })
       });
 
-      // Step 2: Poll for status
       let attempts = 0;
       const checkStatus = setInterval(async () => {
         attempts++;
@@ -159,7 +159,6 @@ export default function LandingPage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FDFDFF] selection:bg-accent/30">
-      {/* Navigation */}
       <header className={cn(
         "fixed top-0 left-0 right-0 h-20 flex items-center px-4 lg:px-12 z-[100] transition-all duration-300",
         isScrolled ? "bg-white/70 backdrop-blur-xl border-b shadow-sm" : "bg-transparent"
@@ -191,7 +190,6 @@ export default function LandingPage() {
       </header>
 
       <main className="flex-1">
-        {/* Hero Section */}
         <section className="relative w-full min-h-screen flex items-center pt-20 overflow-hidden">
           <div className="absolute top-0 right-0 -translate-y-1/2 translate-x-1/4 w-[800px] h-[800px] bg-accent/20 rounded-full blur-[120px] animate-pulse pointer-events-none" />
           <div className="absolute bottom-0 left-0 translate-y-1/2 -translate-x-1/4 w-[800px] h-[800px] bg-primary/10 rounded-full blur-[120px] animate-pulse pointer-events-none" />
@@ -222,7 +220,6 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* Problem Section */}
         <section className="w-full py-32 bg-zinc-900 text-white relative overflow-hidden">
           <div className="container px-4 md:px-6 relative z-10">
             <div className="grid lg:grid-cols-2 gap-20 items-center">
@@ -280,7 +277,6 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* Solution Section */}
         <section id="features" className="w-full py-40 bg-[#FDFDFF] relative">
           <div className="container px-4 md:px-6">
             <div className="text-center space-y-6 mb-24 max-w-3xl mx-auto">
@@ -331,7 +327,6 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* Pricing Section */}
         <section id="pricing" className="w-full py-40 bg-white">
           <div className="container px-4 md:px-6">
             <div className="text-center space-y-6 mb-24">
@@ -406,7 +401,6 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* Final CTA Section */}
         <section className="w-full py-40 bg-primary relative overflow-hidden text-white">
           <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-accent/30 rounded-full blur-[120px] animate-pulse" />
           <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-white/10 rounded-full blur-[120px] animate-pulse" />
@@ -427,7 +421,6 @@ export default function LandingPage() {
         </section>
       </main>
 
-      {/* M-Pesa Payment Modal */}
       <Dialog open={showPaymentModal} onOpenChange={setShowPaymentModal}>
         <DialogContent className="sm:max-w-[450px] rounded-[2.5rem] border-none shadow-2xl p-0 overflow-hidden">
           <div className="bg-primary p-8 md:p-10 text-white relative overflow-hidden">
@@ -501,7 +494,6 @@ export default function LandingPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Footer */}
       <footer className="w-full py-20 px-4 md:px-12 bg-white border-t">
         <div className="container flex flex-col md:flex-row justify-between items-start gap-16">
           <div className="space-y-6 max-w-sm">
@@ -522,6 +514,14 @@ export default function LandingPage() {
                    <li><Link href="#features" className="hover:text-primary transition-colors">Features</Link></li>
                    <li><Link href="#pricing" className="hover:text-primary transition-colors">Pricing</Link></li>
                    <li><Link href="/manual" className="hover:text-primary transition-colors">User Manual</Link></li>
+                </ul>
+             </div>
+             <div className="space-y-6">
+                <h4 className="font-black text-xs uppercase tracking-[0.2em] text-zinc-900">Contact</h4>
+                <ul className="space-y-4 text-sm font-bold text-zinc-500">
+                   <li><Link href="https://wa.me/254748809701" className="hover:text-primary transition-colors flex items-center gap-2"><Smartphone className="h-3.5 w-3.5" /> WhatsApp</Link></li>
+                   <li><Link href="tel:+254748809701" className="hover:text-primary transition-colors flex items-center gap-2"><Phone className="h-3.5 w-3.5" /> Call Us</Link></li>
+                   <li><Link href="mailto:odhiambo3gfelix@gmail.com" className="hover:text-primary transition-colors flex items-center gap-2"><Mail className="h-3.5 w-3.5" /> Email Support</Link></li>
                 </ul>
              </div>
              <div className="space-y-6">

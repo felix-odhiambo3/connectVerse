@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ChevronLeft, BookOpen, Video, Users, BarChart3, ShieldCheck, Zap, Smartphone, ArrowRight } from 'lucide-react';
+import { ChevronLeft, BookOpen, Video, Users, BarChart3, ShieldCheck, Zap, Smartphone, ArrowRight, Mail, Phone, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -101,15 +101,47 @@ export default function ManualPage() {
           </Card>
         </div>
 
-        <section className="text-center py-12 space-y-8">
-          <h3 className="text-3xl font-black tracking-tighter">Ready to start tracking?</h3>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button asChild size="lg" className="h-16 px-12 rounded-2xl font-black uppercase tracking-widest text-[11px] shadow-2xl shadow-primary/40">
-              <Link href="/dashboard">Go to Dashboard <ArrowRight className="ml-2 h-4 w-4" /></Link>
-            </Button>
-            <Button asChild variant="outline" size="lg" className="h-16 px-12 rounded-2xl font-black uppercase tracking-widest text-[11px]">
-              <Link href="https://wa.me/254748809701">Contact Support</Link>
-            </Button>
+        <section className="bg-white rounded-[3rem] p-8 md:p-16 shadow-2xl border border-zinc-100">
+          <div className="text-center space-y-12">
+            <div className="space-y-4">
+              <h3 className="text-3xl font-black tracking-tighter">Still need help?</h3>
+              <p className="text-zinc-500 font-medium">Reach out to our support team directly via any of these channels.</p>
+            </div>
+            
+            <div className="grid sm:grid-cols-3 gap-6">
+              <Button asChild variant="outline" className="h-20 rounded-2xl border-2 hover:bg-green-50 hover:border-green-200 group transition-all">
+                <Link href="https://wa.me/254748809701">
+                  <div className="flex flex-col items-center gap-1">
+                    <MessageSquare className="h-5 w-5 text-green-500 group-hover:scale-110 transition-transform" />
+                    <span className="font-black text-[10px] uppercase tracking-widest">WhatsApp</span>
+                  </div>
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="h-20 rounded-2xl border-2 hover:bg-blue-50 hover:border-blue-200 group transition-all">
+                <Link href="tel:+254748809701">
+                  <div className="flex flex-col items-center gap-1">
+                    <Phone className="h-5 w-5 text-blue-500 group-hover:scale-110 transition-transform" />
+                    <span className="font-black text-[10px] uppercase tracking-widest">Call Now</span>
+                  </div>
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="h-20 rounded-2xl border-2 hover:bg-primary/5 hover:border-primary/20 group transition-all">
+                <Link href="mailto:odhiambo3gfelix@gmail.com">
+                  <div className="flex flex-col items-center gap-1">
+                    <Mail className="h-5 w-5 text-primary group-hover:scale-110 transition-transform" />
+                    <span className="font-black text-[10px] uppercase tracking-widest">Email Us</span>
+                  </div>
+                </Link>
+              </Button>
+            </div>
+
+            <Separator />
+
+            <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
+              <Button asChild size="lg" className="h-16 px-12 rounded-2xl font-black uppercase tracking-widest text-[11px] shadow-2xl shadow-primary/40">
+                <Link href="/dashboard">Go to Dashboard <ArrowRight className="ml-2 h-4 w-4" /></Link>
+              </Button>
+            </div>
           </div>
         </section>
       </main>
