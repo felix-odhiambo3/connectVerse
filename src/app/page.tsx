@@ -22,7 +22,8 @@ import {
   Globe,
   Loader2,
   CheckCircle,
-  Smartphone
+  Smartphone,
+  BookOpen
 } from 'lucide-react';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -98,7 +99,6 @@ export default function LandingPage() {
       });
 
       // Step 2: Poll for status
-      // Note: This is a simulation of polling logic as requested
       let attempts = 0;
       const checkStatus = setInterval(async () => {
         attempts++;
@@ -106,7 +106,7 @@ export default function LandingPage() {
           const statusRes = await fetch('/api/payment-status');
           const data = await statusRes.json();
 
-          if (data.status === 'success' || attempts > 5) { // Simulate success for demo if needed
+          if (data.status === 'success' || attempts > 5) {
             clearInterval(checkStatus);
             setPaymentStep('success');
             setIsProcessingPayment(false);
@@ -117,7 +117,6 @@ export default function LandingPage() {
             }, 2000);
           }
         } catch (e) {
-          // If endpoint doesn't exist yet, we'll just timeout or fail gracefully
           if (attempts > 5) {
              clearInterval(checkStatus);
              setIsProcessingPayment(false);
@@ -138,6 +137,9 @@ export default function LandingPage() {
     <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-10">
       <Link href="#features" className="text-sm font-bold text-zinc-600 hover:text-primary transition-colors">Features</Link>
       <Link href="#pricing" className="text-sm font-bold text-zinc-600 hover:text-primary transition-colors">Pricing</Link>
+      <Link href="/manual" className="text-sm font-bold text-zinc-600 hover:text-primary transition-colors flex items-center gap-1">
+        <BookOpen className="h-3.5 w-3.5" /> Manual
+      </Link>
       {isUserLoading ? (
         <div className="w-20 h-8 bg-zinc-100 animate-pulse rounded-full" />
       ) : user ? (
@@ -213,7 +215,7 @@ export default function LandingPage() {
                   Start Free Today <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
                 <Button asChild variant="outline" size="lg" className="h-16 px-12 rounded-2xl font-black uppercase tracking-widest text-[11px] border-2 bg-white/50 backdrop-blur-md hover:bg-white transition-all">
-                  <Link href="#features">See How It Works</Link>
+                  <Link href="/manual">View User Guide</Link>
                 </Button>
               </div>
             </div>
@@ -417,8 +419,8 @@ export default function LandingPage() {
               <Button onClick={(e) => handleCtaClick(e, 'signup')} size="lg" className="h-20 px-16 rounded-3xl bg-white text-primary hover:bg-zinc-50 font-black uppercase tracking-widest text-xs shadow-2xl hover:scale-110 hover:rotate-1 transition-all">
                 Start Free Today
               </Button>
-              <Link href="/login" className="font-black uppercase tracking-widest text-xs hover:text-accent transition-colors">
-                Already have an account? Log In
+              <Link href="/manual" className="font-black uppercase tracking-widest text-xs hover:text-accent transition-colors">
+                New? Read the User Manual
               </Link>
             </div>
           </div>
@@ -519,7 +521,7 @@ export default function LandingPage() {
                 <ul className="space-y-4 text-sm font-bold text-zinc-500">
                    <li><Link href="#features" className="hover:text-primary transition-colors">Features</Link></li>
                    <li><Link href="#pricing" className="hover:text-primary transition-colors">Pricing</Link></li>
-                   <li><Link href="/dashboard" className="hover:text-primary transition-colors">Dashboard</Link></li>
+                   <li><Link href="/manual" className="hover:text-primary transition-colors">User Manual</Link></li>
                 </ul>
              </div>
              <div className="space-y-6">

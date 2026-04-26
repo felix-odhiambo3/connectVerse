@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat, Copy, BarChart3 } from 'lucide-react';
+import { LogOut, Plus, Video, Calendar as CalendarIcon, Trash2, ArrowRight, Repeat, Copy, BarChart3, BookOpen } from 'lucide-react';
 import Link from 'next/link';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
@@ -204,7 +204,12 @@ export default function DashboardPage() {
             </div>
             <span className="font-black text-lg md:text-xl tracking-tighter">ConnectVerse</span>
           </Link>
-          <div className="ml-auto flex items-center gap-4">
+          <div className="ml-auto flex items-center gap-2 md:gap-4">
+            <Button asChild variant="ghost" size="sm" className="hidden sm:flex rounded-full font-bold text-xs">
+              <Link href="/manual">
+                <BookOpen className="h-4 w-4 mr-2" /> Manual
+              </Link>
+            </Button>
             <Button variant="ghost" size="icon" onClick={() => auth?.signOut()} className="rounded-full hover:bg-zinc-100">
               <LogOut className="h-4 w-4" />
             </Button>
@@ -218,11 +223,16 @@ export default function DashboardPage() {
                   <h2 className="text-3xl md:text-4xl font-black tracking-tighter">Welcome back</h2>
                   <p className="text-zinc-500 font-medium text-sm md:text-base">Ready for your next session?</p>
                 </div>
-                <Button asChild variant="secondary" className="h-12 md:h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] md:text-[11px] bg-white shadow-xl shadow-zinc-200/50">
-                  <Link href="/attendance">
-                    <BarChart3 className="mr-2 h-4 w-4" /> Attendance Records
-                  </Link>
-                </Button>
+                <div className="flex flex-wrap gap-3">
+                  <Button asChild variant="ghost" className="sm:hidden h-10 rounded-xl font-black uppercase tracking-widest text-[10px] bg-white">
+                    <Link href="/manual"><BookOpen className="h-3.5 w-3.5 mr-2" /> Help</Link>
+                  </Button>
+                  <Button asChild variant="secondary" className="h-12 md:h-14 rounded-2xl font-black uppercase tracking-widest text-[10px] md:text-[11px] bg-white shadow-xl shadow-zinc-200/50">
+                    <Link href="/attendance">
+                      <BarChart3 className="mr-2 h-4 w-4" /> Attendance Records
+                    </Link>
+                  </Button>
+                </div>
               </div>
               
               <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
