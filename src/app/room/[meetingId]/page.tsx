@@ -808,6 +808,14 @@ export default function RoomPage() {
 
   const startScreenShare = async () => {
     if (!user || !firestore || screenSharerId) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      toast({ 
+        variant: 'destructive', 
+        title: 'Not Supported', 
+        description: 'Screen sharing is not supported on this browser or device. Please use a desktop browser like Chrome or Edge.' 
+      });
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
       localScreenStream.current = stream;
@@ -1501,12 +1509,8 @@ export default function RoomPage() {
                 </PopoverContent>
                </Popover>
 
-               {!isMobile && (
-                 <>
-                   <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-5 w-5 md:h-8 md:w-8" /></Button>
-                   <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-5 w-5 md:h-8 md:w-8" /> : <ScreenShare className="h-5 w-5 md:h-8 md:w-8" />}</Button>
-                 </>
-               )}
+               <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-5 w-5 md:h-8 md:w-8" /></Button>
+               <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-5 w-5 md:h-8 md:w-8" /> : <ScreenShare className="h-5 w-5 md:h-8 md:w-8" />}</Button>
 
                <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised, raisedAt: !hasHandRaised ? Timestamp.now() : null }); }} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-5 w-5 md:h-8 md:w-8" /></Button>
                
@@ -1552,7 +1556,6 @@ export default function RoomPage() {
                        </div>
                        {isMobile && (
                          <div className="pt-4 space-y-3">
-                           <Button variant={isCaptionsEnabled ? "default" : "outline"} onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className="w-full h-10 rounded-xl font-black text-[9px] uppercase tracking-widest"><Captions className="h-3.5 w-3.5 mr-2" /> Captions</Button>
                            {isHost && (
                              <Button onClick={toggleMeetingLock} variant={isMeetingLocked ? "destructive" : "outline"} className="w-full h-10 rounded-xl font-black text-[9px] uppercase tracking-widest"><ShieldCheck className="h-3.5 w-3.5 mr-2" /> {isMeetingLocked ? 'Unlock' : 'Lock'}</Button>
                            )}
