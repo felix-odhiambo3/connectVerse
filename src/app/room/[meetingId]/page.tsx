@@ -413,7 +413,13 @@ export default function RoomPage() {
     if (participants) {
       currentParticipantsRef.current = participants;
       const me = participants.find(p => p.id === user?.uid);
-      if (me) localRoleRef.current = me.role;
+      if (me) {
+        localRoleRef.current = me.role;
+        // Keep local state synced with remote for consistency, but local state handles instant UI transition
+        setHasHandRaised(!!me.hasRaisedHand);
+        setIsAudioMuted(!!me.isMuted);
+        setIsVideoOff(!!me.isVideoOff);
+      }
       
       if (pinnedParticipantId && !participants.some(p => p.id === pinnedParticipantId && p.role !== 'left')) {
         setPinnedParticipantId(null);
@@ -594,7 +600,7 @@ export default function RoomPage() {
       cameraStreamId: localCameraStream.current?.id || null,
       screenStreamId: localScreenStream.current?.id || null,
       accumulatedSeconds: accumulatedSeconds,
-      lastJoinTime: (isInitial || (!isInitial && updates.role !== 'left')) ? Timestamp.now() : null,
+      lastJoinTime: (isInitial || (!isInitial && updates.role !== 'left')) ? (existingData?.lastJoinTime || Timestamp.now()) : null,
     };
     if (isInitial) {
       data.joinedAt = serverTimestamp();
@@ -609,8 +615,15 @@ export default function RoomPage() {
       screenStreamId: data.screenStreamId
     });
 
+    // Check if this is an explicit state update (hand raised, muted, etc) vs just a periodic sync
+    const isStateUpdate = updates.hasRaisedHand !== undefined || 
+                          updates.isMuted !== undefined || 
+                          updates.isVideoOff !== undefined ||
+                          updates.role !== undefined;
+
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
-    if (!isInitial && timeSinceLastUpdate < 25000 && !updates.role) return; 
+    // Throttling: Only bypass throttle if it's a state change or if enough time has passed
+    if (!isInitial && !isStateUpdate && timeSinceLastUpdate < 25000) return; 
 
     lastPresenceRef.current = presenceHash;
     lastPresenceUpdateAt.current = now;
@@ -1540,7 +1553,18 @@ export default function RoomPage() {
                <Button variant={isCaptionsEnabled ? "default" : "secondary"} size="icon" onClick={() => setIsCaptionsEnabled(!isCaptionsEnabled)} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isCaptionsEnabled ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}><Captions className="h-5 w-5 md:h-8 md:w-8" /></Button>
                <Button variant={isSharingScreen ? "default" : "secondary"} size="icon" onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", isSharingScreen ? "bg-primary text-white" : "bg-zinc-50 text-zinc-700")}>{isSharingScreen ? <StopCircle className="h-5 w-5 md:h-8 md:w-8" /> : <ScreenShare className="h-5 w-5 md:h-8 md:w-8" />}</Button>
 
-               <Button variant={hasHandRaised ? "default" : "secondary"} size="icon" onClick={() => { setHasHandRaised(!hasHandRaised); syncPresence({ hasRaisedHand: !hasHandRaised, raisedAt: !hasHandRaised ? Timestamp.now() : null }); }} className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}><Hand className="h-5 w-5 md:h-8 md:w-8" /></Button>
+               <Button 
+                variant={hasHandRaised ? "default" : "secondary"} 
+                size="icon" 
+                onClick={() => { 
+                  const newState = !hasHandRaised;
+                  setHasHandRaised(newState); 
+                  syncPresence({ hasRaisedHand: newState, raisedAt: newState ? Timestamp.now() : null }); 
+                }} 
+                className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}
+               >
+                 <Hand className="h-5 w-5 md:h-8 md:w-8" />
+               </Button>
                
                <div className="hidden md:block">
                  <Button variant="secondary" size="icon" onClick={toggleFullscreen} className="rounded-2xl h-16 w-16 bg-zinc-50 transition-all">
@@ -1606,4 +1630,3 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
-
