@@ -60,7 +60,8 @@ import {
   ChevronLeft,
   CheckCircle2,
   XCircle,
-  Repeat
+  Repeat,
+  Volume2
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from "@/lib/utils";
@@ -132,6 +133,52 @@ function formatDuration(seconds: number) {
   const s = Math.floor(seconds % 60);
   return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
 }
+
+/**
+ * Audio feedback sound generator using Web Audio API
+ */
+const playAudioFeedback = (type: 'join' | 'leave' | 'handRaise') => {
+  try {
+    const context = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = context.createOscillator();
+    const gain = context.createGain();
+    
+    osc.connect(gain);
+    gain.connect(context.destination);
+    
+    const now = context.currentTime;
+    
+    if (type === 'join') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.exponentialRampToValueAtTime(880, now + 0.2);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+      gain.gain.linearRampToValueAtTime(0, now + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } else if (type === 'leave') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.exponentialRampToValueAtTime(440, now + 0.2);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+      gain.gain.linearRampToValueAtTime(0, now + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } else if (type === 'handRaise') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, now);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    }
+  } catch (e) {
+    console.warn("Audio feedback failed", e);
+  }
+};
 
 function useAudioLevel(stream: MediaStream | null) {
   const [level, setLevel] = useState(0);
@@ -230,6 +277,8 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
   className?: string
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioLevel = useAudioLevel(isMuted ? null : stream);
+  const isSpeaking = audioLevel > 20;
 
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -240,7 +289,8 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
   return (
     <div className={cn(
       "relative w-full h-full bg-[#1A1A1A] rounded-2xl md:rounded-[4rem] overflow-hidden border-4 transition-all duration-500 group",
-      isRaised ? "border-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.3)]" : "border-white/5 shadow-2xl",
+      isSpeaking ? "border-primary/60 shadow-[0_0_40px_rgba(63,81,181,0.2)]" : "border-white/5",
+      isRaised && "border-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.3)]",
       className
     )}>
       <video
@@ -251,18 +301,28 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
         className={cn(
           "w-full h-full transition-all duration-700",
           isPresenting ? "object-contain" : "object-cover",
-          (isVideoOff && !isPresenting) ? "opacity-0" : "opacity-100"
+          (isVideoOff && !isPresenting) ? "opacity-0" : "opacity-100",
+          isSpeaking && !isPresenting && "scale-[1.02]"
         )}
       />
       {(isVideoOff && !isPresenting) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0F0F0F] z-10 p-4 text-center">
-           <div className="bg-primary/10 p-4 md:p-6 rounded-[2rem] md:rounded-[3rem] mb-4 md:mb-6 animate-pulse">
-              <VideoIcon className="h-8 w-8 md:h-12 md:w-12 text-primary shadow-[0_0_20px_rgba(79,70,229,0.3)]" />
+           <div className={cn(
+             "bg-primary/10 p-4 md:p-6 rounded-[2rem] md:rounded-[3rem] mb-4 md:mb-6 transition-all duration-500",
+             isSpeaking ? "scale-110 bg-primary/20" : "animate-pulse"
+           )}>
+              <VideoIcon className={cn(
+                "h-8 w-8 md:h-12 md:w-12 text-primary shadow-[0_0_20px_rgba(79,70,229,0.3)]",
+                isSpeaking && "text-accent"
+              )} />
            </div>
            <h2 className="text-2xl md:text-4xl lg:text-5xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
-              ConnectVerse
+              {isSpeaking ? "Speaking..." : "ConnectVerse"}
            </h2>
-           <div className="mt-4 h-1 w-12 md:w-20 bg-gradient-to-r from-primary to-accent rounded-full opacity-30" />
+           <div className={cn(
+             "mt-4 h-1 w-12 md:w-20 bg-gradient-to-r from-primary to-accent rounded-full opacity-30 transition-all duration-500",
+             isSpeaking ? "w-32 md:w-48 opacity-100" : ""
+           )} />
         </div>
       )}
       
@@ -288,9 +348,13 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
       </div>
 
       <div className="absolute bottom-3 left-3 md:bottom-6 md:left-6 flex items-center gap-2 md:gap-3 z-20">
-        <Badge variant="secondary" className="bg-black/60 text-white backdrop-blur-2xl border-white/10 px-2 md:px-4 py-1 md:py-2 font-black text-[8px] md:text-[11px] uppercase tracking-widest rounded-lg md:rounded-xl shadow-xl flex items-center gap-1.5 md:gap-2">
+        <Badge variant="secondary" className={cn(
+          "bg-black/60 text-white backdrop-blur-2xl border-white/10 px-2 md:px-4 py-1 md:py-2 font-black text-[8px] md:text-[11px] uppercase tracking-widest rounded-lg md:rounded-xl shadow-xl flex items-center gap-1.5 md:gap-2 transition-all",
+          isSpeaking && "bg-primary/80 border-primary/20"
+        )}>
           {isPresenting && <Monitor className="h-3 w-3 md:h-3.5 md:w-3.5 text-primary" />}
           {isPinned && <Pin className="h-3 w-3 md:h-3.5 md:w-3.5 text-primary fill-primary" />}
+          {isSpeaking && <Volume2 className="h-3 w-3 md:h-3.5 md:w-3.5 text-accent animate-pulse" />}
           <AudioLevelIndicator stream={stream} isMuted={!!isMuted} />
           <span className="truncate max-w-[80px] md:max-w-none">{name} {isMe && "(You)"}</span>
         </Badge>
@@ -355,6 +419,7 @@ export default function RoomPage() {
   const initialPresenceSynced = useRef(false);
   const localRoleRef = useRef<Participant['role'] | null>(null);
   const prevRaisedHandsRef = useRef<Set<string>>(new Set());
+  const prevParticipantsRef = useRef<Participant[]>([]);
   
   const meetingRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
@@ -386,30 +451,34 @@ export default function RoomPage() {
     }
   }, [meetingData?.name]);
 
+  // Handle participant join/leave/hand-raise audio feedback
   useEffect(() => {
     if (!participants) return;
+
+    // Detect new participants
+    participants.forEach(p => {
+      if (p.role !== 'left' && p.id !== user?.uid && !prevParticipantsRef.current.some(prev => prev.id === p.id)) {
+        playAudioFeedback('join');
+      }
+    });
+
+    // Detect left participants
+    prevParticipantsRef.current.forEach(prev => {
+      if (prev.id !== user?.uid && !participants.some(p => p.id === prev.id && p.role !== 'left')) {
+        playAudioFeedback('leave');
+      }
+    });
+
+    // Detect hand raises
     const currentRaised = new Set(participants.filter(p => p.hasRaisedHand).map(p => p.id));
-    
     currentRaised.forEach(id => {
       if (!prevRaisedHandsRef.current.has(id) && id !== user?.uid) {
-        try {
-          const context = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const osc = context.createOscillator();
-          const gain = context.createGain();
-          osc.connect(gain);
-          gain.connect(context.destination);
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(523.25, context.currentTime); 
-          gain.gain.setValueAtTime(0, context.currentTime);
-          gain.gain.linearRampToValueAtTime(0.1, context.currentTime + 0.05);
-          gain.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
-          osc.start(context.currentTime);
-          osc.stop(context.currentTime + 0.3);
-        } catch (e) { console.warn("Audio feedback failed", e); }
+        playAudioFeedback('handRaise');
       }
     });
     
     prevRaisedHandsRef.current = currentRaised;
+    prevParticipantsRef.current = participants;
   }, [participants, user?.uid]);
 
   useEffect(() => {
@@ -418,8 +487,6 @@ export default function RoomPage() {
       const me = participants.find(p => p.id === user?.uid);
       if (me) {
         localRoleRef.current = me.role;
-        // Optimization: Keep local UI states synced with incoming Firestore changes if they are changed remotely
-        // But local state still prioritizes the user's immediate action.
         setHasHandRaised(!!me.hasRaisedHand);
         setIsAudioMuted(!!me.isMuted);
         setIsVideoOff(!!me.isVideoOff);
@@ -550,7 +617,14 @@ export default function RoomPage() {
         if (audios.length > 0) setSelectedAudioInput(audios[0].deviceId);
         if (videos.length > 0) setSelectedVideoInput(videos[0].deviceId);
 
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: true, 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } 
+        });
         setHasCameraPermission(true);
         setHasMicPermission(true);
         stream.getTracks().forEach(t => t.stop());
@@ -619,7 +693,6 @@ export default function RoomPage() {
       screenStreamId: data.screenStreamId
     });
 
-    // Check if this is an explicit state update (hand raised, muted, etc) vs just a periodic sync
     const isStateUpdate = updates.hasRaisedHand !== undefined || 
                           updates.isMuted !== undefined || 
                           updates.isVideoOff !== undefined ||
@@ -627,7 +700,6 @@ export default function RoomPage() {
 
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
     
-    // Throttling: Only bypass throttle if it's a state change or if enough time has passed
     if (!isInitial && !isStateUpdate && timeSinceLastUpdate < 25000) return; 
 
     lastPresenceRef.current = presenceHash;
@@ -741,6 +813,10 @@ export default function RoomPage() {
       if (stream) {
         const senders = stream.getTracks().map(t => {
           if (type === 'screen') t.contentHint = 'detail';
+          // Prioritize audio for network resilience
+          if (t.kind === 'audio') {
+            t.enabled = true;
+          }
           return pc.addTrack(t, stream);
         });
         if (type === 'camera') cameraSenders.current.set(id, senders);
@@ -756,12 +832,11 @@ export default function RoomPage() {
     if (isProcessing || !user) return;
     setIsProcessing(true);
     
-    // Optimistic UI update
     const nextVideoState = !isVideoOff;
     setIsVideoOff(nextVideoState);
 
     try {
-      if (!nextVideoState) { // Turning ON video
+      if (!nextVideoState) {
         let stream;
         try {
           stream = await navigator.mediaDevices.getUserMedia({ 
@@ -779,27 +854,36 @@ export default function RoomPage() {
             } 
           });
         } catch (err: any) {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          stream = await navigator.mediaDevices.getUserMedia({ 
+            video: true, 
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            } 
+          });
         }
 
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = stream;
         
-        // Immediate sync to bypass throttle
         syncPresence({ isVideoOff: false });
         updateTracksForPeers(stream, 'camera');
         setHasCameraPermission(true);
-      } else { // Turning OFF video
-        localCameraStream.current?.getTracks().forEach(t => t.stop());
-        localCameraStream.current = null;
+      } else {
+        localCameraStream.current?.getVideoTracks().forEach(t => t.stop());
+        if (!isAudioMuted && localCameraStream.current?.getAudioTracks().length) {
+          // Keep audio track alive if not muted
+        } else {
+          localCameraStream.current?.getTracks().forEach(t => t.stop());
+          localCameraStream.current = null;
+        }
         
-        // Immediate sync to bypass throttle
         syncPresence({ isVideoOff: true });
-        updateTracksForPeers(null, 'camera');
+        updateTracksForPeers(localCameraStream.current, 'camera');
       }
     } catch (err: any) {
-      // Revert state on error
       setIsVideoOff(!nextVideoState);
       if (err.name === 'NotAllowedError') setHasCameraPermission(false);
       else toast({ variant: 'destructive', title: 'Camera Error', description: err.message });
@@ -812,12 +896,11 @@ export default function RoomPage() {
     if (isProcessing) return;
     setIsProcessing(true);
     
-    // Optimistic UI update
     const nextMuteState = !isAudioMuted;
     setIsAudioMuted(nextMuteState);
 
     try {
-      if (!nextMuteState && !localCameraStream.current) { // Unmuting when stream is missing
+      if (!nextMuteState && !localCameraStream.current) {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ 
             audio: { 
@@ -832,20 +915,35 @@ export default function RoomPage() {
           updateTracksForPeers(stream, 'camera');
           setHasMicPermission(true);
         } catch (err: any) {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }, 
+            video: !isVideoOff 
+          });
           localCameraStream.current = stream;
           updateTracksForPeers(stream, 'camera');
         }
       }
       
       if (localCameraStream.current) {
-        localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !nextMuteState);
+        localCameraStream.current.getAudioTracks().forEach(t => {
+          t.enabled = !nextMuteState;
+          // Apply Google Meet-like constraints on un-mute
+          if (!nextMuteState) {
+            t.applyConstraints({
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }).catch(console.warn);
+          }
+        });
       }
       
-      // Immediate sync to bypass throttle
       syncPresence({ isMuted: nextMuteState });
     } catch (err: any) {
-      // Revert state on error
       setIsAudioMuted(!nextMuteState);
       if (err.name === 'NotAllowedError') setHasMicPermission(false);
       else toast({ variant: 'destructive', title: 'Mic Error', description: err.message });
@@ -1413,11 +1511,21 @@ export default function RoomPage() {
               <span className="text-[10px] md:text-[11px] font-black uppercase tracking-widest text-zinc-400 px-3 md:px-4">In Meeting ({activeParticipants.length})</span>
               {activeParticipants.map(p => {
                 const status = getAttendanceStatus(p);
+                const isRemoteSpeaking = (p.id === user?.uid ? useAudioLevel(localCameraStream.current) : useAudioLevel(remoteCameraStreams.get(p.id) || null)) > 20;
+                
                 return (
-                  <div key={p.id} className={cn("flex flex-col gap-2 p-4 md:p-5 bg-zinc-50 rounded-2xl md:rounded-3xl border transition-all", p.hasRaisedHand ? "border-yellow-400 bg-yellow-50/50 shadow-[0_0_15px_rgba(250,204,21,0.2)]" : "border-zinc-100 bg-zinc-50 shadow-sm", pinnedParticipantId === p.id && "ring-2 ring-primary ring-inset")}>
+                  <div key={p.id} className={cn(
+                    "flex flex-col gap-2 p-4 md:p-5 rounded-2xl md:rounded-3xl border transition-all duration-300", 
+                    p.hasRaisedHand ? "border-yellow-400 bg-yellow-50/50 shadow-[0_0_15px_rgba(250,204,21,0.2)]" : "border-zinc-100 bg-zinc-50 shadow-sm", 
+                    isRemoteSpeaking && !p.isMuted && "ring-2 ring-primary bg-primary/5",
+                    pinnedParticipantId === p.id && "border-primary"
+                  )}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3 md:gap-4">
-                        <div className="h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-[10px] md:text-[11px] font-black text-zinc-400 ring-1 ring-zinc-100">
+                        <div className={cn(
+                          "h-8 w-8 md:h-10 md:w-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-[10px] md:text-[11px] font-black transition-all",
+                          isRemoteSpeaking ? "scale-110 text-primary" : "text-zinc-400"
+                        )}>
                           {p.hasRaisedHand ? <Hand className="h-4 w-4 text-yellow-500" /> : p.name.substring(0, 2)}
                         </div>
                         <div className="flex flex-col">
@@ -1437,7 +1545,11 @@ export default function RoomPage() {
                         <Button variant="ghost" size="icon" onClick={() => togglePin(p.id)} className={cn("h-7 w-7 md:h-8 w-8 rounded-lg", pinnedParticipantId === p.id ? "text-primary bg-primary/10" : "text-zinc-300 hover:text-primary hover:bg-primary/5")}>
                           {pinnedParticipantId === p.id ? <PinOff className="h-3.5 w-3.5 md:h-4 md:w-4" /> : <Pin className="h-3.5 w-3.5 md:h-4 md:w-4" />}
                         </Button>
-                        {p.isMuted && <MicOff className="h-3.5 w-3.5 md:h-4 md:w-4 text-destructive opacity-40" />}
+                        {p.isMuted ? (
+                          <MicOff className="h-3.5 w-3.5 md:h-4 md:w-4 text-destructive opacity-40" />
+                        ) : (
+                          isRemoteSpeaking && <Volume2 className="h-3.5 w-3.5 md:h-4 md:w-4 text-primary animate-pulse" />
+                        )}
                         {p.hasRaisedHand && <Hand className="h-3.5 w-3.5 md:h-4 md:w-4 text-yellow-500 animate-bounce" />}
                         {isHost && p.id !== user?.uid && (<Button variant="ghost" size="icon" onClick={() => removeParticipant(p.id)} className="h-7 w-7 md:h-8 md:w-8 rounded-lg text-zinc-300 hover:text-destructive"><UserX className="h-3.5 w-3.5" /></Button>)}
                       </div>
@@ -1463,7 +1575,7 @@ export default function RoomPage() {
                 <div>
                   <AlertTitle className="text-red-900 font-black text-[9px] md:text-[11px] uppercase tracking-widest mb-0.5 md:mb-1">Access Blocked</AlertTitle>
                   <AlertDescription className="text-red-700 font-medium text-[10px] md:text-xs">
-                    Please allow camera/mic access in settings.
+                    Please allow camera/mic access in settings to communicate effectively.
                   </AlertDescription>
                 </div>
               </div>
@@ -1579,7 +1691,6 @@ export default function RoomPage() {
                 onClick={() => { 
                   const nextHandState = !hasHandRaised;
                   setHasHandRaised(nextHandState); 
-                  // Immediate sync bypasses the throttle
                   syncPresence({ hasRaisedHand: nextHandState, raisedAt: nextHandState ? Timestamp.now() : null }); 
                 }} 
                 className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}
