@@ -415,7 +415,8 @@ export default function RoomPage() {
       const me = participants.find(p => p.id === user?.uid);
       if (me) {
         localRoleRef.current = me.role;
-        // Keep local state synced with remote for consistency, but local state handles instant UI transition
+        // Optimization: Keep local UI states synced with incoming Firestore changes if they are changed remotely
+        // But local state still prioritizes the user's immediate action.
         setHasHandRaised(!!me.hasRaisedHand);
         setIsAudioMuted(!!me.isMuted);
         setIsVideoOff(!!me.isVideoOff);
@@ -622,6 +623,7 @@ export default function RoomPage() {
                           updates.role !== undefined;
 
     if (!isInitial && presenceHash === lastPresenceRef.current) return;
+    
     // Throttling: Only bypass throttle if it's a state change or if enough time has passed
     if (!isInitial && !isStateUpdate && timeSinceLastUpdate < 25000) return; 
 
@@ -750,8 +752,13 @@ export default function RoomPage() {
   const handleToggleVideo = async () => {
     if (isProcessing || !user) return;
     setIsProcessing(true);
+    
+    // Optimistic UI update
+    const nextVideoState = !isVideoOff;
+    setIsVideoOff(nextVideoState);
+
     try {
-      if (isVideoOff) {
+      if (!nextVideoState) { // Turning ON video
         let stream;
         try {
           stream = await navigator.mediaDevices.getUserMedia({ 
@@ -775,18 +782,22 @@ export default function RoomPage() {
         stream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = stream;
-        await syncPresence({ isVideoOff: false });
+        
+        // Immediate sync to bypass throttle
+        syncPresence({ isVideoOff: false });
         updateTracksForPeers(stream, 'camera');
-        setIsVideoOff(false);
         setHasCameraPermission(true);
-      } else {
+      } else { // Turning OFF video
         localCameraStream.current?.getTracks().forEach(t => t.stop());
         localCameraStream.current = null;
-        await syncPresence({ isVideoOff: true });
+        
+        // Immediate sync to bypass throttle
+        syncPresence({ isVideoOff: true });
         updateTracksForPeers(null, 'camera');
-        setIsVideoOff(true);
       }
     } catch (err: any) {
+      // Revert state on error
+      setIsVideoOff(!nextVideoState);
       if (err.name === 'NotAllowedError') setHasCameraPermission(false);
       else toast({ variant: 'destructive', title: 'Camera Error', description: err.message });
     } finally {
@@ -797,9 +808,13 @@ export default function RoomPage() {
   const handleToggleAudio = async () => {
     if (isProcessing) return;
     setIsProcessing(true);
+    
+    // Optimistic UI update
+    const nextMuteState = !isAudioMuted;
+    setIsAudioMuted(nextMuteState);
+
     try {
-      const newState = !isAudioMuted;
-      if (!newState && !localCameraStream.current) {
+      if (!nextMuteState && !localCameraStream.current) { // Unmuting when stream is missing
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ 
             audio: { 
@@ -811,22 +826,24 @@ export default function RoomPage() {
             video: !isVideoOff 
           });
           localCameraStream.current = stream;
-          await syncPresence({ isMuted: newState });
           updateTracksForPeers(stream, 'camera');
           setHasMicPermission(true);
         } catch (err: any) {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !isVideoOff });
           localCameraStream.current = stream;
-          await syncPresence({ isMuted: newState });
           updateTracksForPeers(stream, 'camera');
         }
       }
+      
       if (localCameraStream.current) {
-        localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !newState);
+        localCameraStream.current.getAudioTracks().forEach(t => t.enabled = !nextMuteState);
       }
-      setIsAudioMuted(newState);
-      syncPresence({ isMuted: newState });
+      
+      // Immediate sync to bypass throttle
+      syncPresence({ isMuted: nextMuteState });
     } catch (err: any) {
+      // Revert state on error
+      setIsAudioMuted(!nextMuteState);
       if (err.name === 'NotAllowedError') setHasMicPermission(false);
       else toast({ variant: 'destructive', title: 'Mic Error', description: err.message });
     } finally {
@@ -962,7 +979,7 @@ export default function RoomPage() {
     if (!chatInput.trim() || !firestore || !user || !meetingId) return;
     
     const textToSend = chatInput.trim();
-    setChatInput(''); // Clear input instantly for better UX
+    setChatInput(''); 
 
     try {
       await addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
@@ -1557,9 +1574,10 @@ export default function RoomPage() {
                 variant={hasHandRaised ? "default" : "secondary"} 
                 size="icon" 
                 onClick={() => { 
-                  const newState = !hasHandRaised;
-                  setHasHandRaised(newState); 
-                  syncPresence({ hasRaisedHand: newState, raisedAt: newState ? Timestamp.now() : null }); 
+                  const nextHandState = !hasHandRaised;
+                  setHasHandRaised(nextHandState); 
+                  // Immediate sync bypasses the throttle
+                  syncPresence({ hasRaisedHand: nextHandState, raisedAt: nextHandState ? Timestamp.now() : null }); 
                 }} 
                 className={cn("rounded-xl md:rounded-2xl h-10 w-10 md:h-16 md:w-16 shadow-xl transition-all", hasHandRaised ? "bg-yellow-400 text-white" : "bg-zinc-50 text-zinc-700")}
                >
