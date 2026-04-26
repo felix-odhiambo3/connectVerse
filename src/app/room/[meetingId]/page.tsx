@@ -336,6 +336,7 @@ export default function RoomPage() {
   const lastReactionTime = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   
   const localCameraStream = useRef<MediaStream | null>(null);
   const localScreenStream = useRef<MediaStream | null>(null);
@@ -426,11 +427,25 @@ export default function RoomPage() {
 
   const chatRef = useMemoFirebase(() => {
     if (!firestore || !meetingId || !user) return null;
-    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(50));
+    return query(collection(firestore, 'meetings', meetingId, 'chat'), orderBy('createdAt', 'desc'), limit(100));
   }, [firestore, meetingId, user]);
 
   const { data: rawChatMessages } = useCollection<ChatMessage>(chatRef);
-  const chatMessages = useMemo(() => rawChatMessages ? [...rawChatMessages].reverse() : [], [rawChatMessages]);
+  
+  const chatMessages = useMemo(() => {
+    if (!rawChatMessages) return [];
+    return [...rawChatMessages].sort((a, b) => {
+      const timeA = a.createdAt?.toMillis() || 0;
+      const timeB = b.createdAt?.toMillis() || 0;
+      return timeA - timeB;
+    });
+  }, [rawChatMessages]);
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages]);
 
   const startTime = useRef(Timestamp.now());
   const reactionsRef = useMemoFirebase(() => {
@@ -930,6 +945,24 @@ export default function RoomPage() {
     }
   };
 
+  const handleSendMessage = useCallback(async () => {
+    if (!chatInput.trim() || !firestore || !user || !meetingId) return;
+    
+    const textToSend = chatInput.trim();
+    setChatInput(''); // Clear input instantly for better UX
+
+    try {
+      await addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
+        senderId: user.uid, 
+        senderName: user.displayName || user.email?.split('@')[0], 
+        text: textToSend, 
+        createdAt: serverTimestamp() 
+      });
+    } catch (error) {
+      toast({ variant: 'destructive', title: "Message failed", description: "Could not send chat." });
+    }
+  }, [chatInput, firestore, user, meetingId, toast]);
+
   useEffect(() => {
     if (!user || !firestore || !meetingId || !activeParticipantIds || localParticipant?.role === 'waiting' || meetingData?.status === 'finished') return;
     
@@ -1295,14 +1328,15 @@ export default function RoomPage() {
       <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden mt-0">
         <ScrollArea className="flex-1 p-6 md:p-10">
           <div className="space-y-6 md:space-y-8">
-            {chatMessages?.map((msg) => (
-              <div key={msg.id} className={cn("flex flex-col gap-2", msg.senderId === user?.uid ? "items-end" : "items-start")}>
+            {chatMessages.map((msg) => (
+              <div key={msg.id} className={cn("flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2", msg.senderId === user?.uid ? "items-end" : "items-start")}>
                 <div className="text-[9px] font-black text-zinc-400 px-2 uppercase tracking-widest">{msg.senderName}</div>
                 <div className={cn("max-w-[90%] px-4 py-3 md:px-6 md:py-4 rounded-xl md:rounded-[1.75rem] text-xs md:text-[13px] font-bold shadow-sm leading-relaxed", msg.senderId === user?.uid ? "bg-zinc-900 text-white rounded-tr-none" : "bg-zinc-50 text-zinc-800 rounded-tl-none")}>
                   {msg.text}
                 </div>
               </div>
             ))}
+            <div ref={chatEndRef} />
           </div>
         </ScrollArea>
         <div className="p-4 md:p-8 border-t bg-zinc-50/50">
@@ -1310,21 +1344,15 @@ export default function RoomPage() {
             <Input 
               placeholder="Type a message..." 
               value={chatInput} 
-              onChange={(e) => chatInput && setChatInput(e.target.value)} 
+              onChange={(e) => setChatInput(e.target.value)} 
               onKeyDown={(e) => { 
-                if (e.key === 'Enter' && chatInput.trim() && firestore && user) { 
-                  addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { 
-                    senderId: user.uid, 
-                    senderName: user.displayName || user.email?.split('@')[0], 
-                    text: chatInput, 
-                    createdAt: serverTimestamp() 
-                  }); 
-                  setChatInput(''); 
+                if (e.key === 'Enter') {
+                  handleSendMessage();
                 } 
               }} 
               className="pr-12 rounded-xl h-12 md:h-14 bg-white border-zinc-100 text-sm" 
             />
-            <Button size="icon" variant="ghost" className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 rounded-lg" onClick={() => { if (chatInput.trim() && firestore && user) { addDoc(collection(firestore, 'meetings', meetingId, 'chat'), { senderId: user.uid, senderName: user.displayName || user.email?.split('@')[0], text: chatInput, createdAt: serverTimestamp() }); setChatInput(''); } }}><Send className="h-4 w-4 text-zinc-400" /></Button>
+            <Button size="icon" variant="ghost" className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 rounded-lg" onClick={handleSendMessage}><Send className="h-4 w-4 text-zinc-400" /></Button>
           </div>
         </div>
       </TabsContent>
@@ -1578,3 +1606,4 @@ export default function RoomPage() {
     </AuthGuard>
   );
 }
+
