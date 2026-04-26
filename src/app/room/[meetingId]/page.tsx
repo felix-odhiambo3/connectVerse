@@ -255,11 +255,14 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
         )}
       />
       {(isVideoOff && !isPresenting) && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#121212] z-10 p-4 text-center">
-           <div className="rounded-full bg-[#1E1E1E] flex items-center justify-center w-16 h-16 md:w-24 md:h-24 shadow-2xl border border-white/5 mb-2 md:mb-4">
-              <UserIcon className="text-zinc-700 h-6 w-6 md:h-10 md:w-10" />
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0F0F0F] z-10 p-4 text-center">
+           <div className="bg-primary/10 p-4 md:p-6 rounded-[2rem] md:rounded-[3rem] mb-4 md:mb-6 animate-pulse">
+              <VideoIcon className="h-8 w-8 md:h-12 md:w-12 text-primary shadow-[0_0_20px_rgba(79,70,229,0.3)]" />
            </div>
-           <div className="text-zinc-500 font-black tracking-[0.2em] md:tracking-[0.4em] uppercase text-[8px] md:text-[10px] opacity-60">Camera Off</div>
+           <h2 className="text-2xl md:text-4xl lg:text-5xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
+              ConnectVerse
+           </h2>
+           <div className="mt-4 h-1 w-12 md:w-20 bg-gradient-to-r from-primary to-accent rounded-full opacity-30" />
         </div>
       )}
       
