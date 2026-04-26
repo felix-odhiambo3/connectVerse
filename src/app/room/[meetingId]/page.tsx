@@ -191,31 +191,36 @@ function useAudioLevel(stream: MediaStream | null) {
       return;
     }
 
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const source = audioContext.createMediaStreamSource(stream);
-    const analyzer = audioContext.createAnalyser();
-    analyzer.fftSize = 256;
-    source.connect(analyzer);
-    analyzerRef.current = analyzer;
+    let audioContext: AudioContext | null = null;
+    try {
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyzer = audioContext.createAnalyser();
+      analyzer.fftSize = 256;
+      source.connect(analyzer);
+      analyzerRef.current = analyzer;
 
-    const update = () => {
-      if (!analyzerRef.current) return;
-      const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
-      analyzerRef.current.getByteFrequencyData(dataArray);
-      let values = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        values += dataArray[i];
-      }
-      const average = values / dataArray.length;
-      setLevel(average);
-      rafRef.current = requestAnimationFrame(update);
-    };
+      const update = () => {
+        if (!analyzerRef.current) return;
+        const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
+        analyzerRef.current.getByteFrequencyData(dataArray);
+        let values = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          values += dataArray[i];
+        }
+        const average = values / dataArray.length;
+        setLevel(average);
+        rafRef.current = requestAnimationFrame(update);
+      };
 
-    update();
+      update();
+    } catch (e) {
+      console.warn("Audio level analysis failed", e);
+    }
 
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      audioContext.close();
+      if (audioContext) audioContext.close().catch(() => {});
     };
   }, [stream]);
 
@@ -283,8 +288,15 @@ function StreamView({ stream, name, isMuted, isVideoOff, isMe, isPresenting, isP
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
+      // Ensure audio is enabled for remote streams
+      if (!isMe) {
+        videoRef.current.muted = false;
+        videoRef.current.play().catch(e => {
+          console.warn("Remote stream play failed", e);
+        });
+      }
     }
-  }, [stream]);
+  }, [stream, isMe]);
 
   return (
     <div className={cn(
@@ -813,10 +825,8 @@ export default function RoomPage() {
       if (stream) {
         const senders = stream.getTracks().map(t => {
           if (type === 'screen') t.contentHint = 'detail';
-          // Prioritize audio for network resilience
-          if (t.kind === 'audio') {
-            t.enabled = true;
-          }
+          // Ensure track is enabled when added
+          t.enabled = (t.kind === 'audio') ? !isAudioMuted : (t.kind === 'video' ? !isVideoOff : true);
           return pc.addTrack(t, stream);
         });
         if (type === 'camera') cameraSenders.current.set(id, senders);
@@ -873,11 +883,8 @@ export default function RoomPage() {
         setHasCameraPermission(true);
       } else {
         localCameraStream.current?.getVideoTracks().forEach(t => t.stop());
-        if (!isAudioMuted && localCameraStream.current?.getAudioTracks().length) {
-          // Keep audio track alive if not muted
-        } else {
-          localCameraStream.current?.getTracks().forEach(t => t.stop());
-          localCameraStream.current = null;
+        if (localCameraStream.current) {
+          localCameraStream.current.getVideoTracks().forEach(t => t.enabled = false);
         }
         
         syncPresence({ isVideoOff: true });
@@ -931,14 +938,6 @@ export default function RoomPage() {
       if (localCameraStream.current) {
         localCameraStream.current.getAudioTracks().forEach(t => {
           t.enabled = !nextMuteState;
-          // Apply Google Meet-like constraints on un-mute
-          if (!nextMuteState) {
-            t.applyConstraints({
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }).catch(console.warn);
-          }
         });
       }
       
@@ -958,7 +957,7 @@ export default function RoomPage() {
       toast({ 
         variant: 'destructive', 
         title: 'Not Supported', 
-        description: 'Screen sharing is not supported on this browser or device. Please use a desktop browser like Chrome or Edge.' 
+        description: 'Screen sharing is not supported on this browser or device.' 
       });
       return;
     }
@@ -1124,11 +1123,17 @@ export default function RoomPage() {
       const appliedCandidates = new Set<string>();
 
       if (localCameraStream.current) {
-        const senders = localCameraStream.current.getTracks().map(t => pc.addTrack(t, localCameraStream.current!));
+        const senders = localCameraStream.current.getTracks().map(t => {
+          t.enabled = (t.kind === 'audio') ? !isAudioMuted : (t.kind === 'video' ? !isVideoOff : true);
+          return pc.addTrack(t, localCameraStream.current!);
+        });
         cameraSenders.current.set(participantId, senders);
       }
       if (localScreenStream.current) {
-        const senders = localScreenStream.current.getTracks().map(t => pc.addTrack(t, localScreenStream.current!));
+        const senders = localScreenStream.current.getTracks().map(t => {
+          t.enabled = true;
+          return pc.addTrack(t, localScreenStream.current!);
+        });
         screenSenders.current.set(participantId, senders);
       }
 
@@ -1174,7 +1179,7 @@ export default function RoomPage() {
                 toSend.forEach((c, i) => updates[`c_${user.uid}_${Date.now()}_${i}`] = c);
                 await setDoc(channelRef, updates, { merge: true });
               }
-            }, 30000); 
+            }, 15000); 
           }
         }
       };
